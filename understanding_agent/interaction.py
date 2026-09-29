@@ -9,12 +9,25 @@ try:
 except ImportError:
     UNIX_TTY = False
 
-# Try to import voice capabilities from mic.py (from Scrutiny)
-try:
-    from . import mic as _mic
-    VOICE_AVAILABLE = True
-except Exception:
-    VOICE_AVAILABLE = False
+def _detect_voice():
+    try:
+        import numpy
+        import whisper
+        try:
+            import sounddevice
+            return True, "sounddevice"
+        except Exception:
+            pass
+        try:
+            import pyaudio
+            return True, "pyaudio"
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return False, None
+
+VOICE_AVAILABLE, AUDIO_BACKEND = _detect_voice()
 
 
 class Interaction:
@@ -26,7 +39,7 @@ class Interaction:
         
         speak_text: the clean question text to speak aloud (no ANSI codes).
         1. Speaks the question aloud via macOS `say`.
-        2. Displays the typing space immediately with [Tab] Mic option.
+        2. Displays the typing space immediately with [Tab] Mic option if voice is available.
         3. User can type answer directly, or press [Tab] to trigger listening flow.
         4. If [Tab] is pressed, transcribed speech is placed into the typing space
            so the developer can review and edit before submitting with Enter.
@@ -83,16 +96,16 @@ class Interaction:
         immediately, and prints text as it arrives.
         Returns the full accumulated transcript, or None on failure.
         """
+        if not VOICE_AVAILABLE or not AUDIO_BACKEND:
+            return None
+
         try:
-            import pyaudio
             import numpy as np
             import whisper
 
             CHUNK_SECS = 3
             RATE = 16000
             CHUNK = 1024
-            FORMAT = pyaudio.paInt16
-            CHANNELS = 1
             record_secs = min(timeout, 30)
 
             print(f"\n🎙️  Listening... (Press Enter when done)\n", flush=True)
@@ -103,94 +116,127 @@ class Interaction:
                 self._whisper_model = whisper.load_model("base")
             model = self._whisper_model
 
-            audio_pa = pyaudio.PyAudio()
-            try:
-                stream = audio_pa.open(format=FORMAT, channels=CHANNELS,
-                                       rate=RATE, input=True,
-                                       frames_per_buffer=CHUNK)
-            except Exception as e:
-                audio_pa.terminate()
-                print(f"\n  [🎙️  Mic error: {e} — switching to typed input]", flush=True)
-                return None
-
             transcript_parts = []
             elapsed = 0.0
             frames_per_chunk = int(RATE / CHUNK * CHUNK_SECS)
             enter_pressed = False
 
-            # Put stdin in cbreak so Enter is detectable between chunks
             fd = sys.stdin.fileno()
             old_settings = termios.tcgetattr(fd)
+
             try:
                 tty.setcbreak(fd)
-                while elapsed < record_secs and not enter_pressed:
-                    remaining = record_secs - elapsed
-                    frames_this_chunk = min(frames_per_chunk, int(RATE / CHUNK * remaining))
-                    if frames_this_chunk <= 0:
-                        break
-
-                    chunk_frames = []
-                    for _ in range(frames_this_chunk):
-                        # Check for Enter key before each frame read
-                        r, _, _ = select.select([sys.stdin], [], [], 0)
-                        if r:
-                            key = sys.stdin.read(1)
-                            if key in ('\r', '\n', '\x04'):
-                                enter_pressed = True
+                if AUDIO_BACKEND == "sounddevice":
+                    import sounddevice as sd
+                    with sd.InputStream(samplerate=RATE, channels=1, dtype='float32', blocksize=CHUNK) as stream:
+                        while elapsed < record_secs and not enter_pressed:
+                            remaining = record_secs - elapsed
+                            frames_this_chunk = min(frames_per_chunk, int(RATE / CHUNK * remaining))
+                            if frames_this_chunk <= 0:
                                 break
-                        chunk_frames.append(stream.read(CHUNK, exception_on_overflow=False))
 
-                    if not chunk_frames:
-                        break
+                            chunk_frames = []
+                            for _ in range(frames_this_chunk):
+                                r, _, _ = select.select([sys.stdin], [], [], 0)
+                                if r:
+                                    key = sys.stdin.read(1)
+                                    if key in ('\r', '\n', '\x04'):
+                                        enter_pressed = True
+                                        break
+                                data, _ = stream.read(CHUNK)
+                                chunk_frames.append(data)
 
-                    elapsed += len(chunk_frames) * CHUNK / RATE
+                            if not chunk_frames:
+                                break
 
-                    # Transcribe chunk as numpy float32 — no ffmpeg needed
-                    raw = b''.join(chunk_frames)
-                    if raw:
-                        audio_np = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-                        if len(audio_np) < 1600:
-                            audio_np = np.pad(audio_np, (0, 1600 - len(audio_np)))
-                        result = model.transcribe(audio_np, fp16=False)
-                        text = (result.get("text") or "").strip()
-                        if text:
-                            sys.stdout.write(text + " ")
-                            sys.stdout.flush()
-                            transcript_parts.append(text)
+                            elapsed += len(chunk_frames) * CHUNK / RATE
 
-                    if enter_pressed:
-                        break
+                            audio_chunk = np.concatenate(chunk_frames, axis=0).squeeze()
+                            if len(audio_chunk) < 1600:
+                                audio_chunk = np.pad(audio_chunk, (0, 1600 - len(audio_chunk)))
+                            result = model.transcribe(audio_chunk, fp16=False)
+                            text = (result.get("text") or "").strip()
+                            if text:
+                                sys.stdout.write(text + " ")
+                                sys.stdout.flush()
+                                transcript_parts.append(text)
 
+                            if enter_pressed:
+                                break
+
+                elif AUDIO_BACKEND == "pyaudio":
+                    import pyaudio
+                    FORMAT = pyaudio.paInt16
+                    CHANNELS = 1
+                    audio_pa = pyaudio.PyAudio()
+                    try:
+                        stream = audio_pa.open(format=FORMAT, channels=CHANNELS,
+                                               rate=RATE, input=True,
+                                               frames_per_buffer=CHUNK)
+                    except Exception:
+                        audio_pa.terminate()
+                        return None
+
+                    try:
+                        while elapsed < record_secs and not enter_pressed:
+                            remaining = record_secs - elapsed
+                            frames_this_chunk = min(frames_per_chunk, int(RATE / CHUNK * remaining))
+                            if frames_this_chunk <= 0:
+                                break
+
+                            chunk_frames = []
+                            for _ in range(frames_this_chunk):
+                                r, _, _ = select.select([sys.stdin], [], [], 0)
+                                if r:
+                                    key = sys.stdin.read(1)
+                                    if key in ('\r', '\n', '\x04'):
+                                        enter_pressed = True
+                                        break
+                                chunk_frames.append(stream.read(CHUNK, exception_on_overflow=False))
+
+                            if not chunk_frames:
+                                break
+
+                            elapsed += len(chunk_frames) * CHUNK / RATE
+
+                            raw = b''.join(chunk_frames)
+                            if raw:
+                                audio_np = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                                if len(audio_np) < 1600:
+                                    audio_np = np.pad(audio_np, (0, 1600 - len(audio_np)))
+                                result = model.transcribe(audio_np, fp16=False)
+                                text = (result.get("text") or "").strip()
+                                if text:
+                                    sys.stdout.write(text + " ")
+                                    sys.stdout.flush()
+                                    transcript_parts.append(text)
+
+                            if enter_pressed:
+                                break
+                    finally:
+                        try:
+                            stream.stop_stream()
+                            stream.close()
+                        except Exception:
+                            pass
+                        try:
+                            audio_pa.terminate()
+                        except Exception:
+                            pass
             finally:
                 try:
                     termios.tcflush(fd, termios.TCIFLUSH)
                 except Exception:
                     pass
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                try:
-                    stream.stop_stream()
-                    stream.close()
-                except Exception:
-                    pass
-                try:
-                    audio_pa.terminate()
-                except Exception:
-                    pass
 
             print("\n", flush=True)
             full_answer = " ".join(transcript_parts).strip()
-
             if full_answer:
                 return full_answer
-
-            print("  [🎙️  No speech detected — switching to typed input]", flush=True)
             return None
 
-        except ImportError as e:
-            print(f"  [🎙️  Missing dependency ({e}) — switching to typed input]", flush=True)
-            return None
-        except Exception as e:
-            print(f"  [🎙️  Recording failed: {e} — switching to typed input]", flush=True)
+        except Exception:
             return None
 
     def _timed_input_windows(self, prompt: str, timeout: int, seed_text: str = "", allow_mic: bool = False) -> str:

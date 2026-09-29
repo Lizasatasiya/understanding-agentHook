@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="understanding-agent",
-    version="0.2.0",
+    version="0.2.2",
     packages=find_packages(),
     entry_points={
         "console_scripts": [
@@ -12,8 +12,8 @@ setup(
     install_requires=[],
     extras_require={
         "voice": [
+            "sounddevice",
             "openai-whisper",
-            "pyaudio",
             "numpy",
         ]
     },
