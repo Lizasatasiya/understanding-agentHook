@@ -22,13 +22,59 @@ class Interaction:
                 return ans
 
         if not UNIX_TTY:
-            # Simple fallback for Windows (no live countdown)
-            print(f"⏱  {timeout}s | ", end="")
-            try:
-                ans = input(prompt)
-                return ans
-            except EOFError:
+            return self._timed_input_windows(prompt, timeout)
+        else:
+            return self._timed_input_unix(prompt, timeout)
+
+    def _timed_input_windows(self, prompt: str, timeout: int) -> str:
+        import msvcrt
+        start_time = time.time()
+        user_input = []
+        
+        while True:
+            remaining = int(timeout - (time.time() - start_time))
+            if remaining <= 0:
+                sys.stdout.write(f"\r\033[2K⏰ Time's up! ({timeout}s limit reached)\n")
+                sys.stdout.flush()
                 return None
+                
+            timer_str = f"⏱  {remaining:2d}s"
+            current_str = "".join(user_input)
+            display_str = ("..." + current_str[-50:]) if len(current_str) > 50 else current_str
+            sys.stdout.write(f"\r{timer_str} | {prompt}{display_str} ")
+            sys.stdout.flush()
+            
+            end_wait = time.time() + 0.2
+            got_char = False
+            while time.time() < end_wait:
+                if msvcrt.kbhit():
+                    got_char = True
+                    break
+                time.sleep(0.05)
+                
+            if not got_char:
+                continue
+                
+            while msvcrt.kbhit():
+                try:
+                    ch = msvcrt.getwche()
+                except Exception:
+                    ch = msvcrt.getche().decode('utf-8', 'ignore')
+                    
+                if ch in ('\r', '\n'):
+                    final_ans = "".join(user_input)
+                    sys.stdout.write(f"\r\033[2K{prompt}{final_ans}\n")
+                    sys.stdout.flush()
+                    return final_ans
+                elif ch == '\x08': # backspace
+                    if user_input:
+                        user_input.pop()
+                elif ch == '\x03': # ctrl+c
+                    raise KeyboardInterrupt()
+                else:
+                    user_input.append(ch)
+
+    def _timed_input_unix(self, prompt: str, timeout: int) -> str:
 
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
