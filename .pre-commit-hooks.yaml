@@ -1,0 +1,6 @@
+-   id: understanding-agent
+    name: Code Understanding Check
+    description: Prompts developer to explain code changes.
+    entry: understanding-agent
+    language: python
+    pass_filenames: false
