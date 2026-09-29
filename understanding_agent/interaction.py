@@ -18,14 +18,18 @@ except Exception:
 
 
 class Interaction:
-    def timed_input(self, prompt: str, timeout: int, speak_text: str = "") -> str:
+    def __init__(self):
+        self._whisper_model = None
+
+    def timed_input(self, prompt: str, timeout: int, speak_text: str = "", seed_text: str = "") -> str:
         """Read a line from stdin with a live countdown timer.
         
         speak_text: the clean question text to speak aloud (no ANSI codes).
-        On Mac/Linux: first tries to speak the question and record a voice
-        answer via Whisper. Falls back to typed input if mic/Whisper is
-        unavailable.
-        On Windows: typed input with a live countdown timer via msvcrt.
+        1. Speaks the question aloud via macOS `say`.
+        2. Displays the typing space immediately with [Tab] Mic option.
+        3. User can type answer directly, or press [Tab] to trigger listening flow.
+        4. If [Tab] is pressed, transcribed speech is placed into the typing space
+           so the developer can review and edit before submitting with Enter.
         """
         if not sys.stdin.isatty():
             try:
@@ -36,43 +40,40 @@ class Interaction:
                 print(f"{prompt}{ans}")
                 return ans
 
-        seed_text = ""
-        start_time = time.time()
+        # Step 1: Speak the question aloud first
+        if speak_text:
+            self._speak_question(speak_text)
 
-        # Try voice answer on Mac/Linux
-        if UNIX_TTY and VOICE_AVAILABLE and speak_text:
-            voice_ans = self._try_voice_answer(speak_text, timeout)
-            if voice_ans is not None:
-                seed_text = voice_ans + " "
-                
-        # Calculate remaining time (guarantee at least 15s to edit)
-        elapsed = int(time.time() - start_time)
-        remaining = max(15, timeout - elapsed)
-
-        print("✏️   Review and edit your answer below (Press Enter to submit):\n")
+        # Step 2: Show mic option hint if voice is available
+        allow_mic = bool(VOICE_AVAILABLE and speak_text)
+        if allow_mic:
+            CYAN = "\033[96m"
+            BOLD = "\033[1m"
+            DIM = "\033[2m"
+            RESET = "\033[0m"
+            print(f"🎙️  {CYAN}{BOLD}[Tab]{RESET} {DIM}Speak with Mic  │  ⌨️  Type answer directly (Enter to submit){RESET}\n", flush=True)
 
         if not UNIX_TTY:
-            return self._timed_input_windows(prompt, remaining, seed_text)
+            return self._timed_input_windows(prompt, timeout, seed_text=seed_text, allow_mic=allow_mic)
         else:
-            return self._timed_input_unix(prompt, remaining, seed_text)
+            return self._timed_input_unix(prompt, timeout, seed_text=seed_text, allow_mic=allow_mic)
 
-    def _try_voice_answer(self, question_text: str, timeout: int) -> str | None:
-        """Speak the question and capture a spoken answer via Whisper (pyaudio backend).
-        
-        Uses pyaudio for recording (better macOS permission handling than avfoundation).
-        Returns the transcribed text, or None to fall back to typed input.
-        """
-        import subprocess as _sp
-
-        # Step 1: Always speak the question — this must never be silently swallowed
-        try:
-            _sp.run(["say", question_text], check=False,
-                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
-        except Exception as e:
-            print(f"  [🔇 speak failed: {e}]", flush=True)
-
-        # Step 2: Try microphone recording
-        return self._record_and_transcribe(timeout)
+    def _speak_question(self, question_text: str):
+        """Speak the question aloud using macOS say, blocking until finished."""
+        if not question_text:
+            return
+        if sys.platform == 'darwin':
+            try:
+                import subprocess as _sp
+                _sp.run(["say", question_text], check=False,
+                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+            except Exception as e:
+                print(f"  [🔇 speak failed: {e}]", flush=True)
+            if UNIX_TTY:
+                try:
+                    termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+                except Exception:
+                    pass
 
     def _record_and_transcribe(self, timeout: int) -> str | None:
         """Record mic input in short chunks and stream words to screen as spoken.
@@ -94,11 +95,13 @@ class Interaction:
             CHANNELS = 1
             record_secs = min(timeout, 30)
 
-            print(f"\n🎙️  Listening...\n", flush=True)
+            print(f"\n🎙️  Listening... (speak now — words appear as you speak, press Enter when done)\n", flush=True)
             sys.stdout.write(" 🗣️  ")
             sys.stdout.flush()
 
-            model = whisper.load_model("base")
+            if self._whisper_model is None:
+                self._whisper_model = whisper.load_model("base")
+            model = self._whisper_model
 
             audio_pa = pyaudio.PyAudio()
             try:
@@ -144,22 +147,35 @@ class Interaction:
 
                     # Transcribe chunk as numpy float32 — no ffmpeg needed
                     raw = b''.join(chunk_frames)
-                    audio_np = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-                    result = model.transcribe(audio_np, fp16=False)
-                    text = (result.get("text") or "").strip()
-                    if text:
-                        sys.stdout.write(text + " ")
-                        sys.stdout.flush()
-                        transcript_parts.append(text)
+                    if raw:
+                        audio_np = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                        if len(audio_np) < 1600:
+                            audio_np = np.pad(audio_np, (0, 1600 - len(audio_np)))
+                        result = model.transcribe(audio_np, fp16=False)
+                        text = (result.get("text") or "").strip()
+                        if text:
+                            sys.stdout.write(text + " ")
+                            sys.stdout.flush()
+                            transcript_parts.append(text)
 
                     if enter_pressed:
                         break
 
             finally:
+                try:
+                    termios.tcflush(fd, termios.TCIFLUSH)
+                except Exception:
+                    pass
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                stream.stop_stream()
-                stream.close()
-                audio_pa.terminate()
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                except Exception:
+                    pass
+                try:
+                    audio_pa.terminate()
+                except Exception:
+                    pass
 
             print("\n", flush=True)
             full_answer = " ".join(transcript_parts).strip()
@@ -177,7 +193,7 @@ class Interaction:
             print(f"  [🎙️  Recording failed: {e} — switching to typed input]", flush=True)
             return None
 
-    def _timed_input_windows(self, prompt: str, timeout: int, seed_text: str = "") -> str:
+    def _timed_input_windows(self, prompt: str, timeout: int, seed_text: str = "", allow_mic: bool = False) -> str:
         import msvcrt
         start_time = time.time()
         user_input = list(seed_text) if seed_text else []
@@ -213,20 +229,42 @@ class Interaction:
                     ch = msvcrt.getche().decode('utf-8', 'ignore')
                     
                 if ch in ('\r', '\n'):
-                    final_ans = "".join(user_input)
-                    sys.stdout.write(f"\r\033[2K{prompt}{final_ans}\n")
+                    curr_text = "".join(user_input).strip().lower()
+                    if allow_mic and curr_text in ("/mic", ":mic", "mic"):
+                        user_input.clear()
+                        ch = '\t'
+                    else:
+                        final_ans = "".join(user_input)
+                        sys.stdout.write(f"\r\033[2K{prompt}{final_ans}\n")
+                        sys.stdout.flush()
+                        return final_ans
+
+                if ch == '\t' and allow_mic:
+                    sys.stdout.write(f"\r\033[2K")
                     sys.stdout.flush()
-                    return final_ans
+                    elapsed_so_far = int(time.time() - start_time)
+                    voice_time = max(10, min(30, timeout - elapsed_so_far))
+                    voice_ans = self._record_and_transcribe(voice_time)
+                    if voice_ans:
+                        if user_input and not user_input[-1].isspace():
+                            user_input.append(' ')
+                        user_input.extend(list(voice_ans))
+                        print("\n✏️   Review and edit your answer below (Press Enter to submit):\n", flush=True)
+                    else:
+                        print("\n⌨️   Type your answer below (Press Enter to submit):\n", flush=True)
+                    spent = int(time.time() - start_time)
+                    if timeout - spent < 20:
+                        start_time = time.time() - (timeout - 20)
+                    break
                 elif ch == '\x08': # backspace
                     if user_input:
                         user_input.pop()
                 elif ch == '\x03': # ctrl+c
                     raise KeyboardInterrupt()
-                else:
+                elif ch.isprintable():
                     user_input.append(ch)
 
-    def _timed_input_unix(self, prompt: str, timeout: int, seed_text: str = "") -> str:
-
+    def _timed_input_unix(self, prompt: str, timeout: int, seed_text: str = "", allow_mic: bool = False) -> str:
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         
@@ -265,8 +303,41 @@ class Interaction:
                             user_input.append(' ')
                             continue
                         else:
-                            submitted = True
-                            break
+                            curr_text = "".join(user_input).strip().lower()
+                            if allow_mic and curr_text in ("/mic", ":mic", "mic"):
+                                user_input.clear()
+                                ch = '\t'  # route to mic trigger below
+                            else:
+                                submitted = True
+                                break
+
+                    if ch == '\t' and allow_mic:
+                        # Restore terminal temporarily for voice flow
+                        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                        sys.stdout.write(f"\r\033[2K")
+                        sys.stdout.flush()
+                        
+                        elapsed_so_far = int(time.time() - start_time)
+                        voice_time = max(10, min(30, timeout - elapsed_so_far))
+                        voice_ans = self._record_and_transcribe(voice_time)
+                        
+                        if voice_ans:
+                            if user_input and not user_input[-1].isspace():
+                                user_input.append(' ')
+                            user_input.extend(list(voice_ans))
+                            print("\n✏️   Review and edit your answer below (Press Enter to submit):\n", flush=True)
+                        else:
+                            print("\n⌨️   Type your answer below (Press Enter to submit):\n", flush=True)
+                            
+                        # Guarantee at least 20 seconds remaining to review/edit
+                        spent = int(time.time() - start_time)
+                        if timeout - spent < 20:
+                            start_time = time.time() - (timeout - 20)
+
+                        # Re-enable cbreak mode
+                        tty.setcbreak(fd)
+                        break  # Break inner read loop, redraw prompt with new user_input
+
                     elif ch in ('\x08', '\x7f'):
                         if user_input:
                             user_input.pop()
@@ -297,7 +368,10 @@ class Interaction:
                     sys.stdout.flush()
                     return final_ans
         finally:
-            termios.tcflush(fd, termios.TCIFLUSH)
+            try:
+                termios.tcflush(fd, termios.TCIFLUSH)
+            except Exception:
+                pass
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
     def print_context(self, context: dict):
