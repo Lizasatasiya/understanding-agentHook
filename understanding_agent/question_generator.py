@@ -36,7 +36,7 @@ class QuestionGenerator:
             return api_key
 
         # Walk up to find a .env file (up to 4 levels from this file)
-        search_dir = os.path.dirname(os.path.abspath(__file__))
+        search_dir = os.getcwd()
         for _ in range(4):
             env_path = os.path.join(search_dir, ".env")
             if os.path.exists(env_path):

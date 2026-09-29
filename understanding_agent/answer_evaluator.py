@@ -27,7 +27,7 @@ class AnswerEvaluator:
         if api_key:
             return api_key
 
-        search_dir = os.path.dirname(os.path.abspath(__file__))
+        search_dir = os.getcwd()
         for _ in range(4):
             env_path = os.path.join(search_dir, ".env")
             if os.path.exists(env_path):
