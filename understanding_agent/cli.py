@@ -72,8 +72,11 @@ def main():
         except Exception:
             pass
 
-    if state.get("diff_hash") == diff_hash:
-        valid_questions = state.get("questions", [])
+    cached_questions = state.get("questions", [])
+    has_fallback = any(q.get("is_fallback") for q in cached_questions)
+
+    if state.get("diff_hash") == diff_hash and cached_questions and not has_fallback:
+        valid_questions = cached_questions
         attempts = state.get("attempts", 1) + 1
         print(f"\n[QUESTIONS] Loading {len(valid_questions)} previous questions... (Attempt {attempts})")
     else:
@@ -85,6 +88,10 @@ def main():
             q["passed"] = False
             q["best_score"] = 0
         attempts = 1
+        
+    if any(q.get("is_fallback") for q in valid_questions):
+        print("\n  \033[93m⚠️  [NOTICE] Fallback questions are being used because GROQ_API_KEY is missing or unreachable.\033[0m")
+        print("  \033[2m💡 To get AI-tailored questions, set GROQ_API_KEY in your .env or shell: export GROQ_API_KEY=\"gsk_...\"\033[0m\n", flush=True)
     
     # 8. Developer Interaction & Evaluation
     print("\n[INTERACTION] Asking developer...")
@@ -240,17 +247,25 @@ def main():
         avg_color = "\033[92m" if avg_score > 75 else "\033[91m"
         print(f"\n\033[1mAverage Understanding Score: {avg_color}{avg_score:.1f}%\033[0m")
         
-        # Save state
-        new_state = {
-            "diff_hash": diff_hash,
-            "attempts": attempts,
-            "questions": valid_questions
-        }
-        try:
-            with open(state_file, "w") as f:
-                json.dump(new_state, f)
-        except Exception:
-            pass
+        # Save state (only persist if not fallback, so subsequent runs can retry AI generation)
+        is_fallback_run = any(q.get("is_fallback") for q in valid_questions)
+        if not is_fallback_run:
+            new_state = {
+                "diff_hash": diff_hash,
+                "attempts": attempts,
+                "questions": valid_questions
+            }
+            try:
+                with open(state_file, "w") as f:
+                    json.dump(new_state, f)
+            except Exception:
+                pass
+        else:
+            if os.path.exists(state_file):
+                try:
+                    os.remove(state_file)
+                except Exception:
+                    pass
         
         if avg_score <= 75:
             print(f"\n\033[91m⛔ Attempt {attempts} failed. Score must be > 75%.\033[0m")

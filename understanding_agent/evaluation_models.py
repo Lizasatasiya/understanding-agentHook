@@ -2,7 +2,13 @@ from typing import List, Dict, Any, Optional
 
 class EvaluationResult:
     def __init__(self, data: dict):
-        self.score = data.get("score", 0)
+        raw_score = data.get("score", 0)
+        try:
+            if isinstance(raw_score, str):
+                raw_score = raw_score.replace("%", "").strip()
+            self.score = int(float(raw_score))
+        except (ValueError, TypeError):
+            self.score = 0
         self.technical_correctness = data.get("technical_correctness", 0)
         self.code_understanding = data.get("code_understanding", 0)
         self.reasoning = data.get("reasoning", 0)
@@ -12,6 +18,7 @@ class EvaluationResult:
         self.incorrect_claims = data.get("incorrect_claims", [])
         self.evaluation = data.get("evaluation", "")
         self.confidence = data.get("confidence", 0.0)
+
         
         # If there are missing concepts, or the prompt explicitly asked for follow up
         self.follow_up_required = bool(data.get("follow_up_required", len(self.missing_concepts) > 0))

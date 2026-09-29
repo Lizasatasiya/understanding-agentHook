@@ -1,39 +1,22 @@
 import os
 import json
-import http.client
-import ssl
+from .api_utils import load_groq_api_key, extract_json, call_groq_api
+
 
 class ChangeSummary:
     def generate(self, context: dict) -> dict:
-        api_key = self._load_api_key()
+        api_key = load_groq_api_key()
         
         for f in context.get("structured_changes", []):
             if not api_key:
-                f["summary"] = self._fallback()
+                f["summary"] = self._fallback(f)
                 continue
                 
             prompt = self._build_prompt_for_single(f)
             summary = self._call_groq(api_key, prompt)
-            f["summary"] = summary if summary else self._fallback()
+            f["summary"] = summary if summary else self._fallback(f)
             
         return {}
-
-    def _load_api_key(self) -> str:
-        api_key = os.environ.get("GROQ_API_KEY", "").strip()
-        if api_key:
-            return api_key
-
-        search_dir = os.getcwd()
-        for _ in range(4):
-            env_path = os.path.join(search_dir, ".env")
-            if os.path.exists(env_path):
-                with open(env_path, "r") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith("GROQ_API_KEY"):
-                            return line.split("=", 1)[1].strip().strip('"').strip("'")
-            search_dir = os.path.dirname(search_dir)
-        return ""
 
     def _build_prompt_for_single(self, f: dict) -> str:
         lines = [
@@ -51,47 +34,33 @@ class ChangeSummary:
         return "\n".join(lines)
 
     def _call_groq(self, api_key: str, prompt: str) -> dict:
-        payload = json.dumps({
+        payload = {
             "model": "qwen/qwen3.8-27b",
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3,
             "max_tokens": 300
-        }).encode("utf-8")
-
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-            "Content-Length": str(len(payload))
         }
 
-        try:
-            ctx = ssl.create_default_context()
-            conn = http.client.HTTPSConnection("api.groq.com", context=ctx, timeout=30)
-            conn.request("POST", "/openai/v1/chat/completions", body=payload, headers=headers)
-            response = conn.getresponse()
-
-            if response.status != 200:
-                return {}
-
-            result = json.loads(response.read().decode("utf-8"))
-            text = result["choices"][0]["message"]["content"].strip()
-
-            if text.startswith("```json"):
-                text = text[7:].strip()
-            if text.startswith("```"):
-                text = text[3:].strip()
-            if text.endswith("```"):
-                text = text[:-3].strip()
-
-            parsed = json.loads(text)
-            return parsed
-
-        except Exception as e:
+        status, body = call_groq_api(api_key, payload, timeout=30)
+        if status != 200:
             return {}
 
-    def _fallback(self) -> dict:
+        try:
+            result = json.loads(body)
+            text = result["choices"][0]["message"]["content"].strip()
+            parsed = extract_json(text)
+            if isinstance(parsed, dict) and "what_changed" in parsed:
+                return parsed
+            return {}
+        except Exception:
+            return {}
+
+    def _fallback(self, f: dict = None) -> dict:
+        func = f.get('function', '') if f else ''
+        file = f.get('file', '') if f else ''
+        target = f"{func}() in {file}" if func and file else file or "staged code"
         return {
-            "what_changed": "Unknown change due to missing LLM configuration or parsing error.",
-            "why_it_matters": "Cannot determine why it matters.",
-            "impact": "Unknown impact."
+            "what_changed": f"Updated logic in {target}.",
+            "why_it_matters": "Modifies code behavior for this commit.",
+            "impact": "Refer to diff above for detailed line changes."
         }

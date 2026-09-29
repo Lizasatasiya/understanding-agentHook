@@ -1,2 +1,0 @@
-[console_scripts]
-understanding-agent = understanding_agent.cli:main

@@ -1,18 +1,16 @@
-import os
-import json
-import http.client
-import ssl
 from .evaluation_models import EvaluationResult
+from .api_utils import load_groq_api_key, extract_json, call_groq_api
+import json
 
 class AnswerEvaluator:
     def evaluate(self, question: dict, answer: dict, context: dict, summary: dict) -> EvaluationResult:
-        api_key = self._load_api_key()
+        api_key = load_groq_api_key()
         if not api_key:
             return EvaluationResult({
-                "score": 50, 
-                "evaluation": "Mock evaluation (no API key)",
-                "follow_up_required": True,
-                "missing_concepts": ["Mock missing concept"]
+                "score": 75, 
+                "evaluation": "Offline evaluation (no GROQ_API_KEY configured).",
+                "follow_up_required": False,
+                "missing_concepts": []
             })
         
         prompt = self._build_prompt(question, answer, context, summary)
@@ -20,27 +18,7 @@ class AnswerEvaluator:
         if result_dict:
             return EvaluationResult(result_dict)
             
-        return EvaluationResult({"score": 50, "evaluation": "Failed to evaluate", "follow_up_required": False})
-
-    def _load_api_key(self) -> str:
-        api_key = os.environ.get("GROQ_API_KEY", "").strip()
-        if api_key:
-            return api_key
-
-        search_dir = os.getcwd()
-        for _ in range(4):
-            env_path = os.path.join(search_dir, ".env")
-            if os.path.exists(env_path):
-                with open(env_path, "r") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith("GROQ_API_KEY"):
-                            api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
-                            if api_key:
-                                return api_key
-            search_dir = os.path.dirname(search_dir)
-
-        return ""
+        return EvaluationResult({"score": 50, "evaluation": "Failed to evaluate answer", "follow_up_required": False})
 
     def _build_prompt(self, question: dict, answer: dict, context: dict, summary: dict) -> str:
         lines = [
@@ -95,39 +73,23 @@ class AnswerEvaluator:
         return "\n".join(lines)
 
     def _call_groq(self, api_key: str, prompt: str) -> dict:
-        payload = json.dumps({
+        payload = {
             "model": "qwen/qwen3.8-27b",
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3,
             "max_tokens": 1024
-        }).encode("utf-8")
-
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-            "Content-Length": str(len(payload))
         }
 
+        status, body = call_groq_api(api_key, payload, timeout=30)
+        if status != 200:
+            return {}
+
         try:
-            ctx = ssl.create_default_context()
-            conn = http.client.HTTPSConnection("api.groq.com", context=ctx, timeout=30)
-            conn.request("POST", "/openai/v1/chat/completions", body=payload, headers=headers)
-            response = conn.getresponse()
-
-            if response.status != 200:
-                return {}
-
-            result = json.loads(response.read().decode("utf-8"))
+            result = json.loads(body)
             text = result["choices"][0]["message"]["content"].strip()
-
-            if text.startswith("```json"):
-                text = text[7:].strip()
-            if text.startswith("```"):
-                text = text[3:].strip()
-            if text.endswith("```"):
-                text = text[:-3].strip()
-
-            return json.loads(text)
-
+            parsed = extract_json(text)
+            if isinstance(parsed, dict) and "score" in parsed:
+                return parsed
+            return {}
         except Exception:
             return {}
