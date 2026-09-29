@@ -1,0 +1,4 @@
+
+[voice]
+openai-whisper
+pyaudio
