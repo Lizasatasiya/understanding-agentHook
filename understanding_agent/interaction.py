@@ -21,10 +21,11 @@ class Interaction:
     def timed_input(self, prompt: str, timeout: int, speak_text: str = "") -> str:
         """Read a line from stdin with a live countdown timer.
         
-        On Mac/Linux with voice available: shows a mode selector.
-          - Press M → mic mode (question spoken aloud, streaming voice answer)
-          - Any other key / just start typing → typed mode with countdown
-        On Windows: always typed mode.
+        speak_text: the clean question text to speak aloud (no ANSI codes).
+        On Mac/Linux: first tries to speak the question and record a voice
+        answer via Whisper. Falls back to typed input if mic/Whisper is
+        unavailable.
+        On Windows: typed input with a live countdown timer via msvcrt.
         """
         if not sys.stdin.isatty():
             try:
@@ -35,57 +36,25 @@ class Interaction:
                 print(f"{prompt}{ans}")
                 return ans
 
+        seed_text = ""
+        start_time = time.time()
+
+        # Try voice answer on Mac/Linux
+        if UNIX_TTY and VOICE_AVAILABLE and speak_text:
+            voice_ans = self._try_voice_answer(speak_text, timeout)
+            if voice_ans is not None:
+                seed_text = voice_ans + " "
+                
+        # Calculate remaining time (guarantee at least 15s to edit)
+        elapsed = int(time.time() - start_time)
+        remaining = max(15, timeout - elapsed)
+
+        print("✏️   Review and edit your answer below (Press Enter to submit):\n")
+
         if not UNIX_TTY:
-            return self._timed_input_windows(prompt, timeout)
-
-        # Mac/Linux: show mode selector
-        if VOICE_AVAILABLE and speak_text:
-            return self._mode_select(prompt, timeout, speak_text)
+            return self._timed_input_windows(prompt, remaining, seed_text)
         else:
-            return self._timed_input_unix(prompt, timeout)
-
-    def _mode_select(self, prompt: str, timeout: int, speak_text: str) -> str:
-        """Show mode selector: M for mic, anything else to type."""
-        CYAN  = "\033[96m"
-        BOLD  = "\033[1m"
-        RESET = "\033[0m"
-        DIM   = "\033[2m"
-
-        sys.stdout.write(
-            f"\n{DIM}  🎙️  [M] Speak  │  ⌨️  [any key] Type  │  timeout {timeout}s{RESET}\n"
-            f"  {BOLD}>{RESET} "
-        )
-        sys.stdout.flush()
-
-        # Read one key to decide mode
-        fd = sys.stdin.fileno()
-        old = termios.tcgetattr(fd)
-        try:
-            tty.setcbreak(fd)
-            r, _, _ = select.select([sys.stdin], [], [], timeout)
-            if not r:
-                return ""   # timed out before any key
-            first_key = sys.stdin.read(1)
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old)
-
-        if first_key.lower() == 'm':
-            # Mic mode
-            sys.stdout.write("\r\033[2K")  # clear the selector line
-            sys.stdout.flush()
-            import subprocess as _sp
-            try:
-                _sp.run(["say", speak_text], check=False,
-                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
-            except Exception:
-                pass
-            ans = self._record_and_transcribe(timeout)
-            return ans if ans is not None else ""
-        else:
-            # Typed mode — pass the first_key as pre-seeded input
-            sys.stdout.write("\r\033[2K")
-            sys.stdout.flush()
-            return self._timed_input_unix(prompt, timeout, seed_char=first_key)
+            return self._timed_input_unix(prompt, remaining, seed_text)
 
     def _try_voice_answer(self, question_text: str, timeout: int) -> str | None:
         """Speak the question and capture a spoken answer via Whisper (pyaudio backend).
@@ -208,10 +177,10 @@ class Interaction:
             print(f"  [🎙️  Recording failed: {e} — switching to typed input]", flush=True)
             return None
 
-    def _timed_input_windows(self, prompt: str, timeout: int) -> str:
+    def _timed_input_windows(self, prompt: str, timeout: int, seed_text: str = "") -> str:
         import msvcrt
         start_time = time.time()
-        user_input = []
+        user_input = list(seed_text) if seed_text else []
         
         while True:
             remaining = int(timeout - (time.time() - start_time))
@@ -256,14 +225,13 @@ class Interaction:
                 else:
                     user_input.append(ch)
 
-    def _timed_input_unix(self, prompt: str, timeout: int, seed_char: str = "") -> str:
+    def _timed_input_unix(self, prompt: str, timeout: int, seed_text: str = "") -> str:
 
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         
         start_time = time.time()
-        # Pre-seed with first key if user typed during mode select
-        user_input = list(seed_char) if seed_char and seed_char.isprintable() else []
+        user_input = list(seed_text) if seed_text else []
         
         try:
             tty.setcbreak(fd)
