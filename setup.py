@@ -9,13 +9,16 @@ setup(
             "understanding-agent = understanding_agent.cli:main",
         ]
     },
-    install_requires=[],
+    install_requires=[
+        "openai-whisper",
+        "pyaudio",
+        "numpy",
+    ],
     extras_require={
-        # Optional: enables voice answer input via microphone + Whisper STT
-        # Install with: pip install understanding-agent[voice]
         "voice": [
             "openai-whisper",
             "pyaudio",
+            "numpy",
         ]
     },
 )
