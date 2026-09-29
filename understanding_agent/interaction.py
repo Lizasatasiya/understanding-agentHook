@@ -9,9 +9,23 @@ try:
 except ImportError:
     UNIX_TTY = False
 
+# Try to import voice capabilities from mic.py (from Scrutiny)
+try:
+    from . import mic as _mic
+    VOICE_AVAILABLE = True
+except Exception:
+    VOICE_AVAILABLE = False
+
+
 class Interaction:
     def timed_input(self, prompt: str, timeout: int) -> str:
-        """Read a line from stdin with a live countdown timer."""
+        """Read a line from stdin with a live countdown timer.
+        
+        On Mac/Linux: first tries to speak the question and record a voice
+        answer via Whisper. Falls back to typed input if mic/Whisper is
+        unavailable.
+        On Windows: typed input with a live countdown timer via msvcrt.
+        """
         if not sys.stdin.isatty():
             try:
                 con = 'CON' if sys.platform == 'win32' else '/dev/tty'
@@ -21,10 +35,40 @@ class Interaction:
                 print(f"{prompt}{ans}")
                 return ans
 
+        # Try voice answer on Mac/Linux
+        if UNIX_TTY and VOICE_AVAILABLE:
+            voice_ans = self._try_voice_answer(prompt, timeout)
+            if voice_ans is not None:
+                return voice_ans
+            # Voice unavailable or failed — fall through to typed input
+
         if not UNIX_TTY:
             return self._timed_input_windows(prompt, timeout)
         else:
             return self._timed_input_unix(prompt, timeout)
+
+    def _try_voice_answer(self, prompt: str, timeout: int) -> str | None:
+        """Speak the question and capture a spoken answer via Whisper.
+        
+        Returns the transcribed text, or None if voice is not available
+        so the caller can fall back to typed input.
+        """
+        try:
+            # Speak the question aloud so the developer hears it clearly
+            print(f"\n🎙️  Listening... (speak your answer, up to {timeout}s)\n")
+            _mic.speak_blocking(prompt)
+            # Record for up to `timeout` seconds
+            answer = _mic.voice_answer(seconds=min(timeout, 30))
+            if answer:
+                print(f"\n 🗣️  You said: {answer}\n")
+                return answer
+            return None
+        except _mic.MicUnavailableError:
+            print("  [🎙️  Mic unavailable — switching to typed input]")
+            return None
+        except Exception:
+            # Whisper not installed, ffmpeg missing, etc. — degrade silently
+            return None
 
     def _timed_input_windows(self, prompt: str, timeout: int) -> str:
         import msvcrt
