@@ -49,28 +49,63 @@ class Interaction:
             return self._timed_input_unix(prompt, timeout)
 
     def _try_voice_answer(self, question_text: str, timeout: int) -> str | None:
-        """Speak the question and capture a spoken answer via Whisper.
+        """Speak the question and capture a spoken answer via Whisper (pyaudio backend).
         
-        question_text: the raw question string (no ANSI escape codes).
-        Returns the transcribed text, or None if voice is not available
-        so the caller can fall back to typed input.
+        Uses pyaudio for recording (better macOS permission handling than avfoundation).
+        Returns the transcribed text, or None to fall back to typed input.
         """
         try:
-            # Speak the clean question aloud
+            import pyaudio
+            import wave
+            import tempfile
+            import whisper
+
+            # Speak the question first, wait until fully spoken
             _mic.speak_blocking(question_text)
-            print(f"\n🎙️  Listening... (speak your answer, up to {min(timeout, 30)}s)\n")
-            # Record for up to `timeout` seconds
-            answer = _mic.voice_answer(seconds=min(timeout, 30))
+
+            record_secs = min(timeout, 30)
+            print(f"\n🎙️  Listening... (speak now, up to {record_secs}s)\n", flush=True)
+
+            # Record via pyaudio
+            FORMAT = pyaudio.paInt16
+            CHANNELS = 1
+            RATE = 16000
+            CHUNK = 1024
+
+            audio = pyaudio.PyAudio()
+            stream = audio.open(format=FORMAT, channels=CHANNELS,
+                                rate=RATE, input=True,
+                                frames_per_buffer=CHUNK)
+            frames = []
+            for _ in range(int(RATE / CHUNK * record_secs)):
+                frames.append(stream.read(CHUNK, exception_on_overflow=False))
+            stream.stop_stream()
+            stream.close()
+            audio.terminate()
+
+            # Save to temp wav and transcribe
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+                wav_path = tf.name
+            with wave.open(wav_path, 'wb') as wf:
+                wf.setnchannels(CHANNELS)
+                wf.setsampwidth(pyaudio.PyAudio().get_sample_size(FORMAT))
+                wf.setframerate(RATE)
+                wf.writeframes(b''.join(frames))
+
+            model = whisper.load_model("base")
+            result = model.transcribe(wav_path, fp16=False)
+            answer = (result.get("text") or "").strip()
+
             if answer:
-                print(f"\n 🗣️  You said: {answer}\n")
+                print(f"\n 🗣️  You said: {answer}\n", flush=True)
                 return answer
+            print("  [🎙️  No speech detected — switching to typed input]")
             return None
-        except _mic.MicUnavailableError:
-            print("  [🎙️  Mic unavailable — switching to typed input]")
-            return None
+
+        except ImportError:
+            return None  # pyaudio or whisper not installed — fall through
         except Exception:
-            # Whisper not installed, ffmpeg missing, etc. — degrade silently
-            return None
+            return None  # Any recording/transcription failure — fall through
 
     def _timed_input_windows(self, prompt: str, timeout: int) -> str:
         import msvcrt
