@@ -69,45 +69,50 @@ class Interaction:
     def _record_and_transcribe(self, timeout: int) -> str | None:
         """Record mic input in short chunks and stream words to screen as spoken.
         
+        Press Enter at any time to stop recording early and submit.
         Records in CHUNK_SECS windows, transcribes each chunk with Whisper
-        immediately, and prints text word-by-word as it arrives.
+        immediately, and prints text as it arrives.
         Returns the full accumulated transcript, or None on failure.
         """
         try:
             import pyaudio
-            import wave
-            import tempfile
+            import numpy as np
             import whisper
 
-            CHUNK_SECS = 3          # transcribe every 3 seconds
+            CHUNK_SECS = 3
             RATE = 16000
             CHUNK = 1024
             FORMAT = pyaudio.paInt16
             CHANNELS = 1
             record_secs = min(timeout, 30)
 
-            print(f"\n🎙️  Listening... (speak now, up to {record_secs}s — words appear as you speak)\n", flush=True)
+            print(f"\n🎙️  Listening...\n", flush=True)
             sys.stdout.write(" 🗣️  ")
             sys.stdout.flush()
 
             model = whisper.load_model("base")
 
-            audio = pyaudio.PyAudio()
+            audio_pa = pyaudio.PyAudio()
             try:
-                stream = audio.open(format=FORMAT, channels=CHANNELS,
-                                    rate=RATE, input=True,
-                                    frames_per_buffer=CHUNK)
+                stream = audio_pa.open(format=FORMAT, channels=CHANNELS,
+                                       rate=RATE, input=True,
+                                       frames_per_buffer=CHUNK)
             except Exception as e:
-                audio.terminate()
+                audio_pa.terminate()
                 print(f"\n  [🎙️  Mic error: {e} — switching to typed input]", flush=True)
                 return None
 
             transcript_parts = []
             elapsed = 0.0
             frames_per_chunk = int(RATE / CHUNK * CHUNK_SECS)
+            enter_pressed = False
 
+            # Put stdin in cbreak so Enter is detectable between chunks
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
             try:
-                while elapsed < record_secs:
+                tty.setcbreak(fd)
+                while elapsed < record_secs and not enter_pressed:
                     remaining = record_secs - elapsed
                     frames_this_chunk = min(frames_per_chunk, int(RATE / CHUNK * remaining))
                     if frames_this_chunk <= 0:
@@ -115,12 +120,22 @@ class Interaction:
 
                     chunk_frames = []
                     for _ in range(frames_this_chunk):
+                        # Check for Enter key before each frame read
+                        r, _, _ = select.select([sys.stdin], [], [], 0)
+                        if r:
+                            key = sys.stdin.read(1)
+                            if key in ('\r', '\n', '\x04'):
+                                enter_pressed = True
+                                break
                         chunk_frames.append(stream.read(CHUNK, exception_on_overflow=False))
-                    elapsed += frames_this_chunk * CHUNK / RATE
 
-                    # Transcribe chunk directly as numpy float32 (no ffmpeg needed)
+                    if not chunk_frames:
+                        break
+
+                    elapsed += len(chunk_frames) * CHUNK / RATE
+
+                    # Transcribe chunk as numpy float32 — no ffmpeg needed
                     raw = b''.join(chunk_frames)
-                    import numpy as np
                     audio_np = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
                     result = model.transcribe(audio_np, fp16=False)
                     text = (result.get("text") or "").strip()
@@ -129,10 +144,14 @@ class Interaction:
                         sys.stdout.flush()
                         transcript_parts.append(text)
 
+                    if enter_pressed:
+                        break
+
             finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
                 stream.stop_stream()
                 stream.close()
-                audio.terminate()
+                audio_pa.terminate()
 
             print("\n", flush=True)
             full_answer = " ".join(transcript_parts).strip()
