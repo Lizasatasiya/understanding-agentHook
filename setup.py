@@ -9,11 +9,7 @@ setup(
             "understanding-agent = understanding_agent.cli:main",
         ]
     },
-    install_requires=[
-        "numpy",
-        "openai-whisper; sys_platform == 'darwin'",
-        "pyaudio; sys_platform == 'darwin'",
-    ],
+    install_requires=[],
     extras_require={
         "voice": [
             "openai-whisper",
