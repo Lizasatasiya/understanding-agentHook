@@ -54,28 +54,47 @@ class Interaction:
         Uses pyaudio for recording (better macOS permission handling than avfoundation).
         Returns the transcribed text, or None to fall back to typed input.
         """
+        import subprocess as _sp
+
+        # Step 1: Always speak the question — this must never be silently swallowed
+        try:
+            _sp.run(["say", question_text], check=False,
+                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+        except Exception as e:
+            print(f"  [🔇 speak failed: {e}]", flush=True)
+
+        # Step 2: Try microphone recording
+        return self._record_and_transcribe(timeout)
+
+    def _record_and_transcribe(self, timeout: int) -> str | None:
+        """Record mic input via pyaudio and transcribe with Whisper.
+        
+        Returns transcribed text, or None on any failure (triggers typed fallback).
+        """
         try:
             import pyaudio
             import wave
             import tempfile
             import whisper
 
-            # Speak the question first, wait until fully spoken
-            _mic.speak_blocking(question_text)
-
             record_secs = min(timeout, 30)
             print(f"\n🎙️  Listening... (speak now, up to {record_secs}s)\n", flush=True)
 
-            # Record via pyaudio
             FORMAT = pyaudio.paInt16
             CHANNELS = 1
             RATE = 16000
             CHUNK = 1024
 
             audio = pyaudio.PyAudio()
-            stream = audio.open(format=FORMAT, channels=CHANNELS,
-                                rate=RATE, input=True,
-                                frames_per_buffer=CHUNK)
+            try:
+                stream = audio.open(format=FORMAT, channels=CHANNELS,
+                                    rate=RATE, input=True,
+                                    frames_per_buffer=CHUNK)
+            except Exception as e:
+                audio.terminate()
+                print(f"  [🎙️  Mic error: {e} — switching to typed input]", flush=True)
+                return None
+
             frames = []
             for _ in range(int(RATE / CHUNK * record_secs)):
                 frames.append(stream.read(CHUNK, exception_on_overflow=False))
@@ -83,15 +102,15 @@ class Interaction:
             stream.close()
             audio.terminate()
 
-            # Save to temp wav and transcribe
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
                 wav_path = tf.name
             with wave.open(wav_path, 'wb') as wf:
                 wf.setnchannels(CHANNELS)
-                wf.setsampwidth(pyaudio.PyAudio().get_sample_size(FORMAT))
+                wf.setsampwidth(pyaudio.get_sample_size(FORMAT))
                 wf.setframerate(RATE)
                 wf.writeframes(b''.join(frames))
 
+            print("  [⚙️  Transcribing...]", flush=True)
             model = whisper.load_model("base")
             result = model.transcribe(wav_path, fp16=False)
             answer = (result.get("text") or "").strip()
@@ -99,13 +118,15 @@ class Interaction:
             if answer:
                 print(f"\n 🗣️  You said: {answer}\n", flush=True)
                 return answer
-            print("  [🎙️  No speech detected — switching to typed input]")
+            print("  [🎙️  No speech detected — switching to typed input]", flush=True)
             return None
 
-        except ImportError:
-            return None  # pyaudio or whisper not installed — fall through
-        except Exception:
-            return None  # Any recording/transcription failure — fall through
+        except ImportError as e:
+            print(f"  [🎙️  Missing dependency ({e}) — switching to typed input]", flush=True)
+            return None
+        except Exception as e:
+            print(f"  [🎙️  Recording failed: {e} — switching to typed input]", flush=True)
+            return None
 
     def _timed_input_windows(self, prompt: str, timeout: int) -> str:
         import msvcrt
