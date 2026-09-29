@@ -95,7 +95,7 @@ class Interaction:
             CHANNELS = 1
             record_secs = min(timeout, 30)
 
-            print(f"\n🎙️  Listening... (speak now — words appear as you speak, press Enter when done)\n", flush=True)
+            print(f"\n🎙️  Listening... (Press Enter when done)\n", flush=True)
             sys.stdout.write(" 🗣️  ")
             sys.stdout.flush()
 
