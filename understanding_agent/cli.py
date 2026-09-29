@@ -15,6 +15,11 @@ from .answer_evaluator import AnswerEvaluator
 from .followup_generator import FollowUpGenerator
 
 def main():
+    try:
+        sys.stdin = open('/dev/tty', 'r')
+        sys.stdout = open('/dev/tty', 'w')
+    except Exception:
+        pass
     print("\n[HOOK] Code Understanding Check")
     
     # 1. Environment Detection
