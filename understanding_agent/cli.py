@@ -16,10 +16,14 @@ from .followup_generator import FollowUpGenerator
 
 def main():
     try:
-        sys.stdin = open('/dev/tty', 'r')
-        sys.stdout = open('/dev/tty', 'w')
+        con = 'CON' if sys.platform == 'win32' else '/dev/tty'
+        sys.stdin = open(con, 'r', encoding='utf-8')
+        sys.stdout = open(con, 'w', encoding='utf-8')
     except Exception:
-        pass
+        try:
+            sys.stdout.reconfigure(encoding='utf-8')
+        except Exception:
+            pass
     print("\n[HOOK] Code Understanding Check")
     
     # 1. Environment Detection
@@ -50,7 +54,10 @@ def main():
     try:
         import subprocess
         ppid = os.getppid()
-        commit_cmd = subprocess.check_output(['ps', '-p', str(ppid), '-o', 'command=']).decode().strip()
+        commit_cmd = subprocess.check_output(
+            ['ps', '-p', str(ppid), '-o', 'command='],
+            stderr=subprocess.DEVNULL
+        ).decode().strip()
     except Exception:
         commit_cmd = ""
         
