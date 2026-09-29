@@ -118,17 +118,11 @@ class Interaction:
                         chunk_frames.append(stream.read(CHUNK, exception_on_overflow=False))
                     elapsed += frames_this_chunk * CHUNK / RATE
 
-                    # Save chunk to temp wav
-                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
-                        wav_path = tf.name
-                    with wave.open(wav_path, 'wb') as wf:
-                        wf.setnchannels(CHANNELS)
-                        wf.setsampwidth(pyaudio.get_sample_size(FORMAT))
-                        wf.setframerate(RATE)
-                        wf.writeframes(b''.join(chunk_frames))
-
-                    # Transcribe chunk and stream words immediately
-                    result = model.transcribe(wav_path, fp16=False)
+                    # Transcribe chunk directly as numpy float32 (no ffmpeg needed)
+                    raw = b''.join(chunk_frames)
+                    import numpy as np
+                    audio_np = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                    result = model.transcribe(audio_np, fp16=False)
                     text = (result.get("text") or "").strip()
                     if text:
                         sys.stdout.write(text + " ")
