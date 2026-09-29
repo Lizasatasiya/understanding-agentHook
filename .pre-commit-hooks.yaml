@@ -2,5 +2,5 @@
     name: Code Understanding Check
     description: Prompts developer to explain code changes.
     entry: understanding-agent
-    language: python
+    language: system
     pass_filenames: false
