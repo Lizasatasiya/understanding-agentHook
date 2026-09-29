@@ -130,7 +130,7 @@ def main():
             print(f"{BOLD}{q_text}{RESET}\n")
             
             start_time = time.time()
-            ans_text = interaction.timed_input(f"{CYAN} ❯ {RESET}", time_limit)
+            ans_text = interaction.timed_input(f"{CYAN} ❯ {RESET}", time_limit, speak_text=q_text)
             
             if ans_text is None:
                 ans_text = ""
@@ -164,7 +164,7 @@ def main():
                 print(f"{BOLD}{follow_up_q}{RESET}\n")
                 
                 f_start = time.time()
-                f_ans = interaction.timed_input(f"{CYAN} ❯ {RESET}", time_limit)
+                f_ans = interaction.timed_input(f"{CYAN} ❯ {RESET}", time_limit, speak_text=follow_up_q)
                 
                 f_status = "answered" if f_ans is not None else "timeout"
                 f_resp_time = int(time.time() - f_start) if f_ans is not None else time_limit

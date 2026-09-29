@@ -18,9 +18,10 @@ except Exception:
 
 
 class Interaction:
-    def timed_input(self, prompt: str, timeout: int) -> str:
+    def timed_input(self, prompt: str, timeout: int, speak_text: str = "") -> str:
         """Read a line from stdin with a live countdown timer.
         
+        speak_text: the clean question text to speak aloud (no ANSI codes).
         On Mac/Linux: first tries to speak the question and record a voice
         answer via Whisper. Falls back to typed input if mic/Whisper is
         unavailable.
@@ -36,8 +37,8 @@ class Interaction:
                 return ans
 
         # Try voice answer on Mac/Linux
-        if UNIX_TTY and VOICE_AVAILABLE:
-            voice_ans = self._try_voice_answer(prompt, timeout)
+        if UNIX_TTY and VOICE_AVAILABLE and speak_text:
+            voice_ans = self._try_voice_answer(speak_text, timeout)
             if voice_ans is not None:
                 return voice_ans
             # Voice unavailable or failed — fall through to typed input
@@ -47,16 +48,17 @@ class Interaction:
         else:
             return self._timed_input_unix(prompt, timeout)
 
-    def _try_voice_answer(self, prompt: str, timeout: int) -> str | None:
+    def _try_voice_answer(self, question_text: str, timeout: int) -> str | None:
         """Speak the question and capture a spoken answer via Whisper.
         
+        question_text: the raw question string (no ANSI escape codes).
         Returns the transcribed text, or None if voice is not available
         so the caller can fall back to typed input.
         """
         try:
-            # Speak the question aloud so the developer hears it clearly
-            print(f"\n🎙️  Listening... (speak your answer, up to {timeout}s)\n")
-            _mic.speak_blocking(prompt)
+            # Speak the clean question aloud
+            _mic.speak_blocking(question_text)
+            print(f"\n🎙️  Listening... (speak your answer, up to {min(timeout, 30)}s)\n")
             # Record for up to `timeout` seconds
             answer = _mic.voice_answer(seconds=min(timeout, 30))
             if answer:
