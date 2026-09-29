@@ -1,16 +1,34 @@
 import sys
-import select
 import time
-import tty
-import termios
+
+try:
+    import select
+    import tty
+    import termios
+    UNIX_TTY = True
+except ImportError:
+    UNIX_TTY = False
 
 class Interaction:
     def timed_input(self, prompt: str, timeout: int) -> str:
         """Read a line from stdin with a live countdown timer."""
         if not sys.stdin.isatty():
-            ans = "Non-interactive mock answer"
-            print(f"{prompt}{ans}")
-            return ans
+            try:
+                con = 'CON' if sys.platform == 'win32' else '/dev/tty'
+                sys.stdin = open(con, "r")
+            except Exception:
+                ans = "Non-interactive mock answer"
+                print(f"{prompt}{ans}")
+                return ans
+
+        if not UNIX_TTY:
+            # Simple fallback for Windows (no live countdown)
+            print(f"⏱  {timeout}s | ", end="")
+            try:
+                ans = input(prompt)
+                return ans
+            except EOFError:
+                return None
 
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
