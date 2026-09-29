@@ -10,9 +10,9 @@ setup(
         ]
     },
     install_requires=[
-        "openai-whisper",
-        "pyaudio",
         "numpy",
+        "openai-whisper; sys_platform == 'darwin'",
+        "pyaudio; sys_platform == 'darwin'",
     ],
     extras_require={
         "voice": [
