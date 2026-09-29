@@ -67,9 +67,11 @@ class Interaction:
         return self._record_and_transcribe(timeout)
 
     def _record_and_transcribe(self, timeout: int) -> str | None:
-        """Record mic input via pyaudio and transcribe with Whisper.
+        """Record mic input in short chunks and stream words to screen as spoken.
         
-        Returns transcribed text, or None on any failure (triggers typed fallback).
+        Records in CHUNK_SECS windows, transcribes each chunk with Whisper
+        immediately, and prints text word-by-word as it arrives.
+        Returns the full accumulated transcript, or None on failure.
         """
         try:
             import pyaudio
@@ -77,13 +79,18 @@ class Interaction:
             import tempfile
             import whisper
 
-            record_secs = min(timeout, 30)
-            print(f"\n🎙️  Listening... (speak now, up to {record_secs}s)\n", flush=True)
-
-            FORMAT = pyaudio.paInt16
-            CHANNELS = 1
+            CHUNK_SECS = 3          # transcribe every 3 seconds
             RATE = 16000
             CHUNK = 1024
+            FORMAT = pyaudio.paInt16
+            CHANNELS = 1
+            record_secs = min(timeout, 30)
+
+            print(f"\n🎙️  Listening... (speak now, up to {record_secs}s — words appear as you speak)\n", flush=True)
+            sys.stdout.write(" 🗣️  ")
+            sys.stdout.flush()
+
+            model = whisper.load_model("base")
 
             audio = pyaudio.PyAudio()
             try:
@@ -92,32 +99,53 @@ class Interaction:
                                     frames_per_buffer=CHUNK)
             except Exception as e:
                 audio.terminate()
-                print(f"  [🎙️  Mic error: {e} — switching to typed input]", flush=True)
+                print(f"\n  [🎙️  Mic error: {e} — switching to typed input]", flush=True)
                 return None
 
-            frames = []
-            for _ in range(int(RATE / CHUNK * record_secs)):
-                frames.append(stream.read(CHUNK, exception_on_overflow=False))
-            stream.stop_stream()
-            stream.close()
-            audio.terminate()
+            transcript_parts = []
+            elapsed = 0.0
+            frames_per_chunk = int(RATE / CHUNK * CHUNK_SECS)
 
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
-                wav_path = tf.name
-            with wave.open(wav_path, 'wb') as wf:
-                wf.setnchannels(CHANNELS)
-                wf.setsampwidth(pyaudio.get_sample_size(FORMAT))
-                wf.setframerate(RATE)
-                wf.writeframes(b''.join(frames))
+            try:
+                while elapsed < record_secs:
+                    remaining = record_secs - elapsed
+                    frames_this_chunk = min(frames_per_chunk, int(RATE / CHUNK * remaining))
+                    if frames_this_chunk <= 0:
+                        break
 
-            print("  [⚙️  Transcribing...]", flush=True)
-            model = whisper.load_model("base")
-            result = model.transcribe(wav_path, fp16=False)
-            answer = (result.get("text") or "").strip()
+                    chunk_frames = []
+                    for _ in range(frames_this_chunk):
+                        chunk_frames.append(stream.read(CHUNK, exception_on_overflow=False))
+                    elapsed += frames_this_chunk * CHUNK / RATE
 
-            if answer:
-                print(f"\n 🗣️  You said: {answer}\n", flush=True)
-                return answer
+                    # Save chunk to temp wav
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+                        wav_path = tf.name
+                    with wave.open(wav_path, 'wb') as wf:
+                        wf.setnchannels(CHANNELS)
+                        wf.setsampwidth(pyaudio.get_sample_size(FORMAT))
+                        wf.setframerate(RATE)
+                        wf.writeframes(b''.join(chunk_frames))
+
+                    # Transcribe chunk and stream words immediately
+                    result = model.transcribe(wav_path, fp16=False)
+                    text = (result.get("text") or "").strip()
+                    if text:
+                        sys.stdout.write(text + " ")
+                        sys.stdout.flush()
+                        transcript_parts.append(text)
+
+            finally:
+                stream.stop_stream()
+                stream.close()
+                audio.terminate()
+
+            print("\n", flush=True)
+            full_answer = " ".join(transcript_parts).strip()
+
+            if full_answer:
+                return full_answer
+
             print("  [🎙️  No speech detected — switching to typed input]", flush=True)
             return None
 
