@@ -124,9 +124,9 @@ def main():
             BOLD = "\033[1m"
             RESET = "\033[0m"
 
-            print(f"\n{BOLD}{CYAN}╭──────────────────────────────────────────────────╮{RESET}")
-            print(f"{BOLD}{CYAN}│ Question {i}/{len(valid_questions):<40}│{RESET}")
-            print(f"{BOLD}{CYAN}╰──────────────────────────────────────────────────╯{RESET}")
+         
+            print(f"{BOLD}{CYAN} Question {i}/{len(valid_questions):<40}{RESET}")
+      
             
             if q.get("passed", False):
                 print(f"{GREEN}✓ Already passed with score {q.get('best_score', 0)}%{RESET}\n")

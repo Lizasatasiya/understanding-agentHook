@@ -464,9 +464,8 @@ class Interaction:
             files = context.get("file_summary", [])
             summary = context.get("summary", {})
 
-            print(f"{BOLD}{CYAN}╭──────────────────────────────────────────────────────────────────────────╮{RESET}")
-            print(f"{BOLD}{CYAN}│ 📦 ARCHITECTURAL CHANGE OVERVIEW ({GREEN}+{added}{CYAN}/{RED}-{deleted}{CYAN} lines, {len(files)} files){' ' * max(0, 24 - len(str(added)) - len(str(deleted)) - len(str(len(files))))}│{RESET}")
-            print(f"{BOLD}{CYAN}╰──────────────────────────────────────────────────────────────────────────╯{RESET}")
+            
+            print(f"{BOLD}{CYAN} ARCHITECTURAL CHANGE OVERVIEW ({GREEN}+{added}{CYAN}/{RED}-{deleted}{CYAN} lines, {len(files)} files){' ' * max(0, 24 - len(str(added)) - len(str(deleted)) - len(str(len(files))))}{RESET}")
             
             print(f"\n{BOLD}Touched Components:{RESET}")
             for item in files:
