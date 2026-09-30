@@ -1,5 +1,7 @@
+import os
 import sys
 import time
+import glob
 
 try:
     import select
@@ -10,22 +12,46 @@ except ImportError:
     UNIX_TTY = False
 
 def _detect_voice():
-    try:
-        import numpy
-        import whisper
+    def _check():
         try:
-            import sounddevice
-            return True, "sounddevice"
+            import numpy
+            import whisper
+            try:
+                import sounddevice
+                return True, "sounddevice"
+            except Exception:
+                pass
+            try:
+                import pyaudio
+                return True, "pyaudio"
+            except Exception:
+                pass
         except Exception:
             pass
-        try:
-            import pyaudio
-            return True, "pyaudio"
-        except Exception:
-            pass
-    except Exception:
-        pass
-    return False, None
+        return False, None
+
+    res, backend = _check()
+    if res:
+        return res, backend
+
+    # If running inside an isolated virtualenv (e.g. pre-commit py_env),
+    # dynamically locate and attach host/system site-packages where whisper and audio backends live
+    candidate_paths = [
+        "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages",
+        "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/site-packages",
+        "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages",
+        os.path.expanduser("~/Library/Python/3.14/lib/python/site-packages"),
+        os.path.expanduser("~/Library/Python/3.12/lib/python/site-packages"),
+        "/opt/homebrew/lib/python3.14/site-packages",
+        "/opt/homebrew/lib/python3.12/site-packages",
+    ]
+    candidate_paths.extend(glob.glob("/Library/Frameworks/Python.framework/Versions/*/lib/python*/site-packages"))
+
+    for p in candidate_paths:
+        if os.path.isdir(p) and p not in sys.path:
+            sys.path.append(p)
+
+    return _check()
 
 VOICE_AVAILABLE, AUDIO_BACKEND = _detect_voice()
 
