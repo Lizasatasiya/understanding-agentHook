@@ -15,6 +15,8 @@ class QuestionGenerator:
         "Edge Cases":              60,
         "Change Impact":           60,
         "What-if":                 60,
+        "System Architecture":     60,
+        "Invariants":              60,
     }
     _VALID_TYPES = set(TIME_LIMITS.keys())
 
@@ -26,32 +28,28 @@ class QuestionGenerator:
             return self._fallback(context)
 
         prompt = self._build_prompt(context, summary)
-        questions = self._call_groq(api_key, prompt)
+        is_large = context.get("is_large_change", False)
+        questions = self._call_groq(api_key, prompt, is_large=is_large)
         if questions:
             return questions
         return self._fallback(context)
 
     def _build_prompt(self, context: dict, summary: dict) -> str:
-        """
-        Build a focused, concise prompt using only:
-        - Change summary (what, why, impact)
-        - Changed functions and their new calls
-        - Key dependencies (what calls what, where it's defined)
-        """
+        if context.get("is_large_change", False):
+            return self._build_macro_prompt(context, summary)
+
         valid_types = ", ".join(f'"{t}"' for t in self.TIME_LIMITS)
         lines = [
             "You are a senior developer reviewing a code change.",
-            "Generate between 2 and 7 specific questions to test if the author understands their own change.",
-            "The number of questions should depend on how complex the change is. If the change is small, 2 or 3 is enough.",
+            "Generate between 2 and 3 specific questions to test if the author understands their own change.",
             "CRITICAL: Keep the questions EXTREMELY short and simple (under 15 words). Ask one basic thing per question.",
             "Keep it simple but focus on logic and data flow. No generic questions.",
             "",
             "## Changed Functions",
         ]
 
-        # Cap to 5 most significant changes to avoid overwhelming the LLM
         changes = context.get("structured_changes", [])
-        if len(changes) > 5:
+        if len(changes) > 4:
             changes = sorted(
                 changes,
                 key=lambda c: (
@@ -59,13 +57,12 @@ class QuestionGenerator:
                     len(c.get('diff', ''))
                 ),
                 reverse=True
-            )[:5]
-            lines.append(f"(Showing 5 most significant changes out of {len(context.get('structured_changes', []))} total)\n")
+            )[:4]
 
         for f in changes:
-            summary = f.get('summary', {})
+            f_sum = f.get('summary', {})
             lines.append(f"File: {f.get('file', '?')} | Function: {f.get('function', '?')}()")
-            lines.append(f"Summary: {summary.get('what_changed', 'N/A')} Impact: {summary.get('impact', 'N/A')}")
+            lines.append(f"Summary: {f_sum.get('what_changed', 'N/A')} Impact: {f_sum.get('impact', 'N/A')}")
             lines.append("Diff:")
             lines.append(f"```diff\n{f.get('diff', '')}\n```")
             lines.append("Dependencies invoked by this function:")
@@ -75,7 +72,7 @@ class QuestionGenerator:
         lines += [
             "",
             "## Output Format",
-            "Return ONLY a JSON array (between 2 and 7 items). Each item must be an object with:",
+            "Return ONLY a JSON array with 2 or 3 items. Each item must be an object with:",
             '  "question_id": <a unique string like "q1", "q2">,',
             '  "question": <the question string>,',
             f'  "type": one of {valid_types},',
@@ -86,13 +83,68 @@ class QuestionGenerator:
         ]
         return "\n".join(lines)
 
-    def _call_groq(self, api_key: str, prompt: str) -> list:
+    def _build_macro_prompt(self, context: dict, summary: dict) -> str:
+        """
+        Build an architectural prompt for substantial commits (>80-100 lines or multi-file).
+        Focuses on data flow, component interactions, failure modes, and system invariants.
+        Strictly limits to 2 or 3 high-impact questions.
+        """
+        stats = context.get("stats", {})
+        lines = [
+            "You are a principal engineer conducting an architectural code understanding check on a substantial commit.",
+            f"Commit Scale: +{stats.get('total_added', 0)} / -{stats.get('total_deleted', 0)} lines across {len(context.get('file_summary', []))} file(s).",
+            "",
+            "CRITICAL RULES FOR LARGE COMMITS:",
+            "1. Generate EXACTLY 2 or 3 questions. NEVER more than 3.",
+            "2. Do NOT ask trivia about single lines of code, variable renames, or syntax minutiae.",
+            "3. Focus on the SYSTEM ARCHITECTURE across these three core dimensions:",
+            "   - Dimension 1 (Data Flow & Coordination): How the changed modules or functions coordinate and pass data.",
+            "   - Dimension 2 (Invariants & Failure Modes): How errors, edge states, or invalid inputs are handled across components.",
+            "   - Dimension 3 (System Impact & Contracts): How this change affects system invariants or external callers.",
+            "4. Keep questions concise and direct (under 25 words).",
+            "",
+            "## Architectural Summary",
+            f"What Changed: {summary.get('what_changed', 'N/A')}",
+            f"Impact: {summary.get('impact', 'N/A')}",
+            f"Key Risks: {summary.get('key_risks', 'N/A')}",
+            "",
+            "## Changed Components",
+        ]
+
+        for file_info in context.get("file_summary", []):
+            funcs = ", ".join(file_info.get("functions", [])) or "module definitions"
+            lines.append(f"- {file_info['file']}: {funcs}")
+
+        lines.append("\n## Key Diffs (Skeleton/Highlights):")
+        for f in context.get("structured_changes", [])[:4]:
+            lines.append(f"File: {f.get('file')} | Function: {f.get('function')}()")
+            lines.append(f"```diff\n{f.get('diff', '')}\n```")
+            dep_summary = f.get('dependency_summary', '')
+            if dep_summary and dep_summary != "No external dependencies called.":
+                lines.append(f"Dependencies: {dep_summary}")
+            lines.append("")
+
+        valid_types = ", ".join(f'"{t}"' for t in self.TIME_LIMITS)
+        lines += [
+            "## Output Format",
+            "Return ONLY a JSON array with EXACTLY 2 or 3 items. Each item must have:",
+            '  "question_id": "q1", "q2", or "q3",',
+            '  "question": <clear question string under 25 words>,',
+            f'  "type": one of {valid_types},',
+            '  "expected_concepts": [<list of key technical concept strings>],',
+            '  "evaluation_criteria": [<list of evaluation criteria strings>]',
+            "",
+            'Example: [{"question_id": "q1", "question": "How do the changed components coordinate to prevent invalid state if validation fails?", "type": "System Architecture", "expected_concepts": ["early validation aborts workflow", "state rollback"], "evaluation_criteria": ["understands cross-component failure handling"]}]'
+        ]
+        return "\n".join(lines)
+
+    def _call_groq(self, api_key: str, prompt: str, is_large: bool = False) -> list:
         """Call Groq API and robustly parse question array from response."""
         payload = {
             "model": "qwen/qwen3.8-27b",
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.5,
-            "max_tokens": 1024
+            "temperature": 0.4,
+            "max_tokens": 800
         }
 
         status, body = call_groq_api(api_key, payload, timeout=30)
@@ -129,7 +181,7 @@ class QuestionGenerator:
                         if "?" in candidate_q and len(candidate_q) > 15:
                             parsed_lines.append({
                                 "question": candidate_q,
-                                "type": "Code Logic"
+                                "type": "System Architecture" if is_large else "Code Logic"
                             })
                 if parsed_lines:
                     raw = parsed_lines
@@ -137,7 +189,8 @@ class QuestionGenerator:
             if not isinstance(raw, list) or not raw:
                 return []
 
-            raw = raw[:7]
+            max_q = 3 if is_large else 3
+            raw = raw[:max_q]
 
             result_list = []
             for i, item in enumerate(raw, 1):
@@ -164,6 +217,30 @@ class QuestionGenerator:
             return []
 
     def _fallback(self, context: dict = None) -> list:
+        if (context or {}).get("is_large_change", False):
+            files = [f.get("file") for f in (context or {}).get("file_summary", [])]
+            scope = f"across {len(files)} files" if files else "in this commit"
+            return [
+                {
+                    "question_id": "q1",
+                    "question": f"How do the modified components {scope} coordinate to ensure data consistency?",
+                    "type": "System Architecture",
+                    "time_limit": 60,
+                    "expected_concepts": ["component coordination", "data flow consistency", "state integrity"],
+                    "evaluation_criteria": ["understands cross-component coordination"],
+                    "is_fallback": True
+                },
+                {
+                    "question_id": "q2",
+                    "question": "What error states or edge cases could cause failures across this multi-part change?",
+                    "type": "Invariants",
+                    "time_limit": 60,
+                    "expected_concepts": ["handles failure states", "avoids inconsistent state", "error recovery"],
+                    "evaluation_criteria": ["understands system invariants and failure handling"],
+                    "is_fallback": True
+                }
+            ]
+
         # If we have structured changes, tailor questions to actual functions/files
         changes = (context or {}).get("structured_changes", [])
         if changes:

@@ -21,33 +21,49 @@ class AnswerEvaluator:
         return EvaluationResult({"score": 50, "evaluation": "Failed to evaluate answer", "follow_up_required": False})
 
     def _build_prompt(self, question: dict, answer: dict, context: dict, summary: dict) -> str:
+        is_large = context.get("is_large_change", False)
         lines = [
             "You are evaluating whether a developer understands their own code change.",
             "Use ONLY the supplied repository evidence.",
             "Evaluate the developer's explanation against:",
-            "- the actual changed code",
-            "- dependencies",
+            "- the actual changed code and components",
+            "- architectural intent and dependencies",
             "- expected concepts",
             "- evaluation criteria",
             "",
             "Do not reward generic explanations.",
             "Do not assume an answer is correct simply because it sounds technically plausible.",
             "Do not require the developer to use the same wording as the expected concepts.",
-            "",
-            "## Code Context"
         ]
-        
+
+        if is_large:
+            lines.append("NOTE: This is a substantial architectural change. Value clear conceptual reasoning, component coordination, and failure handling over line-by-line syntax trivia.")
+            arch_sum = context.get("summary", summary or {})
+            lines.append("\n## Architectural Summary")
+            lines.append(f"What Changed: {arch_sum.get('what_changed', 'N/A')}")
+            lines.append(f"Impact: {arch_sum.get('impact', 'N/A')}")
+            if arch_sum.get("key_risks"):
+                lines.append(f"Key Risks: {arch_sum.get('key_risks')}")
+            
+            lines.append("\n## Changed Files & Components")
+            for item in context.get("file_summary", []):
+                funcs = ", ".join(item.get("functions", [])) or "module-level changes"
+                lines.append(f"- {item.get('file')}: {funcs}")
+
+        lines.append("\n## Code Context")
         changes = context.get("structured_changes", [])
-        for f in changes[:5]:
+        for f in changes[:4]:
             lines.append(f"File: {f.get('file', '?')} | Function: {f.get('function', '?')}()")
             lines.append("Diff:")
             lines.append(f"```diff\n{f.get('diff', '')}\n```")
-            lines.append("Dependencies:")
-            lines.append(f"{f.get('dependency_summary', '')}\n")
+            dep = f.get('dependency_summary', '')
+            if dep and dep != "No external dependencies called.":
+                lines.append(f"Dependencies: {dep}\n")
             
         lines += [
             "## Question Details",
             f"Question: {question.get('question')}",
+            f"Question Type: {question.get('type', 'Reasoning')}",
             f"Expected Concepts: {', '.join(question.get('expected_concepts', []))}",
             f"Evaluation Criteria: {', '.join(question.get('evaluation_criteria', []))}",
             "",

@@ -162,6 +162,7 @@ def call_groq_api(api_key: str, payload_dict: dict, timeout: int = 30) -> tuple[
         "Content-Length": str(len(payload))
     }
 
+    conn = None
     try:
         ctx = ssl.create_default_context()
         conn = http.client.HTTPSConnection("api.groq.com", context=ctx, timeout=timeout)
@@ -171,3 +172,9 @@ def call_groq_api(api_key: str, payload_dict: dict, timeout: int = 30) -> tuple[
         return response.status, body
     except Exception as e:
         return 0, str(e)
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass

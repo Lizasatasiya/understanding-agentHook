@@ -62,8 +62,12 @@ class ContextBuilder:
                 dep_text = self._build_dependency_summary(func_name, added_calls, dep_summaries)
                 
                 # Extract function diff
-                old_func_body = self._extract_function_source(old_source, func_name)
-                new_func_body = self._extract_function_source(new_source, func_name)
+                if func_name == "<module>":
+                    old_func_body = old_source
+                    new_func_body = new_source
+                else:
+                    old_func_body = self._extract_function_source(old_source, func_name)
+                    new_func_body = self._extract_function_source(new_source, func_name)
                 
                 # Skip if the function body is unchanged (hunk overlap false-positive)
                 if old_func_body == new_func_body and old_func_body != "":
@@ -75,11 +79,13 @@ class ContextBuilder:
                     new_func_body.splitlines(keepends=True),
                     fromfile=f"a/{filepath} ({func_name})",
                     tofile=f"b/{filepath} ({func_name})",
-                    n=3
+                    n=2
                 ))
                 func_diff = "".join(diff_lines)
                 if not func_diff:
-                    func_diff = f"New function added: {func_name}"
+                    func_diff = f"New code added: {func_name}"
+                elif len(func_diff.splitlines()) > 35:
+                    func_diff = self._compress_diff(func_diff, max_lines=35)
                 
                 structured_changes.append({
                     "file": filepath,
@@ -88,16 +94,61 @@ class ContextBuilder:
                     "dependency_summary": dep_text
                 })
         
+        stats = changes.get("stats", {})
+        is_large_change = stats.get("is_large_change", False) or len(structured_changes) > 3
+
+        file_summary = []
+        for f in changed_code:
+            file_summary.append({
+                "file": f["path"],
+                "functions": [fn["name"] for fn in f.get("changed_functions", [])]
+            })
+
         context = {
             "structured_changes": structured_changes,
             "raw_dependencies": dep_summaries,
-            "tests": [], # Skipping tests for this small prototype
+            "tests": [],
             "documentation": [],
-            "graph_relationships": graph.edges
+            "graph_relationships": graph.edges,
+            "stats": stats,
+            "is_large_change": is_large_change,
+            "file_summary": file_summary
         }
         
-        entities = len(structured_changes) + len(dep_summaries)
         return context
+
+    def _compress_diff(self, diff_text: str, max_lines: int = 35) -> str:
+        """Compress large diffs while preserving signatures, calls, returns, and edits."""
+        lines = diff_text.splitlines()
+        if len(lines) <= max_lines:
+            return diff_text
+
+        header = lines[:2]
+        body = lines[2:]
+
+        structural = []
+        skipped = 0
+        for line in body:
+            stripped = line.strip()
+            if (line.startswith(('+', '-')) or 
+                stripped.startswith(('def ', 'class ', 'return ', 'raise ', 'async def ')) or
+                'try:' in stripped or 'except ' in stripped):
+                structural.append(line)
+            else:
+                if len(structural) < max_lines - 6:
+                    structural.append(line)
+                else:
+                    skipped += 1
+
+        if len(structural) > max_lines:
+            half = (max_lines - 4) // 2
+            compressed = header + structural[:half] + [f"@@ ... ({len(structural) - max_lines + skipped} lines compressed) ... @@"] + structural[-half:]
+            return "\n".join(compressed)
+        else:
+            compressed = header + structural
+            if skipped:
+                compressed.append(f"@@ ... ({skipped} unchanged context lines omitted) ... @@")
+            return "\n".join(compressed)
 
     def _get_function_details(self, filepath: str, func_name: str) -> dict:
         try:

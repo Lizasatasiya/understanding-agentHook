@@ -421,7 +421,41 @@ class Interaction:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
     def print_context(self, context: dict):
-        print("\n          CODE UNDERSTANDING CHECK\n")
+        CYAN = "\033[96m"
+        BOLD = "\033[1m"
+        DIM = "\033[2m"
+        RESET = "\033[0m"
+        YELLOW = "\033[93m"
+        GREEN = "\033[92m"
+        RED = "\033[91m"
+
+        print(f"\n{BOLD}          CODE UNDERSTANDING CHECK{RESET}\n")
+
+        if context.get("is_large_change", False):
+            stats = context.get("stats", {})
+            added = stats.get("total_added", 0)
+            deleted = stats.get("total_deleted", 0)
+            files = context.get("file_summary", [])
+            summary = context.get("summary", {})
+
+            print(f"{BOLD}{CYAN}╭──────────────────────────────────────────────────────────────────────────╮{RESET}")
+            print(f"{BOLD}{CYAN}│ 📦 ARCHITECTURAL CHANGE OVERVIEW ({GREEN}+{added}{CYAN}/{RED}-{deleted}{CYAN} lines, {len(files)} files){' ' * max(0, 24 - len(str(added)) - len(str(deleted)) - len(str(len(files))))}│{RESET}")
+            print(f"{BOLD}{CYAN}╰──────────────────────────────────────────────────────────────────────────╯{RESET}")
+            
+            print(f"\n{BOLD}Touched Components:{RESET}")
+            for item in files:
+                funcs = ", ".join(item.get("functions", [])) or "module-level changes"
+                print(f"  • {CYAN}{item['file']}{RESET}: {funcs}")
+
+            print(f"\n{BOLD}[ARCHITECTURAL SUMMARY]{RESET}")
+            print(f"{BOLD}What Changed:{RESET}   {summary.get('what_changed', 'N/A')}")
+            print(f"{BOLD}Impact:{RESET}         {summary.get('impact', 'N/A')}")
+            print(f"{BOLD}Why It Matters:{RESET} {summary.get('why_it_matters', 'N/A')}")
+            if summary.get("key_risks"):
+                print(f"{BOLD}Key Invariants:{RESET} {summary.get('key_risks')}")
+            print("\n")
+            return
+
         for f in context.get("structured_changes", []):
             print(f"FILE: {f['file']} | FUNCTION: {f['function']}() ")
             summary = f.get('summary', {})
