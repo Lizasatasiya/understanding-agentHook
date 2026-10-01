@@ -83,14 +83,16 @@ class Interaction:
         if speak_text:
             self._speak_question(speak_text)
 
-        # Step 2: Show mic option hint if voice is available
-        allow_mic = bool(VOICE_AVAILABLE and speak_text)
+        # Step 2: Show mic option hint if voice is available or on Mac
+        is_mac = sys.platform == 'darwin'
+        allow_mic = bool((is_mac or VOICE_AVAILABLE) and speak_text)
         if allow_mic:
             CYAN = "\033[96m"
             BOLD = "\033[1m"
             DIM = "\033[2m"
             RESET = "\033[0m"
-            print(f"🎙️  {CYAN}{BOLD}[Tab]{RESET} {DIM}Speak with Mic  │  ⌨️  Type answer directly (Enter to submit){RESET}\n", flush=True)
+            mic_desc = "Speak with Mac Mic (Inbuilt Dictation)" if is_mac else "Speak with Mic"
+            print(f"🎙️  {CYAN}{BOLD}[Tab]{RESET} {DIM}{mic_desc}  │  ⌨️  Type answer directly (Enter to submit){RESET}\n", flush=True)
 
         if not UNIX_TTY:
             return self._timed_input_windows(prompt, timeout, seed_text=seed_text, allow_mic=allow_mic)
@@ -113,6 +115,27 @@ class Interaction:
                     termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
                 except Exception:
                     pass
+
+    def _trigger_mac_dictation(self):
+        """Trigger macOS native keyboard dictation via AppleScript shortcuts."""
+        if sys.platform != 'darwin':
+            return
+        try:
+            import subprocess as _sp
+            # Key code 63 is Fn (Globe) key. Double-pressing Fn triggers Dictation by default on macOS.
+            # Key code 96 is F5 / Dictation key on newer Mac keyboards.
+            script = '''
+            try
+                tell application "System Events"
+                    key code 63
+                    delay 0.05
+                    key code 63
+                end tell
+            end try
+            '''
+            _sp.run(["osascript", "-e", script], check=False, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+        except Exception:
+            pass
 
     def _record_and_transcribe(self, timeout: int) -> str | None:
         """Record mic input in short chunks and stream words to screen as spoken.
@@ -384,31 +407,51 @@ class Interaction:
                                 break
 
                     if ch == '\t' and allow_mic:
-                        # Restore terminal temporarily for voice flow
-                        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                        sys.stdout.write(f"\r\033[2K")
-                        sys.stdout.flush()
+                        is_mac = sys.platform == 'darwin'
+                        CYAN = "\033[96m"
+                        DIM = "\033[2m"
+                        RESET = "\033[0m"
                         
-                        elapsed_so_far = int(time.time() - start_time)
-                        voice_time = max(10, min(30, timeout - elapsed_so_far))
-                        voice_ans = self._record_and_transcribe(voice_time)
-                        
-                        if voice_ans:
-                            if user_input and not user_input[-1].isspace():
-                                user_input.append(' ')
-                            user_input.extend(list(voice_ans))
-                            print("\n✏️   Review and edit your answer below (Press Enter to submit):\n", flush=True)
-                        else:
-                            print("\n⌨️   Type your answer below (Press Enter to submit):\n", flush=True)
+                        if is_mac:
+                            # 1. Mac device: start Mac's inbuilt Mic (keyboard dictation)
+                            sys.stdout.write(f"\r\033[2K")
+                            sys.stdout.flush()
+                            print(f"\n{CYAN}🎙️  Mac Inbuilt Mic (Keyboard Dictation) active...{RESET}", flush=True)
+                            print(f"   {DIM}Speak into your mic. Spoken words will appear directly below.{RESET}", flush=True)
+                            print(f"   {DIM}(If dictation doesn't trigger, press Fn twice or the Mic key). Press Enter to submit.{RESET}\n", flush=True)
+                            self._trigger_mac_dictation()
                             
-                        # Guarantee at least 20 seconds remaining to review/edit
-                        spent = int(time.time() - start_time)
-                        if timeout - spent < 20:
-                            start_time = time.time() - (timeout - 20)
+                            # Guarantee at least 30 seconds remaining
+                            spent = int(time.time() - start_time)
+                            if timeout - spent < 30:
+                                start_time = time.time() - (timeout - 30)
+                            break
+                        else:
+                            # 2. Other devices (Linux, etc.): use existing recording and Whisper transcription flow
+                            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                            sys.stdout.write(f"\r\033[2K")
+                            sys.stdout.flush()
+                            
+                            elapsed_so_far = int(time.time() - start_time)
+                            voice_time = max(10, min(30, timeout - elapsed_so_far))
+                            voice_ans = self._record_and_transcribe(voice_time)
+                            
+                            if voice_ans:
+                                if user_input and not user_input[-1].isspace():
+                                    user_input.append(' ')
+                                user_input.extend(list(voice_ans))
+                                print("\n✏️   Review and edit your answer below (Press Enter to submit):\n", flush=True)
+                            else:
+                                print("\n⌨️   Type your answer below (Press Enter to submit):\n", flush=True)
+                                
+                            # Guarantee at least 20 seconds remaining to review/edit
+                            spent = int(time.time() - start_time)
+                            if timeout - spent < 20:
+                                start_time = time.time() - (timeout - 20)
 
-                        # Re-enable cbreak mode
-                        tty.setcbreak(fd)
-                        break  # Break inner read loop, redraw prompt with new user_input
+                            # Re-enable cbreak mode
+                            tty.setcbreak(fd)
+                            break  # Break inner read loop, redraw prompt with new user_input
 
                     elif ch in ('\x08', '\x7f'):
                         if user_input:
