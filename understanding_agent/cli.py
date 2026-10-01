@@ -77,6 +77,12 @@ def main():
 
     if state.get("diff_hash") == diff_hash and cached_questions and not has_fallback:
         valid_questions = cached_questions
+        for q in valid_questions:
+            # Only scores in GREEN (>= 70%) are considered passed and skipped
+            if q.get("best_score", 0) >= 70:
+                q["passed"] = True
+            else:
+                q["passed"] = False
         attempts = state.get("attempts", 1) + 1
         print(f"\n[QUESTIONS] Loading {len(valid_questions)} previous questions... (Attempt {attempts})")
     else:
@@ -86,7 +92,6 @@ def main():
         valid_questions = question_generator.validate(questions)
         for q in valid_questions:
             q["passed"] = False
-            q["answered"] = False
             q["best_score"] = 0
         attempts = 1
         
@@ -128,9 +133,9 @@ def main():
          
             print(f"{BOLD}{CYAN} Question {i}/{len(valid_questions):<40}{RESET}")
       
-            
-            if q.get("answered", False) or q.get("passed", False):
-                print(f"{GREEN}✓ Already answered with score {q.get('best_score', 0)}%{RESET}\n")
+            # Only skip if the question has a GREEN passing score (>= 70%)
+            if q.get("passed", False) and q.get("best_score", 0) >= 70:
+                print(f"{GREEN}✓ Already passed with score {q.get('best_score', 0)}%{RESET}\n")
                 total_score += q.get('best_score', 0)
                 continue
                 
