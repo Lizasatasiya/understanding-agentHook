@@ -117,9 +117,9 @@ class ChangeDetector:
 
         return []
 
-    # ------------------------------------------------------------------
+   
     # Helpers
-    # ------------------------------------------------------------------
+
 
     def _get_changed_line_numbers(self, filepath: str) -> Set[int]:
         """

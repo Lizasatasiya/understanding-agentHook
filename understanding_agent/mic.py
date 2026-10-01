@@ -55,7 +55,7 @@ def record(seconds: float, out_path: str | Path, mic_index: str = "0") -> str:
     cmd = [
         _ffmpeg(), "-y",
         "-f", "avfoundation",
-        "-i", f":{mic_index}",
+        "-i", f":{mic_index}",  
         "-t", str(seconds),
         "-ar", "16000", "-ac", "1", "-sample_fmt", "s16",
         out_path,
