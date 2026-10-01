@@ -91,8 +91,8 @@ class Interaction:
             BOLD = "\033[1m"
             DIM = "\033[2m"
             RESET = "\033[0m"
-            mic_desc = "Speak with Mac Mic" if is_mac else "Speak with Mic"
-            print(f"🎙️  {CYAN}{BOLD}[Tab]{RESET} {DIM}{mic_desc}  │  ⌨️  Type answer directly (Enter to submit){RESET}\n", flush=True)
+            mic_desc = "[Tab] or [F5] Speak with Mac Mic (Live Streaming)" if is_mac else "[Tab] Speak with Mic"
+            print(f"🎙️  {CYAN}{BOLD}{mic_desc}{RESET}  │  {DIM}⌨️  Type answer directly (Enter to submit){RESET}\n", flush=True)
 
         if not UNIX_TTY:
             return self._timed_input_windows(prompt, timeout, seed_text=seed_text, allow_mic=allow_mic)
@@ -117,14 +117,13 @@ class Interaction:
                     pass
 
     def _record_and_transcribe(self, timeout: int, is_mac: bool = False) -> str | None:
-        """Record directly from the microphone and transcribe with Whisper.
+        """Record directly from microphone with LIVE STREAMING transcription.
         
         - Opens microphone immediately using sounddevice/pyaudio.
-        - Displays live audio level meter and countdown timer.
-        - Streams audio continuously into a buffer via non-blocking callback.
-        - User speaks, and presses Enter when done.
-        - Transcribes recorded speech cleanly with Whisper.
-        - Returns the transcribed text string.
+        - Background thread transcribes speech continuously in real-time as user speaks.
+        - Spoken words stream live to the screen.
+        - User presses Enter when done.
+        - Final pass ensures complete accuracy and returns transcribed text.
         """
         if not VOICE_AVAILABLE or not AUDIO_BACKEND:
             return None
@@ -133,10 +132,11 @@ class Interaction:
             import numpy as np
             import whisper
             import queue
+            import threading
 
             RATE = 16000
             CHUNK = 1024
-            record_secs = max(10, min(timeout, 45))
+            record_secs = max(10, min(timeout, 60))
 
             mic_name = "Mac Inbuilt Mic" if is_mac else "Microphone"
             CYAN = "\033[96m"
@@ -146,8 +146,8 @@ class Interaction:
             BOLD = "\033[1m"
             RESET = "\033[0m"
 
-            print(f"\n{CYAN}🎙️  {mic_name} active (Recording)...{RESET}")
-            print(f"   {DIM}Speak your answer. Press {RESET}{BOLD}[Enter]{RESET}{DIM} when finished.{RESET}\n", flush=True)
+            print(f"\n{CYAN}🎙️  {mic_name} active (Live Streaming)...{RESET}")
+            print(f"   {DIM}Speak your answer. Spoken words will appear live. Press {RESET}{BOLD}[Enter]{RESET}{DIM} when finished.{RESET}\n", flush=True)
 
             if self._whisper_model is None:
                 self._whisper_model = whisper.load_model("base")
@@ -155,9 +155,40 @@ class Interaction:
 
             audio_queue = queue.Queue()
             all_frames = []
+            stop_event = threading.Event()
+            live_transcript = [""]
+            last_rms_val = [0.0]
 
-            def _audio_callback(indata, frames, time_info, status):
+            def _audio_callback(indata, frames_count, time_info, status):
                 audio_queue.put(indata.copy())
+
+            # Background thread for live streaming transcription
+            def _live_transcribe_worker():
+                last_frame_count = 0
+                while not stop_event.is_set():
+                    time.sleep(1.0)
+                    if stop_event.is_set():
+                        break
+                    
+                    if len(all_frames) < 16:  # need at least ~1s of audio
+                        continue
+                    
+                    if len(all_frames) == last_frame_count:
+                        continue
+                    last_frame_count = len(all_frames)
+
+                    try:
+                        snapshot = np.concatenate(list(all_frames), axis=0).flatten()
+                        recent_energy = float(np.abs(snapshot[-16000:]).mean()) if len(snapshot) >= 16000 else float(np.abs(snapshot).mean())
+                        if recent_energy < 0.002 and not live_transcript[0]:
+                            continue
+
+                        res = model.transcribe(snapshot, fp16=False, language='en')
+                        txt = (res.get("text") or "").strip()
+                        if txt:
+                            live_transcript[0] = txt
+                    except Exception:
+                        pass
 
             fd = sys.stdin.fileno()
             old_settings = termios.tcgetattr(fd)
@@ -165,32 +196,37 @@ class Interaction:
 
             start_time = time.time()
             meter_chars = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
-            last_rms = 0.0
+            worker = threading.Thread(target=_live_transcribe_worker, daemon=True)
 
             try:
                 if AUDIO_BACKEND == "sounddevice":
                     import sounddevice as sd
                     stream = sd.InputStream(samplerate=RATE, channels=1, dtype='float32', blocksize=CHUNK, callback=_audio_callback)
                     with stream:
+                        worker.start()
                         while True:
                             elapsed = time.time() - start_time
                             remaining = int(record_secs - elapsed)
                             if remaining <= 0:
                                 break
 
-                            # Drain queue
                             while not audio_queue.empty():
                                 blk = audio_queue.get_nowait()
                                 all_frames.append(blk)
-                                last_rms = float(np.sqrt(np.mean(blk**2)))
+                                last_rms_val[0] = float(np.sqrt(np.mean(blk**2)))
 
-                            # Display live audio meter & countdown
-                            bar_idx = min(7, int(last_rms * 40))
-                            bar = meter_chars[bar_idx] * 4
-                            sys.stdout.write(f"\r\033[2K⏱  {remaining:2d}s | {GREEN}● REC{RESET} [{bar:<4}] Speak now... {DIM}(Press Enter when done){RESET} ")
+                            bar_idx = min(7, int(last_rms_val[0] * 35))
+                            meter = meter_chars[bar_idx] * 3
+                            
+                            curr_live = live_transcript[0]
+                            if curr_live:
+                                max_len = 50
+                                disp_text = ("..." + curr_live[-(max_len-3):]) if len(curr_live) > max_len else curr_live
+                                sys.stdout.write(f"\r\033[2K⏱  {remaining:2d}s | {GREEN}● LIVE{RESET} [{meter}] {BOLD}{CYAN}{disp_text}{RESET} ")
+                            else:
+                                sys.stdout.write(f"\r\033[2K⏱  {remaining:2d}s | {GREEN}● REC{RESET}  [{meter}] Listening... {DIM}(Speak now, Enter to finish){RESET} ")
                             sys.stdout.flush()
 
-                            # Check for Enter or Esc
                             r, _, _ = select.select([sys.stdin], [], [], 0.08)
                             if r:
                                 ch = sys.stdin.read(1)
@@ -204,6 +240,7 @@ class Interaction:
                     audio_pa = pyaudio.PyAudio()
                     stream = audio_pa.open(format=pyaudio.paInt16, channels=1, rate=RATE, input=True, frames_per_buffer=CHUNK)
                     try:
+                        worker.start()
                         while True:
                             elapsed = time.time() - start_time
                             remaining = int(record_secs - elapsed)
@@ -213,11 +250,18 @@ class Interaction:
                             data = stream.read(CHUNK, exception_on_overflow=False)
                             blk = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
                             all_frames.append(blk)
-                            last_rms = float(np.sqrt(np.mean(blk**2)))
+                            last_rms_val[0] = float(np.sqrt(np.mean(blk**2)))
 
-                            bar_idx = min(7, int(last_rms * 40))
-                            bar = meter_chars[bar_idx] * 4
-                            sys.stdout.write(f"\r\033[2K⏱  {remaining:2d}s | {GREEN}● REC{RESET} [{bar:<4}] Speak now... {DIM}(Press Enter when done){RESET} ")
+                            bar_idx = min(7, int(last_rms_val[0] * 35))
+                            meter = meter_chars[bar_idx] * 3
+
+                            curr_live = live_transcript[0]
+                            if curr_live:
+                                max_len = 50
+                                disp_text = ("..." + curr_live[-(max_len-3):]) if len(curr_live) > max_len else curr_live
+                                sys.stdout.write(f"\r\033[2K⏱  {remaining:2d}s | {GREEN}● LIVE{RESET} [{meter}] {BOLD}{CYAN}{disp_text}{RESET} ")
+                            else:
+                                sys.stdout.write(f"\r\033[2K⏱  {remaining:2d}s | {GREEN}● REC{RESET}  [{meter}] Listening... {DIM}(Speak now, Enter to finish){RESET} ")
                             sys.stdout.flush()
 
                             r, _, _ = select.select([sys.stdin], [], [], 0.08)
@@ -233,14 +277,12 @@ class Interaction:
                         audio_pa.terminate()
 
             finally:
+                stop_event.set()
                 try:
                     termios.tcflush(fd, termios.TCIFLUSH)
                 except Exception:
                     pass
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-            sys.stdout.write(f"\r\033[2K⚡ Transcribing speech...\n")
-            sys.stdout.flush()
 
             while not audio_queue.empty():
                 all_frames.append(audio_queue.get_nowait())
@@ -248,12 +290,16 @@ class Interaction:
             if not all_frames:
                 return None
 
+            sys.stdout.write(f"\r\033[2K⚡ Finalizing speech transcription...\n")
+            sys.stdout.flush()
+
             audio_data = np.concatenate(all_frames, axis=0).flatten()
             if len(audio_data) < 8000:
                 return None
 
-            result = model.transcribe(audio_data, fp16=False)
-            text = (result.get("text") or "").strip()
+            final_res = model.transcribe(audio_data, fp16=False, language='en')
+            final_text = (final_res.get("text") or "").strip()
+            text = final_text or live_transcript[0]
             if text:
                 print(f"✓ Transcribed: \"{text}\"\n", flush=True)
                 return text
@@ -421,10 +467,34 @@ class Interaction:
                     elif ch == '\x1b':
                         r, _, _ = select.select([sys.stdin], [], [], 0.05)
                         if r:
-                            sys.stdin.read(1)
-                            r2, _, _ = select.select([sys.stdin], [], [], 0.05)
-                            if r2:
-                                sys.stdin.read(1)
+                            esc = sys.stdin.read(1)
+                            while True:
+                                r_more, _, _ = select.select([sys.stdin], [], [], 0.02)
+                                if r_more:
+                                    esc += sys.stdin.read(1)
+                                else:
+                                    break
+                            # Check if user pressed F5 (Dictation / Mic key on Mac keyboards)
+                            if allow_mic and ("15" in esc or "11" in esc or "OS" in esc or esc in ("[15~", "[11~")):
+                                # Route directly to mic trigger!
+                                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                                sys.stdout.write(f"\r\033[2K")
+                                sys.stdout.flush()
+                                elapsed_so_far = int(time.time() - start_time)
+                                voice_time = max(10, min(45, timeout - elapsed_so_far))
+                                voice_ans = self._record_and_transcribe(voice_time, is_mac=is_mac)
+                                if voice_ans:
+                                    if user_input and not user_input[-1].isspace():
+                                        user_input.append(' ')
+                                    user_input.extend(list(voice_ans))
+                                    print("✏️   Review and edit your answer below (Press Enter to submit):\n", flush=True)
+                                else:
+                                    print("⌨️   Type your answer below (Press Enter to submit):\n", flush=True)
+                                spent = int(time.time() - start_time)
+                                if timeout - spent < 25:
+                                    start_time = time.time() - (timeout - 25)
+                                tty.setcbreak(fd)
+                                break
                     elif ch.isprintable():
                         user_input.append(ch)
 
