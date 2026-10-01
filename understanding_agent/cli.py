@@ -86,6 +86,7 @@ def main():
         valid_questions = question_generator.validate(questions)
         for q in valid_questions:
             q["passed"] = False
+            q["answered"] = False
             q["best_score"] = 0
         attempts = 1
         
@@ -128,8 +129,8 @@ def main():
             print(f"{BOLD}{CYAN} Question {i}/{len(valid_questions):<40}{RESET}")
       
             
-            if q.get("passed", False):
-                print(f"{GREEN}✓ Already passed with score {q.get('best_score', 0)}%{RESET}\n")
+            if q.get("answered", False) or q.get("passed", False):
+                print(f"{GREEN}✓ Already answered with score {q.get('best_score', 0)}%{RESET}\n")
                 total_score += q.get('best_score', 0)
                 continue
                 
@@ -210,9 +211,11 @@ def main():
             final_color = GREEN if final_score >= 70 else (YELLOW if final_score >= 40 else RED)
             print(f"\n{BOLD}★ Final Question Score: {final_color}{final_score}%{RESET}")
             
-            if final_score > 75:
-                q["passed"] = True
+            if status == "answered":
+                q["answered"] = True
                 q["best_score"] = final_score
+                if final_score >= 70:
+                    q["passed"] = True
             else:
                 q["best_score"] = max(q.get("best_score", 0), final_score)
                 
@@ -232,6 +235,18 @@ def main():
                 result_entry["follow_up"] = follow_up_data
                 
             final_results.append(result_entry)
+
+            # Persist state immediately so answered questions are never re-asked
+            if not any(quest.get("is_fallback") for quest in valid_questions):
+                try:
+                    with open(state_file, "w") as f:
+                        json.dump({
+                            "diff_hash": diff_hash,
+                            "attempts": attempts,
+                            "questions": valid_questions
+                        }, f)
+                except Exception:
+                    pass
 
         # 9. Server Client
         client = ServerClient()
