@@ -133,7 +133,7 @@ def main():
       
             # Only consider answered and skip if the answer score is in GREEN (>= 70%)
             if q.get("best_score", 0) >= 70:
-                print(f"{GREEN}✓ Understanding already demonstrated{RESET}\n")
+                print(f"{GREEN}✓ Already answered and verified{RESET}\n")
                 total_score += q.get('best_score', 0)
                 continue
                 
@@ -163,15 +163,16 @@ def main():
             
             eval_res = evaluator.evaluate(q, ans_obj, context, summary)
             final_score = eval_res.score
-            
             if final_score >= 70:
-                print(f"\n{GREEN}✓ Good understanding demonstrated.{RESET}")
-            elif final_score >= 40:
-                print(f"\n{YELLOW}⚠️  Partial understanding. Some key details were missing.{RESET}")
+                print(f"\n{GREEN}✓ Good understanding demonstrated{RESET}")
             elif final_score >= 25:
-                print(f"\n{RED}✗ Weak understanding. Major concepts were not covered.{RESET}")
+                print(f"\n{YELLOW}⚠️ Partial understanding demonstrated{RESET}")
             else:
-                print(f"\n{RED}✗ Your understanding is not enough.{RESET}")
+                print(f"\n{RED}✗ Understanding not demonstrated{RESET}")
+                
+            eval_msg = eval_res.evaluation.strip() if hasattr(eval_res, 'evaluation') and eval_res.evaluation else ""
+            if eval_msg:
+                print(f"  \033[2m{eval_msg}\033[0m")
             
             # Only scores in GREEN (>= 70%) are considered answered and passed
             q["best_score"] = max(q.get("best_score", 0), final_score)
@@ -210,7 +211,7 @@ def main():
 
             # If user gives wrong answer (< 25%), ask no next questions and abort
             if final_score < 25:
-                print(f"\n{BOLD}{RED}⛔ Your understanding is not enough. Please review the code and then try again.{RESET}\n")
+                print(f"\n{BOLD}{RED}⛔ Please review the code and then try again.{RESET}\n")
                 print(f"{RED}⛔ Commit aborted.{RESET}\n")
                 
                 try:
@@ -240,9 +241,9 @@ def main():
         
         avg_score = total_score / len(valid_questions) if valid_questions else 100
         if avg_score > 75:
-            print(f"\n{BOLD}{GREEN}✓ Overall Assessment: Sufficient code understanding demonstrated.{RESET}")
+            print(f"\n{BOLD}{GREEN}✅ Overall Understanding: Verified{RESET}")
         else:
-            print(f"\n{BOLD}{RED}✗ Overall Assessment: Your understanding is not enough across all questions.{RESET}")
+            print(f"\n{BOLD}{RED}⛔ Overall Understanding: Insufficient{RESET}")
         
         # Save state (only persist if not fallback, so subsequent runs can retry AI generation)
         is_fallback_run = any(q.get("is_fallback") for q in valid_questions)
@@ -265,8 +266,8 @@ def main():
                     pass
         
         if avg_score <= 75:
-            print(f"\n{BOLD}{RED}⛔ Attempt {attempts} failed. Sufficient understanding is required to proceed.{RESET}")
-            retry = interaction.timed_input(f"\033[93mWould you like to try Attempt {attempts + 1}? (y/n) \033[0m", 60)
+            print(f"\n{RED}⛔ Attempt {attempts} failed. Understanding criteria not met.{RESET}")
+            retry = interaction.timed_input(f"{YELLOW}Would you like to try Attempt {attempts + 1}? (y/n) {RESET}", 60)
             if retry and retry.strip().lower() == 'y':
                 attempts += 1
                 continue
