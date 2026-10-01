@@ -133,9 +133,9 @@ def main():
          
             print(f"{BOLD}{CYAN} Question {i}/{len(valid_questions):<40}{RESET}")
       
-            # Only skip if the question has a GREEN passing score (>= 70%)
-            if q.get("passed", False) and q.get("best_score", 0) >= 70:
-                print(f"{GREEN}✓ Already passed with score {q.get('best_score', 0)}%{RESET}\n")
+            # Only consider answered and skip if the answer score is in GREEN (>= 70%)
+            if q.get("best_score", 0) >= 70:
+                print(f"{GREEN}✓ Already answered with score {q.get('best_score', 0)}%{RESET}\n")
                 total_score += q.get('best_score', 0)
                 continue
                 
@@ -216,13 +216,14 @@ def main():
             final_color = GREEN if final_score >= 70 else (YELLOW if final_score >= 40 else RED)
             print(f"\n{BOLD}★ Final Question Score: {final_color}{final_score}%{RESET}")
             
-            if status == "answered":
+            # Only scores in GREEN (>= 70%) are considered answered and passed
+            q["best_score"] = max(q.get("best_score", 0), final_score)
+            if q["best_score"] >= 70:
                 q["answered"] = True
-                q["best_score"] = final_score
-                if final_score >= 70:
-                    q["passed"] = True
+                q["passed"] = True
             else:
-                q["best_score"] = max(q.get("best_score", 0), final_score)
+                q["answered"] = False
+                q["passed"] = False
                 
             total_score += q["best_score"]
             
