@@ -12,7 +12,6 @@ from .question_generator import QuestionGenerator
 from .interaction import Interaction
 from .server_client import ServerClient
 from .answer_evaluator import AnswerEvaluator
-from .followup_generator import FollowUpGenerator
 
 def main():
     try:
@@ -103,7 +102,6 @@ def main():
     print("\n[INTERACTION] Asking developer...")
     interaction = Interaction()
     evaluator = AnswerEvaluator()
-    followup_gen = FollowUpGenerator()
     
     interaction.print_context(context)
     
@@ -164,57 +162,9 @@ def main():
             }
             
             eval_res = evaluator.evaluate(q, ans_obj, context, summary)
-            color = GREEN if eval_res.score >= 70 else (YELLOW if eval_res.score >= 40 else RED)
-            print(f"📊 {BOLD}Score: {color}{eval_res.score}%{RESET}")
-            
-            follow_up_data = None
             final_score = eval_res.score
-            
-            if eval_res.follow_up_required and eval_res.score < 70:
-                print(f"⚠️  {YELLOW}Answer requires clarification{RESET}")
-                print(f"\n{BOLD}{CYAN}↪ Asking targeted follow-up...{RESET}\n")
-                follow_up_q = followup_gen.generate(q, ans_obj, eval_res.to_dict())
-                print(f"{BOLD}{follow_up_q}{RESET}\n")
-                
-                f_start = time.time()
-                f_ans = interaction.timed_input(f"{CYAN} ❯ {RESET}", time_limit, speak_text=follow_up_q)
-                
-                f_status = "answered" if f_ans is not None else "timeout"
-                f_resp_time = int(time.time() - f_start) if f_ans is not None else time_limit
-                f_ans_text = f_ans or ""
-                
-                print(f"\n{CYAN}⚡ Evaluating follow-up...{RESET}")
-                f_ans_obj = {
-                    "answer": f_ans_text,
-                    "response_time_seconds": f_resp_time,
-                    "status": f_status
-                }
-                
-                # evaluate follow up by combining context or treating it as new answer
-                f_eval_res = evaluator.evaluate(
-                    {"question": follow_up_q, "expected_concepts": eval_res.missing_concepts, "evaluation_criteria": q.get("evaluation_criteria", [])},
-                    f_ans_obj,
-                    context,
-                    summary
-                )
-                
-                # If follow-up demonstrates understanding, reward it directly
-                if f_eval_res.score >= 70:
-                    final_score = f_eval_res.score
-                    print(f"{GREEN}✓ Understanding demonstrated{RESET}")
-                else:
-                    final_score = max(eval_res.score, f_eval_res.score)
-                    print(f"{RED}✗ Understanding still missing{RESET}")
-                    
-                follow_up_data = {
-                    "question": follow_up_q,
-                    "answer": f_ans_text,
-                    "score": f_eval_res.score
-                }
-                
-                
             final_color = GREEN if final_score >= 70 else (YELLOW if final_score >= 40 else RED)
-            print(f"\n{BOLD}★ Final Question Score: {final_color}{final_score}%{RESET}")
+            print(f"📊 {BOLD}Score: {final_color}{final_score}%{RESET}")
             
             # Only scores in GREEN (>= 70%) are considered answered and passed
             q["best_score"] = max(q.get("best_score", 0), final_score)
@@ -237,12 +187,9 @@ def main():
                 "status": status,
                 "evaluation": eval_res.to_dict()
             }
-            if follow_up_data:
-                result_entry["follow_up"] = follow_up_data
-                
             final_results.append(result_entry)
 
-            # Persist state immediately so answered questions are never re-asked
+            # Persist state immediately
             if not any(quest.get("is_fallback") for quest in valid_questions):
                 try:
                     with open(state_file, "w") as f:
@@ -253,6 +200,25 @@ def main():
                         }, f)
                 except Exception:
                     pass
+
+            # If user gives wrong answer (< 25%), ask no next questions and abort
+            if final_score < 25:
+                print(f"\n{BOLD}{RED}⛔ Score below 25% ({final_score}%): Please review the code and then try again.{RESET}\n")
+                print(f"{RED}⛔ Commit aborted.{RESET}\n")
+                
+                try:
+                    client = ServerClient()
+                    session_data = {
+                        "repository": env.get("repository", "unknown"),
+                        "branch": env.get("branch", "unknown"),
+                        "changed_files": changes.get("files", []),
+                        "change_summary": summary,
+                        "questions": final_results
+                    }
+                    client.send(session_data)
+                except Exception:
+                    pass
+                sys.exit(1)
 
         # 9. Server Client
         client = ServerClient()

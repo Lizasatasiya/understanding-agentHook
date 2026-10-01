@@ -31,8 +31,7 @@ class AnswerEvaluator:
             "- Do NOT require textbook definitions or long essays. Developers are typing or speaking via mic in a live terminal; brief 1-2 sentence answers are completely valid.",
             "- Be tolerant of speech-to-text transcription artifacts and minor voice mishearings.",
             "- If the developer shows the right basic intuition, award a PASSING score (75% to 95%).",
-            "- Only give a failing score (< 70%) if the answer is completely blank, nonsensical, or factually contradictory.",
-            "- Only set 'follow_up_required': true if score is between 40% and 69% where a short hint helps. If score is >= 70% or completely empty/dismissive ('ok', 'idk'), set 'follow_up_required': false.",
+            "- If the answer is completely wrong, irrelevant, nonsensical, blank, or dismissive (e.g., 'ok', 'idk', 'dunno', random words), assign a score strictly below 25%.",
             "",
             "Evaluate against:",
             "- changed code and components",
@@ -85,7 +84,6 @@ class AnswerEvaluator:
             " - 'incorrect_claims' (list of strings)",
             " - 'evaluation' (string)",
             " - 'confidence' (0.0 - 1.0 float)",
-            " - 'follow_up_required' (boolean)",
             "",
             "If there are any 'incorrect_claims', drastically lower the score."
         ]
