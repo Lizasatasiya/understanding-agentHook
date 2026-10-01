@@ -24,20 +24,23 @@ class AnswerEvaluator:
         is_large = context.get("is_large_change", False)
         lines = [
             "You are evaluating whether a developer understands their own code change.",
-            "Use ONLY the supplied repository evidence.",
-            "Evaluate the developer's explanation against:",
-            "- the actual changed code and components",
-            "- architectural intent and dependencies",
-            "- expected concepts",
-            "- evaluation criteria",
             "",
-            "Do not reward generic explanations.",
-            "Do not assume an answer is correct simply because it sounds technically plausible.",
-            "Do not require the developer to use the same wording as the expected concepts.",
+            "CRITICAL EVALUATION GUIDELINES:",
+            "- Focus ONLY on the core LOGIC and INTENT of the developer's answer.",
+            "- High-level, short, or general logical answers ARE FULLY ACCEPTABLE if the core engineering sense is right (e.g., 'data lost on server restart', 'need a db lock to avoid race conditions', 'use a database for multiple servers').",
+            "- Do NOT require textbook definitions or long essays. Developers are typing or speaking via mic in a live terminal; brief 1-2 sentence answers are completely valid.",
+            "- Be tolerant of speech-to-text transcription artifacts and minor voice mishearings.",
+            "- If the developer shows the right basic intuition, award a PASSING score (75% to 95%).",
+            "- Only give a failing score (< 70%) if the answer is completely blank, nonsensical, or factually contradictory.",
+            "- Only set 'follow_up_required': true if score is between 40% and 69% where a short hint helps. If score is >= 70% or completely empty/dismissive ('ok', 'idk'), set 'follow_up_required': false.",
+            "",
+            "Evaluate against:",
+            "- changed code and components",
+            "- architectural intent and dependencies",
+            "- expected concepts"
         ]
 
         if is_large:
-            lines.append("NOTE: This is a substantial architectural change. Value clear conceptual reasoning, component coordination, and failure handling over line-by-line syntax trivia.")
             arch_sum = context.get("summary", summary or {})
             lines.append("\n## Architectural Summary")
             lines.append(f"What Changed: {arch_sum.get('what_changed', 'N/A')}")

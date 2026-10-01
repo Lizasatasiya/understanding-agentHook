@@ -15,14 +15,17 @@ class FollowUpGenerator:
 
     def _build_prompt(self, question: dict, answer: dict, evaluation: dict) -> str:
         missing = ", ".join(evaluation.get('missing_concepts', []))
-        return f"""You are evaluating a developer's understanding.
+        return f"""You are generating a quick follow-up question for a developer.
 Original Question: {question.get('question')}
 Developer Answer: {answer.get('answer')}
-Evaluation: {evaluation.get('evaluation')}
-Missing Concepts: {missing}
+Missing Concept: {missing}
 
-Generate a SINGLE follow-up question that targets exactly the missing concepts.
-Return ONLY the question text. Do not use quotes, JSON, or formatting.
+RULES:
+1. Generate ONE single follow-up question targeting the missing concept.
+2. CRITICAL: Keep it EXTREMELY short and simple (under 10-12 words).
+3. Do NOT ask multi-part or complex scenario questions.
+4. It must be quickly answerable in 15-20 seconds.
+5. Return ONLY the question text. No quotes, no markdown, no intros.
 """
 
     def _call_groq(self, api_key: str, prompt: str) -> str:

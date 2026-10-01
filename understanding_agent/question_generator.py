@@ -97,11 +97,9 @@ class QuestionGenerator:
             "CRITICAL RULES FOR LARGE COMMITS:",
             "1. Generate EXACTLY 2 or 3 questions. NEVER more than 3.",
             "2. Do NOT ask trivia about single lines of code, variable renames, or syntax minutiae.",
-            "3. Focus on the SYSTEM ARCHITECTURE across these three core dimensions:",
-            "   - Dimension 1 (Data Flow & Coordination): How the changed modules or functions coordinate and pass data.",
-            "   - Dimension 2 (Invariants & Failure Modes): How errors, edge states, or invalid inputs are handled across components.",
-            "   - Dimension 3 (System Impact & Contracts): How this change affects system invariants or external callers.",
-            "4. Keep questions concise and direct (under 25 words).",
+            "3. Focus on core engineering logic: data flow, failure modes, or persistence.",
+            "4. CRITICAL: Keep questions VERY SHORT, DIRECT, and SIMPLE (under 12-15 words).",
+            "5. The question MUST be easily answerable in 30-45 seconds. Do NOT ask compound or essay questions.",
             "",
             "## Architectural Summary",
             f"What Changed: {summary.get('what_changed', 'N/A')}",
@@ -129,12 +127,12 @@ class QuestionGenerator:
             "## Output Format",
             "Return ONLY a JSON array with EXACTLY 2 or 3 items. Each item must have:",
             '  "question_id": "q1", "q2", or "q3",',
-            '  "question": <clear question string under 25 words>,',
+            '  "question": <very short, punchy question under 15 words>,',
             f'  "type": one of {valid_types},',
             '  "expected_concepts": [<list of key technical concept strings>],',
             '  "evaluation_criteria": [<list of evaluation criteria strings>]',
             "",
-            'Example: [{"question_id": "q1", "question": "How do the changed components coordinate to prevent invalid state if validation fails?", "type": "System Architecture", "expected_concepts": ["early validation aborts workflow", "state rollback"], "evaluation_criteria": ["understands cross-component failure handling"]}]'
+            'Example: [{"question_id": "q1", "question": "Why is stock reserved before payment rather than after?", "type": "System Architecture", "expected_concepts": ["prevents overselling", "ensures availability"], "evaluation_criteria": ["understands reservation order"]}]'
         ]
         return "\n".join(lines)
 

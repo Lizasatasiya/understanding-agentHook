@@ -164,7 +164,7 @@ def main():
             follow_up_data = None
             final_score = eval_res.score
             
-            if eval_res.follow_up_required:
+            if eval_res.follow_up_required and eval_res.score < 70:
                 print(f"⚠️  {YELLOW}Answer requires clarification{RESET}")
                 print(f"\n{BOLD}{CYAN}↪ Asking targeted follow-up...{RESET}\n")
                 follow_up_q = followup_gen.generate(q, ans_obj, eval_res.to_dict())
@@ -192,11 +192,12 @@ def main():
                     summary
                 )
                 
-                # combine scores
-                final_score = min(100, int(eval_res.score * 0.5 + f_eval_res.score * 0.5))
-                if f_eval_res.score > 70:
+                # If follow-up demonstrates understanding, reward it directly
+                if f_eval_res.score >= 70:
+                    final_score = f_eval_res.score
                     print(f"{GREEN}✓ Understanding demonstrated{RESET}")
                 else:
+                    final_score = max(eval_res.score, f_eval_res.score)
                     print(f"{RED}✗ Understanding still missing{RESET}")
                     
                 follow_up_data = {
