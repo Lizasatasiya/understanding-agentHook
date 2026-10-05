@@ -496,233 +496,226 @@ class Interaction:
                     sys.stdout.write(f"\033[{back_steps}D")
                 sys.stdout.flush()
                 
-                # Wait up to 0.2s for any input
-                ready, _, _ = select.select([sys.stdin], [], [], 0.2)
+                # Wait up to 0.2s for any input on raw OS file descriptor
+                ready, _, _ = select.select([fd], [], [], 0.2)
                 if not ready:
                     continue
 
-                # Drain and process input
-                submitted = False
-                while True:
-                    ch = sys.stdin.read(1)
-                    if review_mode:
-                        # Keep timer healthy while user is actively reviewing/editing
-                        spent_now = int(time.time() - start_time)
-                        if timeout - spent_now < 30:
-                            start_time = time.time() - (timeout - 30)
+                try:
+                    raw_bytes = os.read(fd, 1024)
+                except Exception:
+                    break
+                if not raw_bytes:
+                    continue
 
-                    if ch in ('\n', '\r'):
-                        # Multi-line paste chunk check
-                        more_now, _, _ = select.select([sys.stdin], [], [], 0.03)
-                        if more_now:
-                            user_input.insert(cursor_pos, ' ')
-                            cursor_pos += 1
-                            continue
+                chunk = raw_bytes.decode('utf-8', 'ignore')
+                if not chunk:
+                    continue
 
-                        curr_text = "".join(user_input).strip().lower()
-                        if allow_mic and curr_text in ("/mic", ":mic", "mic"):
-                            user_input.clear()
-                            cursor_pos = 0
-                            ch = '\t'  # route to mic trigger below
-                        elif dictation_active:
-                            # User pressed Enter while dictating -> Stop mic & show review/edit prompt
-                            if AUDIO_BACKEND == "mac_dictation":
-                                _stop_mac_dictation()
+                # If escape sequence was somehow fragmented across packet boundary, read remaining bytes
+                if chunk == '\x1b' or (chunk.startswith('\x1b') and not (chunk[-1].isalpha() or chunk[-1] == '~')):
+                    r_tail, _, _ = select.select([fd], [], [], 0.05)
+                    if r_tail:
+                        try:
+                            chunk += os.read(fd, 64).decode('utf-8', 'ignore')
+                        except Exception:
+                            pass
 
-                            # Drain in-flight transcription without leaking escape codes
-                            incoming_chars = []
-                            drain_end = time.time() + 0.35
-                            while time.time() < drain_end:
-                                r_pending, _, _ = select.select([sys.stdin], [], [], 0.05)
-                                if not r_pending:
-                                    if incoming_chars:
-                                        break
-                                    continue
-                                extra_ch = sys.stdin.read(1)
-                                if extra_ch in ('\r', '\n'):
-                                    continue
-                                elif extra_ch == '\x1b':
-                                    r_esc, _, _ = select.select([sys.stdin], [], [], 0.05)
-                                    if r_esc:
-                                        n_c = sys.stdin.read(1)
-                                        if n_c in ('[', 'O'):
-                                            while True:
-                                                r_esc2, _, _ = select.select([sys.stdin], [], [], 0.03)
-                                                if not r_esc2:
-                                                    break
-                                                c_m = sys.stdin.read(1)
-                                                if c_m.isalpha() or c_m == '~':
-                                                    break
-                                elif extra_ch in ('\x08', '\x7f'):
-                                    if incoming_chars:
-                                        incoming_chars.pop()
-                                elif extra_ch.isprintable():
-                                    incoming_chars.append(extra_ch)
+                if review_mode:
+                    # Keep timer healthy while user is actively reviewing/editing
+                    spent_now = int(time.time() - start_time)
+                    if timeout - spent_now < 30:
+                        start_time = time.time() - (timeout - 30)
 
-                            merged_text = _reconcile_transcription("".join(user_input), "".join(incoming_chars))
-                            user_input = list(merged_text)
-                            cursor_pos = len(user_input)
-                            review_mode = True
-                            dictation_active = False
-
-                            sys.stdout.write("\r\033[2K")
-                            if hint_shown:
-                                sys.stdout.write("\033[1A\033[2K")
-                                hint_shown = False
-                            for _ in range(temp_lines):
-                                sys.stdout.write("\033[1A\033[2K")
-                            sys.stdout.write("\r")
-                            sys.stdout.flush()
-
-                            print(f"🎙️  \033[93mMic OFF.\033[0m\n✏️   \033[1mReview and edit your answer below\033[0m (Press \033[1m[Enter]\033[0m to submit):\n", flush=True)
-                            temp_lines = 3
-
-                            # Guarantee at least 60 seconds in review mode
-                            spent = int(time.time() - start_time)
-                            if timeout - spent < 60:
-                                start_time = time.time() - (timeout - 60)
-                            break
-                        elif not user_input:
-                            # Empty enter, redraw prompt
-                            break
-                        else:
-                            # Direct typing or review mode complete -> Final submit!
-                            submitted = True
-                            break
-
-                    if ch == '\t' and allow_mic:
-                        if AUDIO_BACKEND == "mac_dictation":
-                            _trigger_mac_dictation()
-                            dictation_active = True
-                            review_mode = False
-                            sys.stdout.write("\r\033[2K")
-                            if hint_shown:
-                                sys.stdout.write("\033[1A\033[2K")
-                                hint_shown = False
-                            for _ in range(temp_lines):
-                                sys.stdout.write("\033[1A\033[2K")
-                            sys.stdout.write("\r")
-                            sys.stdout.flush()
-                            print(f"🎙️  \033[92mDictation started!\033[0m Speak your answer now. Press \033[1m[Enter]\033[0m when done speaking.\n", flush=True)
-                            temp_lines = 2
-                            spent = int(time.time() - start_time)
-                            if timeout - spent < 30:
-                                start_time = time.time() - (timeout - 30)
-                            break
-                        else:
-                            # Non-mac voice flow
-                            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                            sys.stdout.write("\r\033[2K")
-                            if hint_shown:
-                                sys.stdout.write("\033[1A\033[2K")
-                                hint_shown = False
-                            for _ in range(temp_lines):
-                                sys.stdout.write("\033[1A\033[2K")
-                            sys.stdout.write("\r")
-                            sys.stdout.flush()
-                            
-                            elapsed_so_far = int(time.time() - start_time)
-                            voice_time = max(10, min(30, timeout - elapsed_so_far))
-                            voice_ans = self._record_and_transcribe(voice_time)
-                            
-                            if voice_ans:
-                                if user_input and not user_input[-1].isspace():
-                                    user_input.append(' ')
-                                user_input.extend(list(voice_ans))
-                                cursor_pos = len(user_input)
-                                print("\n✏️   Review and edit your answer below (Press Enter to submit):\n", flush=True)
-                                temp_lines = 3
-                            else:
-                                print("\n⌨️   Type your answer below (Press Enter to submit):\n", flush=True)
-                                temp_lines = 3
-                                
-                            spent = int(time.time() - start_time)
-                            if timeout - spent < 20:
-                                start_time = time.time() - (timeout - 20)
-
-                            tty.setcbreak(fd)
-                            break
-
-                    elif ch in ('\x08', '\x7f'):  # Backspace
-                        if cursor_pos > 0:
-                            user_input.pop(cursor_pos - 1)
-                            cursor_pos -= 1
-                    elif ch == '\x03':  # Ctrl-C
-                        raise KeyboardInterrupt()
-                    elif ch == '\x04':  # Ctrl-D
-                        submitted = True
-                        break
-                    elif ch == '\x01':  # Ctrl-A (Home)
+                # 1. Handle escape sequences (Arrow keys, Option+Arrows, Home, End, Delete)
+                if chunk.startswith('\x1b'):
+                    if chunk in ('\x1b[D', '\x1bOD'):  # Left arrow
+                        cursor_pos = max(0, cursor_pos - 1)
+                    elif chunk in ('\x1b[C', '\x1bOC'):  # Right arrow
+                        cursor_pos = min(len(user_input), cursor_pos + 1)
+                    elif chunk in ('\x1b[A', '\x1bOA', '\x1b[H', '\x1bOH', '\x1b[1~', '\x1b[7~', '\x1b[5~'):  # Up / Home / PgUp
                         cursor_pos = 0
-                    elif ch == '\x05':  # Ctrl-E (End)
+                    elif chunk in ('\x1b[B', '\x1bOB', '\x1b[F', '\x1bOF', '\x1b[4~', '\x1b[8~', '\x1b[6~'):  # Down / End / PgDn
                         cursor_pos = len(user_input)
-                    elif ch == '\x17':  # Ctrl-W (Word backspace)
+                    elif chunk in ('\x1bb', '\x1b[1;3D', '\x1b[1;5D', '\x1b[5D', '\x1b[3D'):  # Option+Left (word back)
+                        cursor_pos = _prev_word(cursor_pos, user_input)
+                    elif chunk in ('\x1bf', '\x1b[1;3C', '\x1b[1;5C', '\x1b[5C', '\x1b[3C'):  # Option+Right (word forward)
+                        cursor_pos = _next_word(cursor_pos, user_input)
+                    elif chunk in ('\x1b[3~',):  # Delete key
+                        if cursor_pos < len(user_input):
+                            user_input.pop(cursor_pos)
+                    elif chunk in ('\x1b\x7f', '\x1b\x08'):  # Option+Backspace (delete word backward)
                         new_pos = _prev_word(cursor_pos, user_input)
                         del user_input[new_pos:cursor_pos]
                         cursor_pos = new_pos
-                    elif ch == '\x15':  # Ctrl-U (Clear to start)
-                        del user_input[:cursor_pos]
-                        cursor_pos = 0
-                    elif ch == '\x0b':  # Ctrl-K (Clear to end)
-                        del user_input[cursor_pos:]
-                    elif ch == '\x1b':  # Escape sequences (Direction keys, Delete, Home, End)
-                        seq = ""
-                        r_esc, _, _ = select.select([sys.stdin], [], [], 0.1)
-                        if r_esc:
-                            next_c = sys.stdin.read(1)
-                            seq += next_c
-                            if next_c in ('[', 'O'):
-                                while True:
-                                    r_esc2, _, _ = select.select([sys.stdin], [], [], 0.05)
-                                    if not r_esc2:
-                                        break
-                                    c_more = sys.stdin.read(1)
-                                    seq += c_more
-                                    if c_more.isalpha() or c_more == '~':
-                                        break
-                        
-                        if seq in ('[D', 'OD'):  # Left arrow
-                            cursor_pos = max(0, cursor_pos - 1)
-                        elif seq in ('[C', 'OC'):  # Right arrow
-                            cursor_pos = min(len(user_input), cursor_pos + 1)
-                        elif seq in ('[A', 'OA', '[H', 'OH', '[1~', '[7~', '[5~'):  # Up arrow / Home / PgUp -> trace back to start of line!
-                            cursor_pos = 0
-                        elif seq in ('[B', 'OB', '[F', 'OF', '[4~', '[8~', '[6~'):  # Down arrow / End / PgDn -> jump to end of line!
-                            cursor_pos = len(user_input)
-                        elif seq in ('b', '[1;3D', '[1;5D', '[5D', '[3D'):  # Option+Left / Word backward
-                            cursor_pos = _prev_word(cursor_pos, user_input)
-                        elif seq in ('f', '[1;3C', '[1;5C', '[5C', '[3C'):  # Option+Right / Word forward
-                            cursor_pos = _next_word(cursor_pos, user_input)
-                        elif seq in ('[3~',):  # Delete key
-                            if cursor_pos < len(user_input):
-                                user_input.pop(cursor_pos)
-                        elif seq in ('\x7f', '\x08'):  # Option+Backspace (delete word backward)
-                            new_pos = _prev_word(cursor_pos, user_input)
-                            del user_input[new_pos:cursor_pos]
-                            cursor_pos = new_pos
-                        # All other escape codes are safely swallowed
-                    elif ch.isprintable():
-                        user_input.insert(cursor_pos, ch)
-                        cursor_pos += 1
+                    # All other escape codes are completely swallowed!
+                    continue
 
-                    # Check if more chars are immediately ready
-                    more, _, _ = select.select([sys.stdin], [], [], 0.0)
-                    if not more:
+                # 2. Handle Enter
+                if '\r' in chunk or '\n' in chunk:
+                    curr_text = "".join(user_input).strip().lower()
+                    if allow_mic and curr_text in ("/mic", ":mic", "mic"):
+                        user_input.clear()
+                        cursor_pos = 0
+                        chunk = '\t'  # route to mic trigger below
+                    elif dictation_active:
+                        # User pressed Enter while dictating -> Stop mic & show review/edit prompt
+                        if AUDIO_BACKEND == "mac_dictation":
+                            _stop_mac_dictation()
+
+                        # Drain in-flight transcription directly from OS fd
+                        incoming_chars = []
+                        drain_end = time.time() + 0.35
+                        while time.time() < drain_end:
+                            r_pending, _, _ = select.select([fd], [], [], 0.05)
+                            if not r_pending:
+                                if incoming_chars:
+                                    break
+                                continue
+                            try:
+                                d_bytes = os.read(fd, 1024)
+                            except Exception:
+                                break
+                            if not d_bytes:
+                                break
+                            d_str = d_bytes.decode('utf-8', 'ignore')
+                            if d_str.startswith('\x1b') or d_str in ('\r', '\n'):
+                                continue
+                            for c in d_str:
+                                if c in ('\x08', '\x7f'):
+                                    if incoming_chars:
+                                        incoming_chars.pop()
+                                elif c.isprintable():
+                                    incoming_chars.append(c)
+
+                        merged_text = _reconcile_transcription("".join(user_input), "".join(incoming_chars))
+                        user_input = list(merged_text)
+                        cursor_pos = len(user_input)
+                        review_mode = True
+                        dictation_active = False
+
+                        sys.stdout.write("\r\033[2K")
+                        if hint_shown:
+                            sys.stdout.write("\033[1A\033[2K")
+                            hint_shown = False
+                        for _ in range(temp_lines):
+                            sys.stdout.write("\033[1A\033[2K")
+                        sys.stdout.write("\r")
+                        sys.stdout.flush()
+
+                        print(f"🎙️  \033[93mMic OFF.\033[0m\n✏️   \033[1mReview and edit your answer below\033[0m (Press \033[1m[Enter]\033[0m to submit):\n", flush=True)
+                        temp_lines = 3
+
+                        # Guarantee at least 60 seconds in review mode
+                        spent = int(time.time() - start_time)
+                        if timeout - spent < 60:
+                            start_time = time.time() - (timeout - 60)
+                        continue
+                    elif not user_input:
+                        # Empty enter, redraw prompt
+                        continue
+                    else:
+                        # Direct typing or review mode complete -> Final submit!
+                        submitted = True
                         break
 
-                if submitted:
+                # 3. Handle Tab (Mic trigger)
+                if chunk == '\t' and allow_mic:
                     if AUDIO_BACKEND == "mac_dictation":
-                        _stop_mac_dictation()
-                    final_ans = "".join(user_input).strip()
-                    sys.stdout.write("\r\033[2K")
-                    if hint_shown:
-                        sys.stdout.write("\033[1A\033[2K")
-                        hint_shown = False
-                    for _ in range(temp_lines):
-                        sys.stdout.write("\033[1A\033[2K")
-                    sys.stdout.write(f"\r{prompt}{final_ans}\n")
-                    sys.stdout.flush()
-                    return final_ans
+                        _trigger_mac_dictation()
+                        dictation_active = True
+                        review_mode = False
+                        sys.stdout.write("\r\033[2K")
+                        if hint_shown:
+                            sys.stdout.write("\033[1A\033[2K")
+                            hint_shown = False
+                        for _ in range(temp_lines):
+                            sys.stdout.write("\033[1A\033[2K")
+                        sys.stdout.write("\r")
+                        sys.stdout.flush()
+                        print(f"🎙️  \033[92mDictation started!\033[0m Speak your answer now. Press \033[1m[Enter]\033[0m when done speaking.\n", flush=True)
+                        temp_lines = 2
+                        spent = int(time.time() - start_time)
+                        if timeout - spent < 30:
+                            start_time = time.time() - (timeout - 30)
+                        continue
+                    else:
+                        # Non-mac voice flow
+                        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                        sys.stdout.write("\r\033[2K")
+                        if hint_shown:
+                            sys.stdout.write("\033[1A\033[2K")
+                            hint_shown = False
+                        for _ in range(temp_lines):
+                            sys.stdout.write("\033[1A\033[2K")
+                        sys.stdout.write("\r")
+                        sys.stdout.flush()
+                        
+                        elapsed_so_far = int(time.time() - start_time)
+                        voice_time = max(10, min(30, timeout - elapsed_so_far))
+                        voice_ans = self._record_and_transcribe(voice_time)
+                        
+                        if voice_ans:
+                            if user_input and not user_input[-1].isspace():
+                                user_input.append(' ')
+                            user_input.extend(list(voice_ans))
+                            cursor_pos = len(user_input)
+                            print("\n✏️   Review and edit your answer below (Press Enter to submit):\n", flush=True)
+                            temp_lines = 3
+                        else:
+                            print("\n⌨️   Type your answer below (Press Enter to submit):\n", flush=True)
+                            temp_lines = 3
+                            
+                        spent = int(time.time() - start_time)
+                        if timeout - spent < 20:
+                            start_time = time.time() - (timeout - 20)
+
+                        tty.setcbreak(fd)
+                        continue
+
+                # 4. Handle control characters
+                if chunk in ('\x08', '\x7f'):  # Backspace
+                    if cursor_pos > 0:
+                        user_input.pop(cursor_pos - 1)
+                        cursor_pos -= 1
+                elif chunk == '\x03':  # Ctrl-C
+                    raise KeyboardInterrupt()
+                elif chunk == '\x04':  # Ctrl-D
+                    submitted = True
+                    break
+                elif chunk == '\x01':  # Ctrl-A (Home)
+                    cursor_pos = 0
+                elif chunk == '\x05':  # Ctrl-E (End)
+                    cursor_pos = len(user_input)
+                elif chunk == '\x17':  # Ctrl-W (Word backspace)
+                    new_pos = _prev_word(cursor_pos, user_input)
+                    del user_input[new_pos:cursor_pos]
+                    cursor_pos = new_pos
+                elif chunk == '\x15':  # Ctrl-U (Clear to start)
+                    del user_input[:cursor_pos]
+                    cursor_pos = 0
+                elif chunk == '\x0b':  # Ctrl-K (Clear to end)
+                    del user_input[cursor_pos:]
+                else:
+                    # 5. Regular typing, paste, or streamed transcription
+                    chars = [c for c in chunk if c.isprintable() or c == ' ']
+                    if chars:
+                        user_input[cursor_pos:cursor_pos] = chars
+                        cursor_pos += len(chars)
+
+            if submitted:
+                if AUDIO_BACKEND == "mac_dictation":
+                    _stop_mac_dictation()
+                final_ans = "".join(user_input).strip()
+                sys.stdout.write("\r\033[2K")
+                if hint_shown:
+                    sys.stdout.write("\033[1A\033[2K")
+                    hint_shown = False
+                for _ in range(temp_lines):
+                    sys.stdout.write("\033[1A\033[2K")
+                sys.stdout.write(f"\r{prompt}{final_ans}\n")
+                sys.stdout.flush()
+                return final_ans
         finally:
             if AUDIO_BACKEND == "mac_dictation":
                 _stop_mac_dictation()
