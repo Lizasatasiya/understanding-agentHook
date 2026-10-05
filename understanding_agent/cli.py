@@ -124,7 +124,7 @@ def main():
             print(f"{BOLD}{q_text}{RESET}\n")
             
             start_time = time.time()
-            ans_text = interaction.timed_input(f"{CYAN} ❯ {RESET}", time_limit, speak_text=q_text)
+            ans_text = interaction.timed_input(f"{CYAN}❯ {RESET}", time_limit, speak_text=q_text)
             
             if ans_text is None:
                 ans_text = ""

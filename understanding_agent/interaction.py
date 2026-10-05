@@ -2,6 +2,9 @@ import os
 import sys
 import time
 import glob
+import re
+import shutil
+import unicodedata
 
 try:
     import select
@@ -10,6 +13,45 @@ try:
     UNIX_TTY = True
 except ImportError:
     UNIX_TTY = False
+
+
+def _str_display_width(s: str) -> int:
+    """Calculate visible width of a string in terminal columns, ignoring ANSI escape sequences."""
+    clean = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', s)
+    w = 0
+    for ch in clean:
+        if unicodedata.combining(ch):
+            continue
+        east = unicodedata.east_asian_width(ch)
+        if east in ('F', 'W'):
+            w += 2
+        else:
+            w += 1
+    return w
+
+
+def _get_terminal_cols(fd: int = None) -> int:
+    """Get the true terminal column width using all available descriptors."""
+    if fd is not None:
+        try:
+            return os.get_terminal_size(fd).columns
+        except Exception:
+            pass
+    for stream in (sys.stdout, sys.stderr, sys.stdin):
+        try:
+            if stream and hasattr(stream, 'fileno'):
+                return os.get_terminal_size(stream.fileno()).columns
+        except Exception:
+            pass
+    try:
+        return shutil.get_terminal_size().columns
+    except Exception:
+        pass
+    try:
+        return os.get_terminal_size().columns
+    except Exception:
+        pass
+    return 80
 
 def _detect_voice():
     if sys.platform == "darwin":
@@ -398,10 +440,15 @@ class Interaction:
                 sys.stdout.flush()
                 return None
                 
-            timer_str = f"⏱  {remaining:2d}s"
+            timer_str = f"⏱ {remaining:2d}s"
+            cols = _get_terminal_cols()
+            clean_prompt = prompt.lstrip()
+            prefix_str = f"{timer_str} │ {clean_prompt}"
+            prefix_width = _str_display_width(prefix_str)
+            avail_width = max(15, cols - prefix_width - 2)
             current_str = "".join(user_input)
-            display_str = ("..." + current_str[-50:]) if len(current_str) > 50 else current_str
-            sys.stdout.write(f"\r{timer_str} | {prompt}{display_str} ")
+            display_str, _ = _get_display_window(current_str, len(user_input), avail_width)
+            sys.stdout.write(f"\r{prefix_str}{display_str} ")
             sys.stdout.flush()
             
             end_wait = time.time() + 0.2
@@ -477,18 +524,17 @@ class Interaction:
                     sys.stdout.flush()
                     return None
                     
-                timer_str = f"⏱  {remaining:2d}s"
-                try:
-                    cols = os.get_terminal_size().columns
-                except Exception:
-                    cols = 80
-
-                # Reserve 25 cols for prefix & margins to strictly avoid line-wrapping corruption
-                avail_width = max(20, cols - 25)
+                timer_str = f"⏱ {remaining:2d}s"
+                cols = _get_terminal_cols(fd)
+                clean_prompt = prompt.lstrip()
+                prefix_str = f"{timer_str} │ {clean_prompt}"
+                prefix_width = _str_display_width(prefix_str)
+                # Maximize single-line visible width: reserve only prefix width + 2 col safety margin
+                avail_width = max(15, cols - prefix_width - 2)
                 current_str = "".join(user_input)
                 display_str, disp_cursor = _get_display_window(current_str, cursor_pos, avail_width)
 
-                sys.stdout.write(f"\r\033[2K{timer_str} | {prompt}{display_str}")
+                sys.stdout.write(f"\r\033[2K{prefix_str}{display_str}")
                 
                 # Reposition cursor if not at the end of visible text
                 back_steps = len(display_str) - disp_cursor
