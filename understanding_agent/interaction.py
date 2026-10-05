@@ -50,7 +50,7 @@ def _trigger_mac_dictation():
 
 
 def _stop_mac_dictation():
-    """Stop native macOS Dictation if active."""
+    """Stop native macOS Dictation if active and release the microphone."""
     if sys.platform != "darwin":
         return
     import subprocess
@@ -65,7 +65,11 @@ def _stop_mac_dictation():
         'end tell'
     )
     try:
-        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=1)
+        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=0.5)
+    except Exception:
+        pass
+    try:
+        subprocess.run(["killall", "-9", "DictationIM"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
 
