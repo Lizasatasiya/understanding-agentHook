@@ -102,7 +102,7 @@ def main():
     RESET = "\033[0m"
 
     while True:
-        print(f"\n{BOLD}{CYAN}Questions [Attempt {attempts}]{RESET}\n")
+        print(f"\n\n{BOLD}{CYAN}Questions [Attempt {attempts}]{RESET}\n")
         final_results = []
         total_score = 0
         

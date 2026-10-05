@@ -375,9 +375,13 @@ class Interaction:
                     return None
                     
                 timer_str = f"⏱  {remaining:2d}s"
+                try:
+                    cols = os.get_terminal_size().columns
+                except Exception:
+                    cols = 80
+                max_disp = max(50, cols - 16)
                 current_str = "".join(user_input)
-                # Truncate to prevent line wrapping which breaks \r\033[2K
-                display_str = ("..." + current_str[-50:]) if len(current_str) > 50 else current_str
+                display_str = ("..." + current_str[-(max_disp - 3):]) if len(current_str) > max_disp else current_str
                 sys.stdout.write(f"\r\033[2K{timer_str} | {prompt}{display_str}")
                 sys.stdout.flush()
                 
@@ -402,10 +406,27 @@ class Interaction:
                                 user_input.clear()
                                 ch = '\t'  # route to mic trigger below
                             elif user_input and not review_mode:
-                                # Finished speaking/typing: Turn mic OFF and enter editable review mode
-                                review_mode = True
+                                # Finished speaking/typing: Stop mic first
                                 if AUDIO_BACKEND == "mac_dictation":
                                     _stop_mac_dictation()
+
+                                # Drain all remaining in-flight characters from dictation
+                                time.sleep(0.15)
+                                while True:
+                                    r_pending, _, _ = select.select([sys.stdin], [], [], 0.05)
+                                    if not r_pending:
+                                        break
+                                    extra_ch = sys.stdin.read(1)
+                                    if extra_ch in ('\r', '\n'):
+                                        continue  # discard trailing enter/newline from dictation
+                                    elif extra_ch in ('\x08', '\x7f'):
+                                        if user_input:
+                                            user_input.pop()
+                                    elif extra_ch.isprintable():
+                                        user_input.append(extra_ch)
+
+                                # Enter editable review mode with complete text
+                                review_mode = True
                                 sys.stdout.write(f"\r\033[2K")
                                 print(f"🎙️  \033[93mMic OFF.\033[0m\n✏️   \033[1mReview and edit your answer below\033[0m (Press \033[1m[Enter]\033[0m to submit):\n", flush=True)
                                 
