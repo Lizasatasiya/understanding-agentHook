@@ -102,6 +102,7 @@ class Interaction:
             self._speak_question(speak_text)
 
         # Step 2: Show mic option hint if voice is available
+        hint_shown = False
         allow_mic = bool(VOICE_AVAILABLE and speak_text)
         if allow_mic:
             CYAN = "\033[96m"
@@ -110,13 +111,15 @@ class Interaction:
             RESET = "\033[0m"
             if AUDIO_BACKEND == "mac_dictation":
                 print(f"🎙️  {CYAN}{BOLD}[🎙 / Tab]{RESET} {DIM}Dictate answer  │  ⌨️  Type directly{RESET}")
+                hint_shown = True
             else:
                 print(f"🎙️  {CYAN}{BOLD}[Tab]{RESET} {DIM}Speak with Mic  │  ⌨️  Type directly{RESET}")
+                hint_shown = True
 
         if not UNIX_TTY:
             return self._timed_input_windows(prompt, timeout, seed_text=seed_text, allow_mic=allow_mic)
         else:
-            return self._timed_input_unix(prompt, timeout, seed_text=seed_text, allow_mic=allow_mic)
+            return self._timed_input_unix(prompt, timeout, seed_text=seed_text, allow_mic=allow_mic, hint_shown=hint_shown)
 
     def _speak_question(self, question_text: str):
         """Speak the question aloud using macOS say, blocking until finished."""
@@ -357,7 +360,7 @@ class Interaction:
                 elif ch.isprintable():
                     user_input.append(ch)
 
-    def _timed_input_unix(self, prompt: str, timeout: int, seed_text: str = "", allow_mic: bool = False) -> str:
+    def _timed_input_unix(self, prompt: str, timeout: int, seed_text: str = "", allow_mic: bool = False, hint_shown: bool = False) -> str:
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         
@@ -427,7 +430,11 @@ class Interaction:
 
                                 # Enter editable review mode with complete text
                                 review_mode = True
-                                sys.stdout.write(f"\r\033[2K")
+                                if hint_shown:
+                                    sys.stdout.write("\r\033[2K\033[1A\033[2K\r")
+                                    hint_shown = False
+                                else:
+                                    sys.stdout.write(f"\r\033[2K")
                                 print(f"🎙️  \033[93mMic OFF.\033[0m\n✏️   \033[1mReview and edit your answer below\033[0m (Press \033[1m[Enter]\033[0m to submit):\n", flush=True)
                                 
                                 # Guarantee at least 30s remaining to review/edit
@@ -447,8 +454,13 @@ class Interaction:
                         if AUDIO_BACKEND == "mac_dictation":
                             _trigger_mac_dictation()
                             review_mode = False
-                            sys.stdout.write(f"\r\033[2K")
-                            print(f"🎙️  \033[92mMac Dictation started!\033[0m Speak your answer now. Press \033[1m[Enter]\033[0m when done speaking.\n", flush=True)
+                            if hint_shown:
+                                sys.stdout.write("\r\033[2K\033[1A\033[2K\r")
+                                hint_shown = False
+                            else:
+                                sys.stdout.write("\r\033[2K")
+                            sys.stdout.flush()
+                            print(f"🎙️  \033[92mDictation started!\033[0m Speak your answer now. Press \033[1m[Enter]\033[0m when done speaking.\n", flush=True)
                             spent = int(time.time() - start_time)
                             if timeout - spent < 30:
                                 start_time = time.time() - (timeout - 30)
@@ -456,7 +468,11 @@ class Interaction:
                         else:
                             # Restore terminal temporarily for voice flow (non-mac)
                             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                            sys.stdout.write(f"\r\033[2K")
+                            if hint_shown:
+                                sys.stdout.write("\r\033[2K\033[1A\033[2K\r")
+                                hint_shown = False
+                            else:
+                                sys.stdout.write("\r\033[2K")
                             sys.stdout.flush()
                             
                             elapsed_so_far = int(time.time() - start_time)
