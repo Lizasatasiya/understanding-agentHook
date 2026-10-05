@@ -135,9 +135,6 @@ def main():
                 status = "answered"
                 response_time = int(time.time() - start_time)
                 print(f"\n{GREEN}✓ Answer received in {response_time} seconds{RESET}")
-                
-            print(f"\n{CYAN}⚡ Evaluating answer...{RESET}")
-            
             ans_obj = {
                 "answer": ans_text,
                 "response_time_seconds": response_time,
@@ -152,10 +149,6 @@ def main():
                 print(f"\n{YELLOW}⚠️ Partial understanding demonstrated{RESET}")
             else:
                 print(f"\n{RED}✗ Understanding not demonstrated{RESET}")
-                
-            eval_msg = eval_res.evaluation.strip() if hasattr(eval_res, 'evaluation') and eval_res.evaluation else ""
-            if eval_msg:
-                print(f"  \033[2m{eval_msg}\033[0m")
             
             # Only scores in GREEN (>= 70%) are considered answered and passed
             q["best_score"] = max(q.get("best_score", 0), final_score)
