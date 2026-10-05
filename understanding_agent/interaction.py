@@ -34,19 +34,17 @@ def _trigger_mac_dictation():
     import subprocess
     script = (
         'tell application "System Events"\n'
-        '    set frontApp to first application process whose frontmost is true\n'
-        '    tell frontApp\n'
-        '        try\n'
-        '            click (first menu item of menu "Edit" of menu bar 1 whose name contains "Dictation")\n'
-        '        on error\n'
-        '            key code 96\n'
-        '        end try\n'
-        '    end tell\n'
+        '    try\n'
+        '        set frontApp to first application process whose frontmost is true\n'
+        '        tell frontApp\n'
+        '            click (first menu item of menu "Edit" of menu bar 1 whose name starts with "Start Dictation")\n'
+        '        end tell\n'
+        '    end try\n'
         'end tell'
     )
     try:
-        res = subprocess.run(["osascript", "-e", script], capture_output=True, timeout=2)
-        return res.returncode == 0
+        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=1)
+        return True
     except Exception:
         return False
 
@@ -58,14 +56,12 @@ def _stop_mac_dictation():
     import subprocess
     script = (
         'tell application "System Events"\n'
-        '    set frontApp to first application process whose frontmost is true\n'
-        '    tell frontApp\n'
-        '        try\n'
-        '            click (first menu item of menu "Edit" of menu bar 1 whose name contains "Stop Dictation")\n'
-        '        on error\n'
-        '            key code 53\n'
-        '        end try\n'
-        '    end tell\n'
+        '    try\n'
+        '        set frontApp to first application process whose frontmost is true\n'
+        '        tell frontApp\n'
+        '            click (first menu item of menu "Edit" of menu bar 1 whose name starts with "Stop Dictation")\n'
+        '        end tell\n'
+        '    end try\n'
         'end tell'
     )
     try:
@@ -109,9 +105,11 @@ class Interaction:
             DIM = "\033[2m"
             RESET = "\033[0m"
             if AUDIO_BACKEND == "mac_dictation":
-                print(f"🎙️  {CYAN}{BOLD}[Tab]{RESET} {DIM}Start Mac Dictation  │  ⌨️  Type answer directly (Enter to submit){RESET}\n", flush=True)
+                print(f"🎙️  {CYAN}{BOLD}[🎙 / Tab]{RESET} {DIM}Dictate answer  │  ⌨️  Type directly{RESET}")
+                print(f"💡  {DIM}Press {RESET}{BOLD}[Enter]{RESET}{DIM} to stop mic & review answer  │  Press {RESET}{BOLD}[Enter]{RESET}{DIM} again to submit{RESET}\n", flush=True)
             else:
-                print(f"🎙️  {CYAN}{BOLD}[Tab]{RESET} {DIM}Speak with Mic  │  ⌨️  Type answer directly (Enter to submit){RESET}\n", flush=True)
+                print(f"🎙️  {CYAN}{BOLD}[Tab]{RESET} {DIM}Speak with Mic  │  ⌨️  Type directly{RESET}")
+                print(f"💡  {DIM}Press {RESET}{BOLD}[Enter]{RESET}{DIM} to stop mic & review answer  │  Press {RESET}{BOLD}[Enter]{RESET}{DIM} again to submit{RESET}\n", flush=True)
 
         if not UNIX_TTY:
             return self._timed_input_windows(prompt, timeout, seed_text=seed_text, allow_mic=allow_mic)
@@ -363,7 +361,7 @@ class Interaction:
         
         start_time = time.time()
         user_input = list(seed_text) if seed_text else []
-        dictation_active = False
+        review_mode = False
         
         try:
             tty.setcbreak(fd)
@@ -401,35 +399,33 @@ class Interaction:
                             if allow_mic and curr_text in ("/mic", ":mic", "mic"):
                                 user_input.clear()
                                 ch = '\t'  # route to mic trigger below
-                            elif dictation_active:
-                                # Finished speaking: Turn mic OFF and enter review/edit mode
-                                dictation_active = False
-                                _stop_mac_dictation()
+                            elif user_input and not review_mode:
+                                # Finished speaking/typing: Turn mic OFF and enter editable review mode
+                                review_mode = True
+                                if AUDIO_BACKEND == "mac_dictation":
+                                    _stop_mac_dictation()
                                 sys.stdout.write(f"\r\033[2K")
-                                print(f"🎙️  \033[93mMac Dictation stopped (Mic OFF).\033[0m\n✏️   \033[1mReview and edit your answer below\033[0m (Press \033[1m[Enter]\033[0m to submit):\n", flush=True)
+                                print(f"🎙️  \033[93mMic OFF.\033[0m\n✏️   \033[1mReview and edit your answer below\033[0m (Press \033[1m[Enter]\033[0m to submit):\n", flush=True)
                                 
                                 # Guarantee at least 30s remaining to review/edit
                                 spent = int(time.time() - start_time)
                                 if timeout - spent < 30:
                                     start_time = time.time() - (timeout - 30)
                                 break
+                            elif not user_input:
+                                # Empty enter, redraw prompt
+                                break
                             else:
+                                # Already reviewed: Final submit!
                                 submitted = True
                                 break
 
                     if ch == '\t' and allow_mic:
                         if AUDIO_BACKEND == "mac_dictation":
-                            if not dictation_active:
-                                dictation_active = True
-                                _trigger_mac_dictation()
-                                sys.stdout.write(f"\r\033[2K")
-                                print(f"🎙️  \033[92mMac Dictation started!\033[0m Speak your answer now. Press \033[1m[Enter]\033[0m when done speaking.\n", flush=True)
-                            else:
-                                dictation_active = False
-                                _stop_mac_dictation()
-                                sys.stdout.write(f"\r\033[2K")
-                                print(f"🎙️  \033[93mMac Dictation stopped (Mic OFF).\033[0m\n✏️   \033[1mReview and edit your answer below\033[0m (Press \033[1m[Enter]\033[0m to submit):\n", flush=True)
-
+                            _trigger_mac_dictation()
+                            review_mode = False
+                            sys.stdout.write(f"\r\033[2K")
+                            print(f"🎙️  \033[92mMac Dictation started!\033[0m Speak your answer now. Press \033[1m[Enter]\033[0m when done speaking.\n", flush=True)
                             spent = int(time.time() - start_time)
                             if timeout - spent < 30:
                                 start_time = time.time() - (timeout - 30)
