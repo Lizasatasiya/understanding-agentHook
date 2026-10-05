@@ -110,10 +110,8 @@ class Interaction:
             RESET = "\033[0m"
             if AUDIO_BACKEND == "mac_dictation":
                 print(f"🎙️  {CYAN}{BOLD}[🎙 / Tab]{RESET} {DIM}Dictate answer  │  ⌨️  Type directly{RESET}")
-                print(f"💡  {DIM}Press {RESET}{BOLD}[Enter]{RESET}{DIM} to stop mic & review answer  │  Press {RESET}{BOLD}[Enter]{RESET}{DIM} again to submit{RESET}\n", flush=True)
             else:
                 print(f"🎙️  {CYAN}{BOLD}[Tab]{RESET} {DIM}Speak with Mic  │  ⌨️  Type directly{RESET}")
-                print(f"💡  {DIM}Press {RESET}{BOLD}[Enter]{RESET}{DIM} to stop mic & review answer  │  Press {RESET}{BOLD}[Enter]{RESET}{DIM} again to submit{RESET}\n", flush=True)
 
         if not UNIX_TTY:
             return self._timed_input_windows(prompt, timeout, seed_text=seed_text, allow_mic=allow_mic)

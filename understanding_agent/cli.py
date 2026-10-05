@@ -93,7 +93,16 @@ def main():
     interaction = Interaction()
     evaluator = AnswerEvaluator()
     
+    # Colors
+    CYAN = "\033[96m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    BOLD = "\033[1m"
+    RESET = "\033[0m"
+
     while True:
+        print(f"\n{BOLD}{CYAN}Questions [Attempt {attempts}]{RESET}\n")
         final_results = []
         total_score = 0
         
@@ -102,19 +111,8 @@ def main():
             q_text = q.get("question", "")
             q_type = q.get("type", "Reasoning")
             time_limit = q.get("time_limit", 60)
-            
-            # Colors
-            CYAN = "\033[96m"
-            GREEN = "\033[92m"
-            YELLOW = "\033[93m"
-            RED = "\033[91m"
-            BOLD = "\033[1m"
-            RESET = "\033[0m"
 
-            if attempts > 1:
-                print(f"\n{BOLD}{CYAN} Question {i}/{len(valid_questions)} (Attempt {attempts}){RESET}")
-            else:
-                print(f"\n{BOLD}{CYAN} Question {i}/{len(valid_questions)}{RESET}")
+            print(f"{BOLD}{CYAN}Question {i}/{len(valid_questions)}{RESET}")
       
             # Only consider answered and skip if the answer score is in GREEN (>= 70%)
             if q.get("best_score", 0) >= 70:
