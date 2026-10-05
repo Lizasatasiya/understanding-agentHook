@@ -12,48 +12,64 @@ except ImportError:
     UNIX_TTY = False
 
 def _detect_voice():
-    def _check():
-        try:
-            import numpy
-            import whisper
-            try:
-                import sounddevice
-                return True, "sounddevice"
-            except Exception:
-                pass
-            try:
-                import pyaudio
-                return True, "pyaudio"
-            except Exception:
-                pass
-        except Exception:
-            pass
-        return False, None
-
-    res, backend = _check()
-    if res:
-        return res, backend
-
-    # If running inside an isolated virtualenv (e.g. pre-commit py_env),
-    # dynamically locate and attach host/system site-packages where whisper and audio backends live
-    candidate_paths = [
-        "/Library/Frameworks/Python.framework/Versions/3.14/lib/python3.14/site-packages",
-        "/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/site-packages",
-        "/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages",
-        os.path.expanduser("~/Library/Python/3.14/lib/python/site-packages"),
-        os.path.expanduser("~/Library/Python/3.12/lib/python/site-packages"),
-        "/opt/homebrew/lib/python3.14/site-packages",
-        "/opt/homebrew/lib/python3.12/site-packages",
-    ]
-    candidate_paths.extend(glob.glob("/Library/Frameworks/Python.framework/Versions/*/lib/python*/site-packages"))
-
-    for p in candidate_paths:
-        if os.path.isdir(p) and p not in sys.path:
-            sys.path.append(p)
-
-    return _check()
+    if sys.platform == "darwin":
+        # Native macOS Dictation requires zero external Python libraries
+        return True, "mac_dictation"
+    try:
+        import numpy
+        import whisper
+        import sounddevice
+        return True, "sounddevice"
+    except Exception:
+        pass
+    return False, None
 
 VOICE_AVAILABLE, AUDIO_BACKEND = _detect_voice()
+
+
+def _trigger_mac_dictation():
+    """Trigger native macOS Dictation via AppleScript."""
+    if sys.platform != "darwin":
+        return False
+    import subprocess
+    script = (
+        'tell application "System Events"\n'
+        '    set frontApp to first application process whose frontmost is true\n'
+        '    tell frontApp\n'
+        '        try\n'
+        '            click (first menu item of menu "Edit" of menu bar 1 whose name contains "Dictation")\n'
+        '        on error\n'
+        '            key code 96\n'
+        '        end try\n'
+        '    end tell\n'
+        'end tell'
+    )
+    try:
+        res = subprocess.run(["osascript", "-e", script], capture_output=True, timeout=2)
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
+def _stop_mac_dictation():
+    """Stop native macOS Dictation if active."""
+    if sys.platform != "darwin":
+        return
+    import subprocess
+    script = (
+        'tell application "System Events"\n'
+        '    set frontApp to first application process whose frontmost is true\n'
+        '    tell frontApp\n'
+        '        try\n'
+        '            click (first menu item of menu "Edit" of menu bar 1 whose name contains "Stop Dictation")\n'
+        '        end try\n'
+        '    end tell\n'
+        'end tell'
+    )
+    try:
+        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=1)
+    except Exception:
+        pass
 
 
 class Interaction:
@@ -83,16 +99,16 @@ class Interaction:
         if speak_text:
             self._speak_question(speak_text)
 
-        # Step 2: Show mic option hint if voice is available or on Mac
-        is_mac = sys.platform == 'darwin'
-        allow_mic = bool((is_mac or VOICE_AVAILABLE) and speak_text)
+        # Step 2: Show mic option hint if voice is available
+        allow_mic = bool(VOICE_AVAILABLE and speak_text)
         if allow_mic:
             CYAN = "\033[96m"
             BOLD = "\033[1m"
             DIM = "\033[2m"
-            RESET = "\033[0m"
-            mic_desc = "[Tab] or [F5] Speak with Mac Mic (Live Streaming)" if is_mac else "[Tab] Speak with Mic"
-            print(f"🎙️  {CYAN}{BOLD}{mic_desc}{RESET}  │  {DIM}⌨️  Type answer directly (Enter to submit){RESET}\n", flush=True)
+            if AUDIO_BACKEND == "mac_dictation":
+                print(f"🎙️  {CYAN}{BOLD}[Tab]{RESET} {DIM}Start Mac Dictation  │  ⌨️  Type answer directly (Enter to submit){RESET}\n", flush=True)
+            else:
+                print(f"🎙️  {CYAN}{BOLD}[Tab]{RESET} {DIM}Speak with Mic  │  ⌨️  Type answer directly (Enter to submit){RESET}\n", flush=True)
 
         if not UNIX_TTY:
             return self._timed_input_windows(prompt, timeout, seed_text=seed_text, allow_mic=allow_mic)
@@ -116,14 +132,13 @@ class Interaction:
                 except Exception:
                     pass
 
-    def _record_and_transcribe(self, timeout: int, is_mac: bool = False) -> str | None:
-        """Record directly from microphone with LIVE STREAMING transcription.
+    def _record_and_transcribe(self, timeout: int) -> str | None:
+        """Record mic input in short chunks and stream words to screen as spoken.
         
-        - Opens microphone immediately using sounddevice/pyaudio.
-        - Background thread transcribes speech continuously in real-time as user speaks.
-        - Spoken words stream live to the screen.
-        - User presses Enter when done.
-        - Final pass ensures complete accuracy and returns transcribed text.
+        Press Enter at any time to stop recording early and submit.
+        Records in CHUNK_SECS windows, transcribes each chunk with Whisper
+        immediately, and prints text as it arrives.
+        Returns the full accumulated transcript, or None on failure.
         """
         if not VOICE_AVAILABLE or not AUDIO_BACKEND:
             return None
@@ -131,182 +146,141 @@ class Interaction:
         try:
             import numpy as np
             import whisper
-            import queue
-            import threading
 
+            CHUNK_SECS = 3
             RATE = 16000
             CHUNK = 1024
-            record_secs = max(10, min(timeout, 60))
+            record_secs = min(timeout, 30)
 
-            mic_name = "Mac Inbuilt Mic" if is_mac else "Microphone"
-            CYAN = "\033[96m"
-            GREEN = "\033[92m"
-            YELLOW = "\033[93m"
-            DIM = "\033[2m"
-            BOLD = "\033[1m"
-            RESET = "\033[0m"
-
-            print(f"\n{CYAN}🎙️  {mic_name} active (Live Streaming)...{RESET}")
-            print(f"   {DIM}Speak your answer. Spoken words will appear live. Press {RESET}{BOLD}[Enter]{RESET}{DIM} when finished.{RESET}\n", flush=True)
+            print(f"\n🎙️  Listening... (Press Enter when done)\n", flush=True)
+            sys.stdout.write(" 🗣️  ")
+            sys.stdout.flush()
 
             if self._whisper_model is None:
                 self._whisper_model = whisper.load_model("base")
             model = self._whisper_model
 
-            audio_queue = queue.Queue()
-            all_frames = []
-            stop_event = threading.Event()
-            live_transcript = [""]
-            last_rms_val = [0.0]
-
-            def _audio_callback(indata, frames_count, time_info, status):
-                audio_queue.put(indata.copy())
-
-            # Background thread for live streaming transcription
-            def _live_transcribe_worker():
-                last_frame_count = 0
-                while not stop_event.is_set():
-                    time.sleep(1.0)
-                    if stop_event.is_set():
-                        break
-                    
-                    if len(all_frames) < 16:  # need at least ~1s of audio
-                        continue
-                    
-                    if len(all_frames) == last_frame_count:
-                        continue
-                    last_frame_count = len(all_frames)
-
-                    try:
-                        snapshot = np.concatenate(list(all_frames), axis=0).flatten()
-                        recent_energy = float(np.abs(snapshot[-16000:]).mean()) if len(snapshot) >= 16000 else float(np.abs(snapshot).mean())
-                        if recent_energy < 0.002 and not live_transcript[0]:
-                            continue
-
-                        res = model.transcribe(snapshot, fp16=False, language='en')
-                        txt = (res.get("text") or "").strip()
-                        if txt:
-                            live_transcript[0] = txt
-                    except Exception:
-                        pass
+            transcript_parts = []
+            elapsed = 0.0
+            frames_per_chunk = int(RATE / CHUNK * CHUNK_SECS)
+            enter_pressed = False
 
             fd = sys.stdin.fileno()
             old_settings = termios.tcgetattr(fd)
-            tty.setcbreak(fd)
-
-            start_time = time.time()
-            meter_chars = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
-            worker = threading.Thread(target=_live_transcribe_worker, daemon=True)
 
             try:
+                tty.setcbreak(fd)
                 if AUDIO_BACKEND == "sounddevice":
                     import sounddevice as sd
-                    stream = sd.InputStream(samplerate=RATE, channels=1, dtype='float32', blocksize=CHUNK, callback=_audio_callback)
-                    with stream:
-                        worker.start()
-                        while True:
-                            elapsed = time.time() - start_time
-                            remaining = int(record_secs - elapsed)
-                            if remaining <= 0:
+                    with sd.InputStream(samplerate=RATE, channels=1, dtype='float32', blocksize=CHUNK) as stream:
+                        while elapsed < record_secs and not enter_pressed:
+                            remaining = record_secs - elapsed
+                            frames_this_chunk = min(frames_per_chunk, int(RATE / CHUNK * remaining))
+                            if frames_this_chunk <= 0:
                                 break
 
-                            while not audio_queue.empty():
-                                blk = audio_queue.get_nowait()
-                                all_frames.append(blk)
-                                last_rms_val[0] = float(np.sqrt(np.mean(blk**2)))
+                            chunk_frames = []
+                            for _ in range(frames_this_chunk):
+                                r, _, _ = select.select([sys.stdin], [], [], 0)
+                                if r:
+                                    key = sys.stdin.read(1)
+                                    if key in ('\r', '\n', '\x04'):
+                                        enter_pressed = True
+                                        break
+                                data, _ = stream.read(CHUNK)
+                                chunk_frames.append(data)
 
-                            bar_idx = min(7, int(last_rms_val[0] * 35))
-                            meter = meter_chars[bar_idx] * 3
-                            
-                            curr_live = live_transcript[0]
-                            if curr_live:
-                                max_len = 50
-                                disp_text = ("..." + curr_live[-(max_len-3):]) if len(curr_live) > max_len else curr_live
-                                sys.stdout.write(f"\r\033[2K⏱  {remaining:2d}s | {GREEN}● LIVE{RESET} [{meter}] {BOLD}{CYAN}{disp_text}{RESET} ")
-                            else:
-                                sys.stdout.write(f"\r\033[2K⏱  {remaining:2d}s | {GREEN}● REC{RESET}  [{meter}] Listening... {DIM}(Speak now, Enter to finish){RESET} ")
-                            sys.stdout.flush()
+                            if not chunk_frames:
+                                break
 
-                            r, _, _ = select.select([sys.stdin], [], [], 0.08)
-                            if r:
-                                ch = sys.stdin.read(1)
-                                if ch in ('\r', '\n', '\x04'):
-                                    break
-                                elif ch == '\x03':
-                                    raise KeyboardInterrupt()
+                            elapsed += len(chunk_frames) * CHUNK / RATE
+
+                            audio_chunk = np.concatenate(chunk_frames, axis=0).squeeze()
+                            if len(audio_chunk) < 1600:
+                                audio_chunk = np.pad(audio_chunk, (0, 1600 - len(audio_chunk)))
+                            result = model.transcribe(audio_chunk, fp16=False)
+                            text = (result.get("text") or "").strip()
+                            if text:
+                                sys.stdout.write(text + " ")
+                                sys.stdout.flush()
+                                transcript_parts.append(text)
+
+                            if enter_pressed:
+                                break
 
                 elif AUDIO_BACKEND == "pyaudio":
                     import pyaudio
+                    FORMAT = pyaudio.paInt16
+                    CHANNELS = 1
                     audio_pa = pyaudio.PyAudio()
-                    stream = audio_pa.open(format=pyaudio.paInt16, channels=1, rate=RATE, input=True, frames_per_buffer=CHUNK)
                     try:
-                        worker.start()
-                        while True:
-                            elapsed = time.time() - start_time
-                            remaining = int(record_secs - elapsed)
-                            if remaining <= 0:
+                        stream = audio_pa.open(format=FORMAT, channels=CHANNELS,
+                                               rate=RATE, input=True,
+                                               frames_per_buffer=CHUNK)
+                    except Exception:
+                        audio_pa.terminate()
+                        return None
+
+                    try:
+                        while elapsed < record_secs and not enter_pressed:
+                            remaining = record_secs - elapsed
+                            frames_this_chunk = min(frames_per_chunk, int(RATE / CHUNK * remaining))
+                            if frames_this_chunk <= 0:
                                 break
 
-                            data = stream.read(CHUNK, exception_on_overflow=False)
-                            blk = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-                            all_frames.append(blk)
-                            last_rms_val[0] = float(np.sqrt(np.mean(blk**2)))
+                            chunk_frames = []
+                            for _ in range(frames_this_chunk):
+                                r, _, _ = select.select([sys.stdin], [], [], 0)
+                                if r:
+                                    key = sys.stdin.read(1)
+                                    if key in ('\r', '\n', '\x04'):
+                                        enter_pressed = True
+                                        break
+                                chunk_frames.append(stream.read(CHUNK, exception_on_overflow=False))
 
-                            bar_idx = min(7, int(last_rms_val[0] * 35))
-                            meter = meter_chars[bar_idx] * 3
+                            if not chunk_frames:
+                                break
 
-                            curr_live = live_transcript[0]
-                            if curr_live:
-                                max_len = 50
-                                disp_text = ("..." + curr_live[-(max_len-3):]) if len(curr_live) > max_len else curr_live
-                                sys.stdout.write(f"\r\033[2K⏱  {remaining:2d}s | {GREEN}● LIVE{RESET} [{meter}] {BOLD}{CYAN}{disp_text}{RESET} ")
-                            else:
-                                sys.stdout.write(f"\r\033[2K⏱  {remaining:2d}s | {GREEN}● REC{RESET}  [{meter}] Listening... {DIM}(Speak now, Enter to finish){RESET} ")
-                            sys.stdout.flush()
+                            elapsed += len(chunk_frames) * CHUNK / RATE
 
-                            r, _, _ = select.select([sys.stdin], [], [], 0.08)
-                            if r:
-                                ch = sys.stdin.read(1)
-                                if ch in ('\r', '\n', '\x04'):
-                                    break
-                                elif ch == '\x03':
-                                    raise KeyboardInterrupt()
+                            raw = b''.join(chunk_frames)
+                            if raw:
+                                audio_np = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                                if len(audio_np) < 1600:
+                                    audio_np = np.pad(audio_np, (0, 1600 - len(audio_np)))
+                                result = model.transcribe(audio_np, fp16=False)
+                                text = (result.get("text") or "").strip()
+                                if text:
+                                    sys.stdout.write(text + " ")
+                                    sys.stdout.flush()
+                                    transcript_parts.append(text)
+
+                            if enter_pressed:
+                                break
                     finally:
-                        stream.stop_stream()
-                        stream.close()
-                        audio_pa.terminate()
-
+                        try:
+                            stream.stop_stream()
+                            stream.close()
+                        except Exception:
+                            pass
+                        try:
+                            audio_pa.terminate()
+                        except Exception:
+                            pass
             finally:
-                stop_event.set()
                 try:
                     termios.tcflush(fd, termios.TCIFLUSH)
                 except Exception:
                     pass
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
-            while not audio_queue.empty():
-                all_frames.append(audio_queue.get_nowait())
-
-            if not all_frames:
-                return None
-
-            sys.stdout.write(f"\r\033[2K⚡ Finalizing speech transcription...\n")
-            sys.stdout.flush()
-
-            audio_data = np.concatenate(all_frames, axis=0).flatten()
-            if len(audio_data) < 8000:
-                return None
-
-            final_res = model.transcribe(audio_data, fp16=False, language='en')
-            final_text = (final_res.get("text") or "").strip()
-            text = final_text or live_transcript[0]
-            if text:
-                print(f"✓ Transcribed: \"{text}\"\n", flush=True)
-                return text
+            print("\n", flush=True)
+            full_answer = " ".join(transcript_parts).strip()
+            if full_answer:
+                return full_answer
             return None
 
-        except Exception as e:
-            print(f"\n[Microphone error: {e}]", flush=True)
+        except Exception:
             return None
 
     def _timed_input_windows(self, prompt: str, timeout: int, seed_text: str = "", allow_mic: bool = False) -> str:
@@ -428,33 +402,40 @@ class Interaction:
                                 break
 
                     if ch == '\t' and allow_mic:
-                        is_mac = sys.platform == 'darwin'
-                        
-                        # Temporarily restore terminal for recording flow
-                        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                        sys.stdout.write(f"\r\033[2K")
-                        sys.stdout.flush()
-                        
-                        elapsed_so_far = int(time.time() - start_time)
-                        voice_time = max(10, min(45, timeout - elapsed_so_far))
-                        voice_ans = self._record_and_transcribe(voice_time, is_mac=is_mac)
-                        
-                        if voice_ans:
-                            if user_input and not user_input[-1].isspace():
-                                user_input.append(' ')
-                            user_input.extend(list(voice_ans))
-                            print("✏️   Review and edit your answer below (Press Enter to submit):\n", flush=True)
+                        if AUDIO_BACKEND == "mac_dictation":
+                            _trigger_mac_dictation()
+                            sys.stdout.write(f"\r\033[2K")
+                            print(f"🎙️  \033[92mMac Dictation started!\033[0m Speak your answer now. Press \033[1m[Enter]\033[0m when finished.\n", flush=True)
+                            spent = int(time.time() - start_time)
+                            if timeout - spent < 30:
+                                start_time = time.time() - (timeout - 30)
+                            break
                         else:
-                            print("⌨️   Type your answer below (Press Enter to submit):\n", flush=True)
+                            # Restore terminal temporarily for voice flow (non-mac)
+                            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                            sys.stdout.write(f"\r\033[2K")
+                            sys.stdout.flush()
                             
-                        # Guarantee at least 25 seconds remaining to review/edit
-                        spent = int(time.time() - start_time)
-                        if timeout - spent < 25:
-                            start_time = time.time() - (timeout - 25)
+                            elapsed_so_far = int(time.time() - start_time)
+                            voice_time = max(10, min(30, timeout - elapsed_so_far))
+                            voice_ans = self._record_and_transcribe(voice_time)
+                            
+                            if voice_ans:
+                                if user_input and not user_input[-1].isspace():
+                                    user_input.append(' ')
+                                user_input.extend(list(voice_ans))
+                                print("\n✏️   Review and edit your answer below (Press Enter to submit):\n", flush=True)
+                            else:
+                                print("\n⌨️   Type your answer below (Press Enter to submit):\n", flush=True)
+                                
+                            # Guarantee at least 20 seconds remaining to review/edit
+                            spent = int(time.time() - start_time)
+                            if timeout - spent < 20:
+                                start_time = time.time() - (timeout - 20)
 
-                        # Re-enable cbreak mode
-                        tty.setcbreak(fd)
-                        break  # Break inner read loop, redraw prompt with new user_input
+                            # Re-enable cbreak mode
+                            tty.setcbreak(fd)
+                            break  # Break inner read loop, redraw prompt with new user_input
 
                     elif ch in ('\x08', '\x7f'):
                         if user_input:
@@ -467,34 +448,10 @@ class Interaction:
                     elif ch == '\x1b':
                         r, _, _ = select.select([sys.stdin], [], [], 0.05)
                         if r:
-                            esc = sys.stdin.read(1)
-                            while True:
-                                r_more, _, _ = select.select([sys.stdin], [], [], 0.02)
-                                if r_more:
-                                    esc += sys.stdin.read(1)
-                                else:
-                                    break
-                            # Check if user pressed F5 (Dictation / Mic key on Mac keyboards)
-                            if allow_mic and ("15" in esc or "11" in esc or "OS" in esc or esc in ("[15~", "[11~")):
-                                # Route directly to mic trigger!
-                                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                                sys.stdout.write(f"\r\033[2K")
-                                sys.stdout.flush()
-                                elapsed_so_far = int(time.time() - start_time)
-                                voice_time = max(10, min(45, timeout - elapsed_so_far))
-                                voice_ans = self._record_and_transcribe(voice_time, is_mac=is_mac)
-                                if voice_ans:
-                                    if user_input and not user_input[-1].isspace():
-                                        user_input.append(' ')
-                                    user_input.extend(list(voice_ans))
-                                    print("✏️   Review and edit your answer below (Press Enter to submit):\n", flush=True)
-                                else:
-                                    print("⌨️   Type your answer below (Press Enter to submit):\n", flush=True)
-                                spent = int(time.time() - start_time)
-                                if timeout - spent < 25:
-                                    start_time = time.time() - (timeout - 25)
-                                tty.setcbreak(fd)
-                                break
+                            sys.stdin.read(1)
+                            r2, _, _ = select.select([sys.stdin], [], [], 0.05)
+                            if r2:
+                                sys.stdin.read(1)
                     elif ch.isprintable():
                         user_input.append(ch)
 
@@ -504,12 +461,16 @@ class Interaction:
                         break  # No more chars — redraw timer once
 
                 if submitted:
-                    final_ans = "".join(user_input)
+                    if AUDIO_BACKEND == "mac_dictation":
+                        _stop_mac_dictation()
+                    final_ans = "".join(user_input).strip()
                     # Clear the timer line and print the FULL input so it remains on screen
                     sys.stdout.write(f"\r\033[2K{prompt}{final_ans}\n")
                     sys.stdout.flush()
                     return final_ans
         finally:
+            if AUDIO_BACKEND == "mac_dictation":
+                _stop_mac_dictation()
             try:
                 termios.tcflush(fd, termios.TCIFLUSH)
             except Exception:
