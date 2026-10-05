@@ -83,8 +83,16 @@ class ContextBuilder:
                 ))
                 func_diff = "".join(diff_lines)
                 if not func_diff:
-                    func_diff = f"New code added: {func_name}"
-                elif len(func_diff.splitlines()) > 35:
+                    try:
+                        file_diff = subprocess.check_output(
+                            ["git", "diff", "--cached", "-U2", "--", filepath],
+                            text=True, stderr=subprocess.DEVNULL
+                        )
+                        func_diff = file_diff if file_diff else f"New code added: {func_name}"
+                    except Exception:
+                        func_diff = f"New code added: {func_name}"
+                
+                if len(func_diff.splitlines()) > 35:
                     func_diff = self._compress_diff(func_diff, max_lines=35)
                 
                 structured_changes.append({
@@ -152,30 +160,39 @@ class ContextBuilder:
 
     def _get_function_details(self, filepath: str, func_name: str) -> dict:
         try:
-            with open(filepath, 'r') as f:
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                 source = f.read()
-            tree = ast.parse(source)
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
-                    args = [arg.arg for arg in node.args.args]
-                    
-                    # Extract return type
-                    returns = "None"
-                    if node.returns:
-                        if hasattr(ast, 'unparse'):
-                            returns = ast.unparse(node.returns)
-                        elif hasattr(node.returns, 'id'):
-                            returns = node.returns.id
-                            
-                    docstring = ast.get_docstring(node)
-                    is_async = isinstance(node, ast.AsyncFunctionDef)
-                    
-                    return {
-                        "args": args,
-                        "returns": returns,
-                        "docstring": docstring or "No description.",
-                        "is_async": is_async
-                    }
+            if filepath.endswith('.py'):
+                tree = ast.parse(source)
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+                        args = [arg.arg for arg in node.args.args]
+                        returns = "None"
+                        if node.returns:
+                            if hasattr(ast, 'unparse'):
+                                returns = ast.unparse(node.returns)
+                            elif hasattr(node.returns, 'id'):
+                                returns = node.returns.id
+                        docstring = ast.get_docstring(node)
+                        is_async = isinstance(node, ast.AsyncFunctionDef)
+                        return {
+                            "args": args,
+                            "returns": returns,
+                            "docstring": docstring or "No description.",
+                            "is_async": is_async
+                        }
+            else:
+                import re
+                func_src = self._extract_function_source(source, func_name)
+                is_async = bool(re.search(r'\basync\b', func_src))
+                m = re.search(rf'{re.escape(func_name)}\s*\(([^)]*)\)', func_src)
+                args = [a.strip().split(':')[0] for a in m.group(1).split(',')] if m and m.group(1).strip() else []
+                return {
+                    "args": args,
+                    "returns": "unknown",
+                    "docstring": "No description.",
+                    "is_async": is_async
+                }
         except Exception:
             pass
         return {"args": [], "returns": "unknown", "docstring": "No description.", "is_async": False}
@@ -183,6 +200,7 @@ class ContextBuilder:
     def _extract_function_source(self, source: str, func_name: str) -> str:
         if not source:
             return ""
+        # 1. Try Python ast
         try:
             tree = ast.parse(source)
             for node in ast.walk(tree):
@@ -190,6 +208,36 @@ class ContextBuilder:
                     return ast.get_source_segment(source, node) or ""
         except SyntaxError:
             pass
+
+        # 2. Try JS / TS block extraction
+        try:
+            import re
+            lines = source.splitlines()
+            patterns = [
+                re.compile(rf'^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+{re.escape(func_name)}\b'),
+                re.compile(rf'^\s*(?:export\s+)?(?:const|let|var)\s+{re.escape(func_name)}\b'),
+                re.compile(rf'^\s*(?:export\s+)?(?:default\s+)?class\s+{re.escape(func_name)}\b'),
+                re.compile(rf'^\s*(?:public|private|protected|async|static|\s)*{re.escape(func_name)}\s*\('),
+            ]
+            for i, line in enumerate(lines):
+                if any(p.search(line) for p in patterns):
+                    brace_count = 0
+                    found_brace = False
+                    end_idx = i
+                    for j in range(i, len(lines)):
+                        l = lines[j]
+                        brace_count += l.count('{') - l.count('}')
+                        if '{' in l:
+                            found_brace = True
+                        if found_brace and brace_count <= 0:
+                            end_idx = j
+                            break
+                    if end_idx == i and not found_brace:
+                        end_idx = min(len(lines) - 1, i + 10)
+                    return "\n".join(lines[i : end_idx + 1])
+        except Exception:
+            pass
+
         return ""
         
     def _build_dependency_summary(self, func_name: str, direct_calls: list, dep_summaries: dict) -> str:

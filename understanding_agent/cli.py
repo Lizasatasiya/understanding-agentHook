@@ -84,7 +84,7 @@ def main():
         attempts = state.get("attempts", 1) + 1
     else:
         question_generator = QuestionGenerator()
-        questions = question_generator.generate(context, summary)
+        questions = question_generator.generate(context, summary, env=env)
         valid_questions = question_generator.validate(questions)
         for q in valid_questions:
             q["passed"] = False
@@ -141,7 +141,7 @@ def main():
                 "status": status
             }
             
-            eval_res = evaluator.evaluate(q, ans_obj, context, summary)
+            eval_res = evaluator.evaluate(q, ans_obj, context, summary, env=env)
             final_score = eval_res.score
             if final_score >= 70:
                 print(f"{GREEN}✓ Good understanding demonstrated{RESET}")
