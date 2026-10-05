@@ -466,6 +466,7 @@ class Interaction:
         cursor_pos = len(user_input)
         review_mode = False
         dictation_active = False
+        temp_lines = 0
         
         try:
             tty.setcbreak(fd)
@@ -564,12 +565,17 @@ class Interaction:
                             review_mode = True
                             dictation_active = False
 
+                            sys.stdout.write("\r\033[2K")
                             if hint_shown:
-                                sys.stdout.write("\r\033[2K\033[1A\033[2K\r")
+                                sys.stdout.write("\033[1A\033[2K")
                                 hint_shown = False
-                            else:
-                                sys.stdout.write(f"\r\033[2K")
+                            for _ in range(temp_lines):
+                                sys.stdout.write("\033[1A\033[2K")
+                            sys.stdout.write("\r")
+                            sys.stdout.flush()
+
                             print(f"🎙️  \033[93mMic OFF.\033[0m\n✏️   \033[1mReview and edit your answer below\033[0m (Press \033[1m[Enter]\033[0m to submit):\n", flush=True)
+                            temp_lines = 3
 
                             # Guarantee at least 60 seconds in review mode
                             spent = int(time.time() - start_time)
@@ -589,13 +595,16 @@ class Interaction:
                             _trigger_mac_dictation()
                             dictation_active = True
                             review_mode = False
+                            sys.stdout.write("\r\033[2K")
                             if hint_shown:
-                                sys.stdout.write("\r\033[2K\033[1A\033[2K\r")
+                                sys.stdout.write("\033[1A\033[2K")
                                 hint_shown = False
-                            else:
-                                sys.stdout.write("\r\033[2K")
+                            for _ in range(temp_lines):
+                                sys.stdout.write("\033[1A\033[2K")
+                            sys.stdout.write("\r")
                             sys.stdout.flush()
                             print(f"🎙️  \033[92mDictation started!\033[0m Speak your answer now. Press \033[1m[Enter]\033[0m when done speaking.\n", flush=True)
+                            temp_lines = 2
                             spent = int(time.time() - start_time)
                             if timeout - spent < 30:
                                 start_time = time.time() - (timeout - 30)
@@ -603,11 +612,13 @@ class Interaction:
                         else:
                             # Non-mac voice flow
                             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                            sys.stdout.write("\r\033[2K")
                             if hint_shown:
-                                sys.stdout.write("\r\033[2K\033[1A\033[2K\r")
+                                sys.stdout.write("\033[1A\033[2K")
                                 hint_shown = False
-                            else:
-                                sys.stdout.write("\r\033[2K")
+                            for _ in range(temp_lines):
+                                sys.stdout.write("\033[1A\033[2K")
+                            sys.stdout.write("\r")
                             sys.stdout.flush()
                             
                             elapsed_so_far = int(time.time() - start_time)
@@ -620,8 +631,10 @@ class Interaction:
                                 user_input.extend(list(voice_ans))
                                 cursor_pos = len(user_input)
                                 print("\n✏️   Review and edit your answer below (Press Enter to submit):\n", flush=True)
+                                temp_lines = 3
                             else:
                                 print("\n⌨️   Type your answer below (Press Enter to submit):\n", flush=True)
+                                temp_lines = 3
                                 
                             spent = int(time.time() - start_time)
                             if timeout - spent < 20:
@@ -701,7 +714,13 @@ class Interaction:
                     if AUDIO_BACKEND == "mac_dictation":
                         _stop_mac_dictation()
                     final_ans = "".join(user_input).strip()
-                    sys.stdout.write(f"\r\033[2K{prompt}{final_ans}\n")
+                    sys.stdout.write("\r\033[2K")
+                    if hint_shown:
+                        sys.stdout.write("\033[1A\033[2K")
+                        hint_shown = False
+                    for _ in range(temp_lines):
+                        sys.stdout.write("\033[1A\033[2K")
+                    sys.stdout.write(f"\r{prompt}{final_ans}\n")
                     sys.stdout.flush()
                     return final_ans
         finally:
