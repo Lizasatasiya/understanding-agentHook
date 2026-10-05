@@ -90,12 +90,6 @@ def main():
             q["passed"] = False
             q["best_score"] = 0
         attempts = 1
-        
-    if any(q.get("is_fallback") for q in valid_questions):
-        print("\n  \033[93m⚠️  [NOTICE] Fallback questions are being used because GROQ_API_KEY is missing or unreachable.\033[0m")
-        print("  \033[2m💡 To get AI-tailored questions, set GROQ_API_KEY in your .env or shell: export GROQ_API_KEY=\"gsk_...\"\033[0m\n", flush=True)
-    
-    # 8. Developer Interaction & Evaluation
     interaction = Interaction()
     evaluator = AnswerEvaluator()
     
@@ -117,8 +111,10 @@ def main():
             BOLD = "\033[1m"
             RESET = "\033[0m"
 
-         
-            print(f"{BOLD}{CYAN} Question {i}/{len(valid_questions):<40}{RESET}")
+            if attempts > 1:
+                print(f"\n{BOLD}{CYAN} Question {i}/{len(valid_questions)} (Attempt {attempts}){RESET}")
+            else:
+                print(f"\n{BOLD}{CYAN} Question {i}/{len(valid_questions)}{RESET}")
       
             # Only consider answered and skip if the answer score is in GREEN (>= 70%)
             if q.get("best_score", 0) >= 70:
