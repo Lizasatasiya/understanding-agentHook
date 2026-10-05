@@ -127,7 +127,48 @@ def _reconcile_transcription(existing: str, incoming: str) -> str:
         if ex_words[-w:] == in_words[:w]:
             return " ".join(ex_words + in_words[w:])
 
-    return f"{existing} {incoming}"
+def _prev_word(pos: int, chars: list) -> int:
+    while pos > 0 and chars[pos - 1].isspace():
+        pos -= 1
+    while pos > 0 and not chars[pos - 1].isspace():
+        pos -= 1
+    return pos
+
+
+def _next_word(pos: int, chars: list) -> int:
+    n = len(chars)
+    while pos < n and not chars[pos].isspace():
+        pos += 1
+    while pos < n and chars[pos].isspace():
+        pos += 1
+    return pos
+
+
+def _get_display_window(text: str, cursor_pos: int, avail_width: int):
+    n = len(text)
+    if n <= avail_width:
+        return text, cursor_pos
+    
+    window_content_len = max(10, avail_width - 6)
+    half = window_content_len // 2
+    
+    s = cursor_pos - half
+    if s <= 3:
+        end_idx = avail_width - 3
+        disp_str = text[:end_idx] + "..."
+        disp_cursor = cursor_pos
+        return disp_str, disp_cursor
+    
+    e = s + window_content_len
+    if e >= n - 3:
+        start_idx = n - (avail_width - 3)
+        disp_str = "..." + text[start_idx:]
+        disp_cursor = 3 + (cursor_pos - start_idx)
+        return disp_str, disp_cursor
+    
+    disp_str = "..." + text[s:e] + "..."
+    disp_cursor = 3 + (cursor_pos - s)
+    return disp_str, disp_cursor
 
 
 class Interaction:
@@ -444,13 +485,7 @@ class Interaction:
                 # Reserve 25 cols for prefix & margins to strictly avoid line-wrapping corruption
                 avail_width = max(20, cols - 25)
                 current_str = "".join(user_input)
-                if len(current_str) > avail_width:
-                    offset = len(current_str) - (avail_width - 3)
-                    display_str = "..." + current_str[offset:]
-                    disp_cursor = 3 + max(0, cursor_pos - offset)
-                else:
-                    display_str = current_str
-                    disp_cursor = cursor_pos
+                display_str, disp_cursor = _get_display_window(current_str, cursor_pos, avail_width)
 
                 sys.stdout.write(f"\r\033[2K{timer_str} | {prompt}{display_str}")
                 
@@ -469,6 +504,12 @@ class Interaction:
                 submitted = False
                 while True:
                     ch = sys.stdin.read(1)
+                    if review_mode:
+                        # Keep timer healthy while user is actively reviewing/editing
+                        spent_now = int(time.time() - start_time)
+                        if timeout - spent_now < 30:
+                            start_time = time.time() - (timeout - 30)
+
                     if ch in ('\n', '\r'):
                         # Multi-line paste chunk check
                         more_now, _, _ = select.select([sys.stdin], [], [], 0.03)
@@ -525,9 +566,10 @@ class Interaction:
                                 sys.stdout.write(f"\r\033[2K")
                             print(f"🎙️  \033[93mMic OFF.\033[0m\n✏️   \033[1mReview and edit your answer below\033[0m (Press \033[1m[Enter]\033[0m to submit):\n", flush=True)
 
+                            # Guarantee at least 60 seconds in review mode
                             spent = int(time.time() - start_time)
-                            if timeout - spent < 30:
-                                start_time = time.time() - (timeout - 30)
+                            if timeout - spent < 60:
+                                start_time = time.time() - (timeout - 60)
                             break
                         elif not user_input:
                             # Empty enter, redraw prompt
@@ -596,7 +638,16 @@ class Interaction:
                         cursor_pos = 0
                     elif ch == '\x05':  # Ctrl-E (End)
                         cursor_pos = len(user_input)
-                    elif ch == '\x1b':  # Escape sequences (Arrows, Delete, Home, End)
+                    elif ch == '\x17':  # Ctrl-W (Word backspace)
+                        new_pos = _prev_word(cursor_pos, user_input)
+                        del user_input[new_pos:cursor_pos]
+                        cursor_pos = new_pos
+                    elif ch == '\x15':  # Ctrl-U (Clear to start)
+                        del user_input[:cursor_pos]
+                        cursor_pos = 0
+                    elif ch == '\x0b':  # Ctrl-K (Clear to end)
+                        del user_input[cursor_pos:]
+                    elif ch == '\x1b':  # Escape sequences (Direction keys, Delete, Home, End)
                         seq = ""
                         time.sleep(0.01)
                         while True:
@@ -609,13 +660,21 @@ class Interaction:
                             cursor_pos = max(0, cursor_pos - 1)
                         elif seq in ('[C', 'OC'):  # Right arrow
                             cursor_pos = min(len(user_input), cursor_pos + 1)
-                        elif seq in ('[H', 'OH', '[1~', '[7~'):  # Home
+                        elif seq in ('[A', 'OA', '[H', 'OH', '[1~', '[7~', '[5~'):  # Up arrow / Home / PgUp -> trace back to start of line!
                             cursor_pos = 0
-                        elif seq in ('[F', 'OF', '[4~', '[8~'):  # End
+                        elif seq in ('[B', 'OB', '[F', 'OF', '[4~', '[8~', '[6~'):  # Down arrow / End / PgDn -> jump to end of line!
                             cursor_pos = len(user_input)
+                        elif seq in ('b', '[1;3D', '[1;5D', '[5D', '[3D'):  # Option+Left / Word backward
+                            cursor_pos = _prev_word(cursor_pos, user_input)
+                        elif seq in ('f', '[1;3C', '[1;5C', '[5C', '[3C'):  # Option+Right / Word forward
+                            cursor_pos = _next_word(cursor_pos, user_input)
                         elif seq in ('[3~',):  # Delete key
                             if cursor_pos < len(user_input):
                                 user_input.pop(cursor_pos)
+                        elif seq in ('\x7f', '\x08'):  # Option+Backspace (delete word backward)
+                            new_pos = _prev_word(cursor_pos, user_input)
+                            del user_input[new_pos:cursor_pos]
+                            cursor_pos = new_pos
                         # All other escape codes are safely swallowed
                     elif ch.isprintable():
                         user_input.insert(cursor_pos, ch)
