@@ -105,6 +105,7 @@ class Interaction:
             CYAN = "\033[96m"
             BOLD = "\033[1m"
             DIM = "\033[2m"
+            RESET = "\033[0m"
             if AUDIO_BACKEND == "mac_dictation":
                 print(f"🎙️  {CYAN}{BOLD}[Tab]{RESET} {DIM}Start Mac Dictation  │  ⌨️  Type answer directly (Enter to submit){RESET}\n", flush=True)
             else:
