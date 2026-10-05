@@ -144,11 +144,11 @@ def main():
             eval_res = evaluator.evaluate(q, ans_obj, context, summary)
             final_score = eval_res.score
             if final_score >= 70:
-                print(f"\n{GREEN}✓ Good understanding demonstrated{RESET}")
+                print(f"{GREEN}✓ Good understanding demonstrated{RESET}")
             elif final_score >= 25:
-                print(f"\n{YELLOW}⚠️ Partial understanding demonstrated{RESET}")
+                print(f"{YELLOW}⚠️ Partial understanding demonstrated{RESET}")
             else:
-                print(f"\n{RED}✗ Understanding not demonstrated{RESET}")
+                print(f"{RED}✗ Understanding not demonstrated{RESET}")
             
             # Only scores in GREEN (>= 70%) are considered answered and passed
             q["best_score"] = max(q.get("best_score", 0), final_score)
