@@ -541,12 +541,17 @@ class Interaction:
                                 if extra_ch in ('\r', '\n'):
                                     continue
                                 elif extra_ch == '\x1b':
-                                    time.sleep(0.02)
-                                    while True:
-                                        r_esc, _, _ = select.select([sys.stdin], [], [], 0.01)
-                                        if not r_esc:
-                                            break
-                                        sys.stdin.read(1)
+                                    r_esc, _, _ = select.select([sys.stdin], [], [], 0.05)
+                                    if r_esc:
+                                        n_c = sys.stdin.read(1)
+                                        if n_c in ('[', 'O'):
+                                            while True:
+                                                r_esc2, _, _ = select.select([sys.stdin], [], [], 0.03)
+                                                if not r_esc2:
+                                                    break
+                                                c_m = sys.stdin.read(1)
+                                                if c_m.isalpha() or c_m == '~':
+                                                    break
                                 elif extra_ch in ('\x08', '\x7f'):
                                     if incoming_chars:
                                         incoming_chars.pop()
@@ -649,12 +654,19 @@ class Interaction:
                         del user_input[cursor_pos:]
                     elif ch == '\x1b':  # Escape sequences (Direction keys, Delete, Home, End)
                         seq = ""
-                        time.sleep(0.01)
-                        while True:
-                            r_esc, _, _ = select.select([sys.stdin], [], [], 0.02)
-                            if not r_esc:
-                                break
-                            seq += sys.stdin.read(1)
+                        r_esc, _, _ = select.select([sys.stdin], [], [], 0.1)
+                        if r_esc:
+                            next_c = sys.stdin.read(1)
+                            seq += next_c
+                            if next_c in ('[', 'O'):
+                                while True:
+                                    r_esc2, _, _ = select.select([sys.stdin], [], [], 0.05)
+                                    if not r_esc2:
+                                        break
+                                    c_more = sys.stdin.read(1)
+                                    seq += c_more
+                                    if c_more.isalpha() or c_more == '~':
+                                        break
                         
                         if seq in ('[D', 'OD'):  # Left arrow
                             cursor_pos = max(0, cursor_pos - 1)

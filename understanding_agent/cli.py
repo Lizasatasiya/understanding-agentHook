@@ -187,7 +187,7 @@ def main():
 
             # If user gives wrong answer (< 25%), ask no next questions and abort
             if final_score < 25:
-                print(f"\n{BOLD}{RED}⛔ Commit aborted. {RED} Please review the code and then try again.{RESET}\n")
+                print(f"\n{BOLD}{RED}⛔ Commit aborted. Please review the code and then try again.{RESET}\n")
                 
                 try:
                     client = ServerClient()
