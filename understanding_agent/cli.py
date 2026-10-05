@@ -23,7 +23,6 @@ def main():
             sys.stdout.reconfigure(encoding='utf-8')
         except Exception:
             pass
-    print("\n[HOOK] Code Understanding Check")
     
     # 1. Environment Detection
     env_detector = EnvironmentDetector()
@@ -83,9 +82,7 @@ def main():
             else:
                 q["passed"] = False
         attempts = state.get("attempts", 1) + 1
-        print(f"\n[QUESTIONS] Loading {len(valid_questions)} previous questions... (Attempt {attempts})")
     else:
-        print("\n[QUESTIONS] Generating questions...")
         question_generator = QuestionGenerator()
         questions = question_generator.generate(context, summary)
         valid_questions = question_generator.validate(questions)
@@ -99,18 +96,10 @@ def main():
         print("  \033[2m💡 To get AI-tailored questions, set GROQ_API_KEY in your .env or shell: export GROQ_API_KEY=\"gsk_...\"\033[0m\n", flush=True)
     
     # 8. Developer Interaction & Evaluation
-    print("\n[INTERACTION] Asking developer...")
     interaction = Interaction()
     evaluator = AnswerEvaluator()
     
-    interaction.print_context(context)
-    
     while True:
-        if attempts > 1:
-            print(f"\n[QUESTIONS] Loading Questions... (Attempt {attempts})")
-        else:
-            print(f"\n[QUESTIONS] Asking Questions... (Attempt 1)")
-            
         final_results = []
         total_score = 0
         
