@@ -54,6 +54,9 @@ def _get_terminal_cols(fd: int = None) -> int:
     return 80
 
 def _detect_voice():
+    if sys.platform == "darwin":
+        # Native macOS Dictation requires zero external Python libraries
+        return True, "mac_dictation"
     # If running inside an isolated pre-commit venv, search base/system python site-packages
     try:
         base_site = os.path.join(
