@@ -57,25 +57,6 @@ def _detect_voice():
     if sys.platform == "darwin":
         # Native macOS Dictation requires zero external Python libraries
         return True, "mac_dictation"
-    # If running inside an isolated pre-commit venv, search base/system python site-packages
-    try:
-        base_site = os.path.join(
-            sys.base_prefix, 'lib', f'python{sys.version_info.major}.{sys.version_info.minor}', 'site-packages'
-        )
-        if base_site not in sys.path and os.path.exists(base_site):
-            sys.path.append(base_site)
-    except Exception:
-        pass
-
-    try:
-        venv = os.environ.get("VIRTUAL_ENV")
-        if venv:
-            for p in glob.glob(os.path.join(venv, "lib", "python*", "site-packages")):
-                if p not in sys.path:
-                    sys.path.insert(0, p)
-    except Exception:
-        pass
-
     try:
         import numpy
         import whisper
@@ -83,10 +64,6 @@ def _detect_voice():
         return True, "sounddevice"
     except Exception:
         pass
-
-    if sys.platform == "darwin":
-        # Native macOS Dictation fallback
-        return True, "mac_dictation"
     return False, None
 
 VOICE_AVAILABLE, AUDIO_BACKEND = _detect_voice()
@@ -115,7 +92,7 @@ def _trigger_mac_dictation():
 
 
 def _stop_mac_dictation():
-    """Stop native macOS Dictation if active and release the microphone."""
+    """Stop native macOS Dictation if active so in-flight text commits."""
     if sys.platform != "darwin":
         return
     import subprocess
@@ -133,6 +110,13 @@ def _stop_mac_dictation():
         subprocess.run(["osascript", "-e", script], capture_output=True, timeout=0.8)
     except Exception:
         pass
+
+
+def _release_mac_dictation():
+    """Ensure DictationIM process releases the microphone."""
+    if sys.platform != "darwin":
+        return
+    import subprocess
     try:
         subprocess.run(["killall", "-9", "DictationIM"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
@@ -636,13 +620,20 @@ class Interaction:
 
                 # 2. Handle Enter
                 if '\r' in chunk or '\n' in chunk:
+                    # Capture any printable text arrived in this chunk before the newline
+                    pre_text = chunk.split('\r')[0].split('\n')[0]
+                    pre_chars = [c for c in pre_text if c.isprintable() or c == ' ']
+                    if pre_chars:
+                        user_input[cursor_pos:cursor_pos] = pre_chars
+                        cursor_pos += len(pre_chars)
+
                     curr_text = "".join(user_input).strip().lower()
                     if allow_mic and curr_text in ("/mic", ":mic", "mic"):
                         user_input.clear()
                         cursor_pos = 0
                         chunk = '\t'  # route to mic trigger below
-                    elif dictation_active:
-                        # User pressed Enter while dictating -> Stop mic & show review/edit prompt
+                    elif dictation_active or (user_input and not review_mode and AUDIO_BACKEND == "mac_dictation"):
+                        # User pressed Enter while dictating or finished speaking -> Stop mic & show review/edit prompt
                         if AUDIO_BACKEND == "mac_dictation":
                             _stop_mac_dictation()
 
@@ -662,14 +653,15 @@ class Interaction:
                             if not d_bytes:
                                 break
                             d_str = d_bytes.decode('utf-8', 'ignore')
-                            if d_str.startswith('\x1b') or d_str in ('\r', '\n'):
-                                continue
                             for c in d_str:
                                 if c in ('\x08', '\x7f'):
                                     if incoming_chars:
                                         incoming_chars.pop()
-                                elif c.isprintable():
+                                elif c.isprintable() or c == ' ':
                                     incoming_chars.append(c)
+
+                        if AUDIO_BACKEND == "mac_dictation":
+                            _release_mac_dictation()
 
                         merged_text = _reconcile_transcription("".join(user_input), "".join(incoming_chars))
                         user_input = list(merged_text)
@@ -790,6 +782,7 @@ class Interaction:
             if submitted:
                 if AUDIO_BACKEND == "mac_dictation":
                     _stop_mac_dictation()
+                    _release_mac_dictation()
                 final_ans = "".join(user_input).strip()
                 sys.stdout.write("\r\033[2K")
                 if hint_shown:
@@ -803,6 +796,7 @@ class Interaction:
         finally:
             if AUDIO_BACKEND == "mac_dictation":
                 _stop_mac_dictation()
+                _release_mac_dictation()
             try:
                 termios.tcflush(fd, termios.TCIFLUSH)
             except Exception:
