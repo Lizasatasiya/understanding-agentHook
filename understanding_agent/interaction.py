@@ -54,9 +54,25 @@ def _get_terminal_cols(fd: int = None) -> int:
     return 80
 
 def _detect_voice():
-    if sys.platform == "darwin":
-        # Native macOS Dictation requires zero external Python libraries
-        return True, "mac_dictation"
+    # If running inside an isolated pre-commit venv, search base/system python site-packages
+    try:
+        base_site = os.path.join(
+            sys.base_prefix, 'lib', f'python{sys.version_info.major}.{sys.version_info.minor}', 'site-packages'
+        )
+        if base_site not in sys.path and os.path.exists(base_site):
+            sys.path.append(base_site)
+    except Exception:
+        pass
+
+    try:
+        venv = os.environ.get("VIRTUAL_ENV")
+        if venv:
+            for p in glob.glob(os.path.join(venv, "lib", "python*", "site-packages")):
+                if p not in sys.path:
+                    sys.path.insert(0, p)
+    except Exception:
+        pass
+
     try:
         import numpy
         import whisper
@@ -64,6 +80,10 @@ def _detect_voice():
         return True, "sounddevice"
     except Exception:
         pass
+
+    if sys.platform == "darwin":
+        # Native macOS Dictation fallback
+        return True, "mac_dictation"
     return False, None
 
 VOICE_AVAILABLE, AUDIO_BACKEND = _detect_voice()
@@ -168,6 +188,8 @@ def _reconcile_transcription(existing: str, incoming: str) -> str:
     for w in range(max_w, 0, -1):
         if ex_words[-w:] == in_words[:w]:
             return " ".join(ex_words + in_words[w:])
+
+    return f"{existing} {incoming}".strip()
 
 def _prev_word(pos: int, chars: list) -> int:
     while pos > 0 and chars[pos - 1].isspace():
@@ -306,6 +328,7 @@ class Interaction:
             model = self._whisper_model
 
             transcript_parts = []
+            all_frames = []
             elapsed = 0.0
             frames_per_chunk = int(RATE / CHUNK * CHUNK_SECS)
             enter_pressed = False
@@ -338,6 +361,7 @@ class Interaction:
                             if not chunk_frames:
                                 break
 
+                            all_frames.extend(chunk_frames)
                             elapsed += len(chunk_frames) * CHUNK / RATE
 
                             audio_chunk = np.concatenate(chunk_frames, axis=0).squeeze()
@@ -420,6 +444,16 @@ class Interaction:
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
             print("\n", flush=True)
+            if all_frames:
+                full_audio = np.concatenate(all_frames, axis=0).squeeze()
+                if len(full_audio) >= 1600:
+                    try:
+                        full_res = model.transcribe(full_audio, fp16=False)
+                        full_trans = (full_res.get("text") or "").strip()
+                        if full_trans:
+                            return full_trans
+                    except Exception:
+                        pass
             full_answer = " ".join(transcript_parts).strip()
             if full_answer:
                 return full_answer
@@ -706,6 +740,7 @@ class Interaction:
                                 user_input.append(' ')
                             user_input.extend(list(voice_ans))
                             cursor_pos = len(user_input)
+                            review_mode = True
                             print("\n✏️   Review and edit your answer below (Press Enter to submit):\n", flush=True)
                             temp_lines = 3
                         else:
@@ -713,8 +748,8 @@ class Interaction:
                             temp_lines = 3
                             
                         spent = int(time.time() - start_time)
-                        if timeout - spent < 20:
-                            start_time = time.time() - (timeout - 20)
+                        if timeout - spent < 45:
+                            start_time = time.time() - (timeout - 45)
 
                         tty.setcbreak(fd)
                         continue
