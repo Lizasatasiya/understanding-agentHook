@@ -101,8 +101,13 @@ def _stop_mac_dictation():
         '    try\n'
         '        set frontApp to first application process whose frontmost is true\n'
         '        tell frontApp\n'
-        '            click (first menu item of menu "Edit" of menu bar 1 whose name starts with "Stop Dictation")\n'
+        '            try\n'
+        '                click (first menu item of menu "Edit" of menu bar 1 whose name starts with "Stop Dictation")\n'
+        '            end try\n'
         '        end tell\n'
+        '    end try\n'
+        '    try\n'
+        '        key code 53\n'
         '    end try\n'
         'end tell'
     )
@@ -113,14 +118,15 @@ def _stop_mac_dictation():
 
 
 def _release_mac_dictation():
-    """Ensure DictationIM process releases the microphone."""
+    """Ensure macOS dictation and speech recognition processes release the microphone."""
     if sys.platform != "darwin":
         return
     import subprocess
-    try:
-        subprocess.run(["killall", "-9", "DictationIM"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
+    for proc in ("com.apple.siri.embeddedspeech", "localspeechrecognition", "DictationIM"):
+        try:
+            subprocess.run(["killall", proc], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
 
 
 def _reconcile_transcription(existing: str, incoming: str) -> str:
