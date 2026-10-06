@@ -405,43 +405,6 @@ class QuestionGenerator:
 
     def _fallback(self, context: dict | None = None, hints: dict | None = None) -> list:
         context = context or {}
-        std = (hints or {}).get("standards") or []
-        failed_std = [s for s in std if not s.get("is_good")]
-        if failed_std:
-            base = []
-            for i, fs in enumerate(failed_std[:2], 1):
-                name = fs.get("name", "")
-                template = STANDARDS_QUESTIONS.get(name)
-                if template:
-                    q_text = template["question"]
-                    concepts = template["concepts"]
-                    criteria = template["criteria"]
-                else:
-                    details = fs.get("details", "")
-                    q_text = f"Coding audit flagged '{name}' ({details[:60]}). What are the runtime risks of this implementation?"
-                    concepts = ["understands violation risk", "knows safer alternative"]
-                    criteria = ["can explain coding standard trade-off"]
-                base.append({
-                    "question_id": f"q{i}",
-                    "question": q_text,
-                    "type": "Invariants",
-                    "time_limit": 60,
-                    "expected_concepts": concepts,
-                    "evaluation_criteria": criteria,
-                    "is_fallback": True
-                })
-            if len(base) < 2:
-                base.append({
-                    "question_id": "q2",
-                    "question": "What edge cases did you consider while modifying this component?",
-                    "type": "Edge Cases",
-                    "time_limit": 60,
-                    "expected_concepts": ["handles error states", "validates input"],
-                    "evaluation_criteria": ["understands edge cases"],
-                    "is_fallback": True
-                })
-            return base
-
         sec = (hints or {}).get("security") or {}
         ev = (hints or {}).get("evidence") or {}
 

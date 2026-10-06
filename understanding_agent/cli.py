@@ -77,8 +77,8 @@ def main():
 
         print(f"{BOLD}{YELLOW}⚠️  Coding standards violations detected ({len(failed_standards)} failed).{RESET}")
         print(f"{BOLD}Do you want to fix these violations or proceed further?{RESET}\n")
-        print(f"  {BOLD}[1]{RESET} {RED}Fix violations)")
-        print(f"  {BOLD}[2]{RESET} {GREEN}Proceed further\n")
+        print(f"  {BOLD}[1]{RESET} {RED}Fix violations{RESET}")
+        print(f"  {BOLD}[2]{RESET} {GREEN}Proceed further{RESET}\n")
 
         choice = ""
         while choice not in ("1", "2", "fix", "proceed", "f", "p"):
@@ -98,7 +98,7 @@ def main():
             print(f"{RED}Please resolve the violations listed above before committing.{RESET}\n")
             sys.exit(1)
         else:
-            print(f"\n{BOLD}{GREEN}✓ Proceeding with questions...\n")
+            print(f"\n{BOLD}{GREEN}✓ Proceeding with questions...{RESET}\n")
 
     hints = {
         "stack": stack,
