@@ -5,6 +5,70 @@ from .api_utils import load_groq_api_key, extract_json, call_groq_api, get_model
 
 import re
 
+STANDARDS_QUESTIONS = {
+    "State & Prop Immutability": {
+        "question": "How does directly mutating props or state in this change compromise React re-renders and unidirectional data flow?",
+        "concepts": ["violates immutability", "causes missed re-renders", "state inconsistency"],
+        "criteria": ["understands immutability risks"]
+    },
+    "React Hooks & Closure Safety": {
+        "question": "What is the runtime consequence of passing an empty dependency array to a hook that references outer scope variables?",
+        "concepts": ["stale closures", "outdated state/props captured", "closure memory retention"],
+        "criteria": ["understands stale closure mechanics"]
+    },
+    "Resource & Timer Cleanup": {
+        "question": "Why must timer intervals or event listeners in useEffect be cleared, and what happens if teardown is omitted?",
+        "concepts": ["memory leak", "zombie timers", "unmounted component updates"],
+        "criteria": ["understands resource teardown in lifecycle"]
+    },
+    "Virtual DOM & Reconciliation Safety": {
+        "question": "How does direct DOM manipulation or using random list keys disrupt React Virtual DOM reconciliation?",
+        "concepts": ["bypasses virtual DOM", "breaks diffing algorithm", "causes unnecessary re-mounts"],
+        "criteria": ["understands virtual DOM diffing"]
+    },
+    "XSS & Script Execution Safety": {
+        "question": "What security vulnerability is introduced by dangerouslySetInnerHTML or dynamic code evaluation in this change?",
+        "concepts": ["cross-site scripting", "malicious script injection", "untrusted HTML execution"],
+        "criteria": ["understands XSS injection risks"]
+    },
+    "Modern Variable Scoping": {
+        "question": "Why is using var or leaking variables to global scope problematic compared to block-scoped const/let?",
+        "concepts": ["hoisting pitfalls", "function scope vs block scope", "variable shadowing"],
+        "criteria": ["understands modern variable scoping"]
+    },
+    "Strict Equality & Type Safety": {
+        "question": "What edge cases or coercion bugs can arise from loose equality (==) comparisons in this logic?",
+        "concepts": ["implicit type coercion", "truthy/falsy confusion", "strict equality avoids coercion"],
+        "criteria": ["understands strict equality and type coercion"]
+    },
+    "Error Handling & Resilience": {
+        "question": "What is the risk of having an empty catch block that swallows exceptions silently without logging?",
+        "concepts": ["silent failure", "difficult debugging", "unhandled error propagation"],
+        "criteria": ["understands exception resilience"]
+    },
+    "Secret & Credential Protection": {
+        "question": "How should sensitive credentials or private tokens be managed instead of hardcoding them into source code?",
+        "concepts": ["environment variables", "secrets manager", "credential leakage prevention"],
+        "criteria": ["understands secrets management"]
+    },
+    "Secure Transport Protocols": {
+        "question": "Why must endpoints use encrypted HTTPS rather than unencrypted cleartext HTTP?",
+        "concepts": ["man-in-the-middle attacks", "eavesdropping", "data integrity and encryption"],
+        "criteria": ["understands transport layer security"]
+    },
+    "Input Validation & Boundary Guards": {
+        "question": "What unexpected inputs or boundary values could cause this component to fail without defensive guards?",
+        "concepts": ["undefined or null checks", "boundary edge cases", "defensive validation"],
+        "criteria": ["understands defensive programming"]
+    },
+    "Component & Function Modularity": {
+        "question": "How would you refactor this logic to improve modularity and single responsibility?",
+        "concepts": ["single responsibility", "component decomposition", "reusability"],
+        "criteria": ["understands modular design"]
+    }
+}
+
+
 class QuestionGenerator:
     # Time limits (seconds) keyed by question type
     TIME_LIMITS = {
@@ -21,18 +85,22 @@ class QuestionGenerator:
     _VALID_TYPES = set(TIME_LIMITS.keys())
 
     def generate(self, context: dict, summary: dict, hints: dict | None = None, env: dict | None = None) -> list:
+        std = (hints or {}).get("standards") or []
+        failed_std = [s for s in std if not s.get("is_good")]
+
         api_key = load_groq_api_key()
         if not api_key:
             print("\n  \033[93m⚠️  [LLM] Warning: GROQ_API_KEY is not set.\033[0m")
             print("  \033[2mSet GROQ_API_KEY in your .env or shell (export GROQ_API_KEY=\"gsk_...\") to generate custom questions.\033[0m\n", flush=True)
-            return self._fallback(context, hints)
+            questions = self._fallback(context, hints)
+            return self._ensure_standards_questions(questions, failed_std)
 
         prompt = self._build_prompt(context, summary, hints, env=env)
         is_large = context.get("is_large_change", False)
         questions = self._call_groq(api_key, prompt, is_large=is_large)
-        if questions:
-            return questions
-        return self._fallback(context, hints)
+        if not questions:
+            questions = self._fallback(context, hints)
+        return self._ensure_standards_questions(questions, failed_std)
 
     def _build_prompt(self, context: dict, summary: dict, hints: dict | None = None, env: dict | None = None) -> str:
         if context.get("is_large_change", False):
@@ -199,9 +267,12 @@ class QuestionGenerator:
         std = (hints or {}).get("standards") or []
         failed_std = [s for s in std if not s.get("is_good")]
         if failed_std:
-            out.append("Coding standards violations found in this diff (prioritize asking the author to explain or defend them):")
-            for fs in failed_std[:4]:
-                out.append(f"  - [{fs['name']}]: {fs['details']}")
+            out.append("CRITICAL REQUIREMENT - CODING STANDARDS VIOLATIONS:")
+            out.append("The author elected to proceed despite failing coding standards audits.")
+            out.append("You MUST generate between 1 and 2 questions specifically targeting these flagged violations, asking about their runtime risks, side-effects, or alternatives:")
+            for fs in failed_std[:3]:
+                out.append(f"  - Violation [{fs['name']}]: {fs['details']}")
+            out.append("At least 1 (and up to 2) of your output questions MUST directly address these violation(s).")
 
         out.append("")
         return out
@@ -281,11 +352,94 @@ class QuestionGenerator:
                 result_list.append(item)
             return result_list
 
-        except Exception as e:
-            return []
+    def _ensure_standards_questions(self, questions: list, failed_std: list) -> list:
+        """Ensure 1-2 questions directly address failed coding standards violations."""
+        if not failed_std:
+            return questions
+
+        std_keywords = set()
+        for fs in failed_std:
+            std_keywords.update(re.findall(r'\b[a-zA-Z]{4,}\b', fs.get("name", "").lower()))
+
+        matched_existing = [
+            q for q in questions
+            if any(kw in q.get("question", "").lower() for kw in std_keywords)
+        ]
+
+        needed = max(0, min(2, len(failed_std)) - len(matched_existing))
+        if needed > 0:
+            injected = []
+            for i, fs in enumerate(failed_std[:needed], len(matched_existing) + 1):
+                name = fs.get("name", "")
+                template = STANDARDS_QUESTIONS.get(name)
+                if template:
+                    q_text = template["question"]
+                    concepts = template["concepts"]
+                    criteria = template["criteria"]
+                else:
+                    details = fs.get("details", "")
+                    q_text = f"Coding audit flagged '{name}' ({details[:60]}). What are the runtime risks of this approach?"
+                    concepts = ["understands violation risk", "knows safer alternative"]
+                    criteria = ["can explain coding standard trade-off"]
+
+                injected.append({
+                    "question_id": f"q_std_{i}",
+                    "question": q_text,
+                    "type": "Invariants",
+                    "time_limit": 60,
+                    "expected_concepts": concepts,
+                    "evaluation_criteria": criteria,
+                    "is_fallback": False
+                })
+
+            remaining_slots = max(1, 3 - len(injected))
+            other_questions = [q for q in questions if q not in matched_existing][:remaining_slots]
+            questions = matched_existing + injected + other_questions
+            questions = questions[:3]
+
+        for idx, q in enumerate(questions, 1):
+            q["question_id"] = f"q{idx}"
+        return questions
 
     def _fallback(self, context: dict | None = None, hints: dict | None = None) -> list:
         context = context or {}
+        std = (hints or {}).get("standards") or []
+        failed_std = [s for s in std if not s.get("is_good")]
+        if failed_std:
+            base = []
+            for i, fs in enumerate(failed_std[:2], 1):
+                name = fs.get("name", "")
+                template = STANDARDS_QUESTIONS.get(name)
+                if template:
+                    q_text = template["question"]
+                    concepts = template["concepts"]
+                    criteria = template["criteria"]
+                else:
+                    details = fs.get("details", "")
+                    q_text = f"Coding audit flagged '{name}' ({details[:60]}). What are the runtime risks of this implementation?"
+                    concepts = ["understands violation risk", "knows safer alternative"]
+                    criteria = ["can explain coding standard trade-off"]
+                base.append({
+                    "question_id": f"q{i}",
+                    "question": q_text,
+                    "type": "Invariants",
+                    "time_limit": 60,
+                    "expected_concepts": concepts,
+                    "evaluation_criteria": criteria,
+                    "is_fallback": True
+                })
+            if len(base) < 2:
+                base.append({
+                    "question_id": "q2",
+                    "question": "What edge cases did you consider while modifying this component?",
+                    "type": "Edge Cases",
+                    "time_limit": 60,
+                    "expected_concepts": ["handles error states", "validates input"],
+                    "evaluation_criteria": ["understands edge cases"],
+                    "is_fallback": True
+                })
+            return base
+
         sec = (hints or {}).get("security") or {}
         ev = (hints or {}).get("evidence") or {}
 

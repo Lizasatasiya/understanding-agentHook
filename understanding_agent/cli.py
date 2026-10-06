@@ -2,6 +2,7 @@ import sys
 import time
 import json
 import os
+import re
 import hashlib
 from .environment_detector import EnvironmentDetector
 from .change_detector import ChangeDetector
@@ -65,15 +66,40 @@ def main():
     standards_report = standards_checker.check(changes, context)
     standards_checker.print_report(standards_report)
 
-    # Abort commit immediately if any coding standard fails — no questions asked
     failed_standards = [s for s in standards_report if not s.get("is_good", True)]
     if failed_standards:
+        YELLOW = "\033[93m"
         RED = "\033[91m"
+        CYAN = "\033[96m"
+        GREEN = "\033[92m"
         BOLD = "\033[1m"
         RESET = "\033[0m"
-        print(f"{BOLD}{RED}🚫 Commit aborted: {len(failed_standards)} coding standard violation(s) found.{RESET}")
-        print(f"{RED}Please fix the violations listed above before committing. Verification questions are skipped.{RESET}\n")
-        sys.exit(1)
+
+        print(f"{BOLD}{YELLOW}⚠️  Coding standards violations detected ({len(failed_standards)} failed).{RESET}")
+        print(f"{BOLD}Do you want to fix these violations or proceed further?{RESET}\n")
+        print(f"  {BOLD}[1]{RESET} {RED}Fix violations{RESET} (Abort commit)")
+        print(f"  {BOLD}[2]{RESET} {GREEN}Proceed further{RESET} (Continue to questions)\n")
+
+        choice = ""
+        while choice not in ("1", "2", "fix", "proceed", "f", "p"):
+            try:
+                sys.stdout.write(f"{BOLD}{CYAN}Select an option [1/2]: {RESET}")
+                sys.stdout.flush()
+                raw_choice = sys.stdin.readline()
+                if not raw_choice:
+                    print(f"\n{RED}Commit aborted.{RESET}")
+                    sys.exit(1)
+                choice = raw_choice.strip().lower()
+            except (KeyboardInterrupt, EOFError):
+                print(f"\n{RED}Commit aborted.{RESET}")
+                sys.exit(1)
+
+        if choice in ("1", "fix", "f"):
+            print(f"\n{BOLD}{RED}🚫 Commit aborted so you can fix coding standards violations.{RESET}")
+            print(f"{RED}Please resolve the violations listed above before committing.{RESET}\n")
+            sys.exit(1)
+        else:
+            print(f"\n{BOLD}{GREEN}✓ Proceeding with verification questions (including standards violations)...{RESET}\n")
 
     hints = {
         "stack": stack,
@@ -123,7 +149,13 @@ def main():
     cached_questions = state.get("questions", [])
     has_fallback = any(q.get("is_fallback") for q in cached_questions)
 
-    if state.get("diff_hash") == diff_hash and cached_questions and not has_fallback:
+    has_std_in_cache = not failed_standards or any(
+        any(re.search(r'\b' + re.escape(w[:4]) + r'\b', q.get("question", ""), re.I)
+            for w in [s.get("name", "") for s in failed_standards])
+        for q in cached_questions
+    )
+
+    if state.get("diff_hash") == diff_hash and cached_questions and not has_fallback and has_std_in_cache:
         valid_questions = cached_questions
         for q in valid_questions:
             # Only scores in GREEN (>= 70%) are considered passed and skipped
