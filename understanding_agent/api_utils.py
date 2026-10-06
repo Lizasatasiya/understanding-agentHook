@@ -64,14 +64,21 @@ def load_groq_api_key() -> str:
     if api_key:
         return api_key
 
-    search_dirs = [os.path.abspath(os.getcwd())]
+    search_dirs = []
+    cur = os.path.abspath(os.getcwd())
+    for _ in range(4):
+        search_dirs.append(cur)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
 
     try:
         repo_root = subprocess.check_output(
             ["git", "rev-parse", "--show-toplevel"],
             text=True, stderr=subprocess.DEVNULL
         ).strip()
-        if repo_root:
+        if repo_root and repo_root not in search_dirs:
             search_dirs.append(repo_root)
     except Exception:
         pass
