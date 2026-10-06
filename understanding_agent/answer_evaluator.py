@@ -3,7 +3,7 @@ from .api_utils import load_groq_api_key, extract_json, call_groq_api, get_model
 import json
 
 class AnswerEvaluator:
-    def evaluate(self, question: dict, answer: dict, context: dict, summary: dict) -> EvaluationResult:
+    def evaluate(self, question: dict, answer: dict, context: dict, summary: dict, env: dict = None) -> EvaluationResult:
         # Empty or timed-out answers need no LLM evaluation: they are wrong by definition
         if not (answer.get("answer") or "").strip():
             return EvaluationResult({
@@ -30,7 +30,7 @@ class AnswerEvaluator:
                 "missing_concepts": []
             })
 
-        prompt = self._build_prompt(question, answer, context, summary)
+        prompt = self._build_prompt(question, answer, context, summary, env=env)
         result_dict = self._call_groq(api_key, prompt)
         if result_dict:
             return EvaluationResult(result_dict)
@@ -47,11 +47,20 @@ class AnswerEvaluator:
             })
         return EvaluationResult({"score": 50, "evaluation": "Failed to evaluate answer", "follow_up_required": False})
 
-    def _build_prompt(self, question: dict, answer: dict, context: dict, summary: dict) -> str:
+    def _build_prompt(self, question: dict, answer: dict, context: dict, summary: dict, env: dict | None = None) -> str:
         is_large = context.get("is_large_change", False)
         lines = [
             "You are evaluating whether a developer understands their own code change.",
             "",
+        ]
+
+        if env:
+            lang = env.get("language", "unknown")
+            framework = env.get("framework", "unknown")
+            lines.append(f"Repository Stack: {framework} ({lang})")
+            lines.append("")
+
+        lines += [
             "CRITICAL EVALUATION GUIDELINES:",
             "- Focus ONLY on the core LOGIC and INTENT of the developer's answer.",
             "- High-level, short, or general logical answers ARE FULLY ACCEPTABLE if the core engineering sense is right (e.g., 'data lost on server restart', 'need a db lock to avoid race conditions', 'use a database for multiple servers').",

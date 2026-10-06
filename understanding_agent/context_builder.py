@@ -90,8 +90,16 @@ class ContextBuilder:
                 ))
                 func_diff = "".join(diff_lines)
                 if not func_diff:
-                    func_diff = f"New code added: {func_name}"
-                elif len(func_diff.splitlines()) > 35:
+                    try:
+                        file_diff = subprocess.check_output(
+                            ["git", "diff", "--cached", "-U2", "--", filepath],
+                            text=True, stderr=subprocess.DEVNULL
+                        )
+                        func_diff = file_diff if file_diff else f"New code added: {func_name}"
+                    except Exception:
+                        func_diff = f"New code added: {func_name}"
+                
+                if len(func_diff.splitlines()) > 35:
                     func_diff = self._compress_diff(func_diff, max_lines=35)
                 
                 structured_changes.append({
@@ -159,30 +167,39 @@ class ContextBuilder:
 
     def _get_function_details(self, filepath: str, func_name: str) -> dict:
         try:
-            with open(filepath, 'r') as f:
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                 source = f.read()
-            tree = ast.parse(source)
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
-                    args = [arg.arg for arg in node.args.args]
-                    
-                    # Extract return type
-                    returns = "None"
-                    if node.returns:
-                        if hasattr(ast, 'unparse'):
-                            returns = ast.unparse(node.returns)
-                        elif hasattr(node.returns, 'id'):
-                            returns = node.returns.id
-                            
-                    docstring = ast.get_docstring(node)
-                    is_async = isinstance(node, ast.AsyncFunctionDef)
-                    
-                    return {
-                        "args": args,
-                        "returns": returns,
-                        "docstring": docstring or "No description.",
-                        "is_async": is_async
-                    }
+            if filepath.endswith('.py'):
+                tree = ast.parse(source)
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+                        args = [arg.arg for arg in node.args.args]
+                        returns = "None"
+                        if node.returns:
+                            if hasattr(ast, 'unparse'):
+                                returns = ast.unparse(node.returns)
+                            elif hasattr(node.returns, 'id'):
+                                returns = node.returns.id
+                        docstring = ast.get_docstring(node)
+                        is_async = isinstance(node, ast.AsyncFunctionDef)
+                        return {
+                            "args": args,
+                            "returns": returns,
+                            "docstring": docstring or "No description.",
+                            "is_async": is_async
+                        }
+            else:
+                import re
+                func_src = self._extract_function_source(source, func_name)
+                is_async = bool(re.search(r'\basync\b', func_src))
+                m = re.search(rf'{re.escape(func_name)}\s*\(([^)]*)\)', func_src)
+                args = [a.strip().split(':')[0] for a in m.group(1).split(',')] if m and m.group(1).strip() else []
+                return {
+                    "args": args,
+                    "returns": "unknown",
+                    "docstring": "No description.",
+                    "is_async": is_async
+                }
         except Exception:
             pass
         return {"args": [], "returns": "unknown", "docstring": "No description.", "is_async": False}

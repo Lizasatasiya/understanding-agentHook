@@ -18,7 +18,7 @@ class CodeGraph:
     def _find_definition(self, func_name: str) -> str:
         try:
             grep_out = subprocess.check_output(
-                ["git", "grep", "-n", f"def {func_name}"],
+                ["git", "grep", "-E", "-n", rf"(def|function|class|const|let|var)[[:space:]]+{func_name}\b"],
                 text=True, stderr=subprocess.DEVNULL
             )
             if grep_out:
@@ -29,17 +29,26 @@ class CodeGraph:
 
     def _get_calls_in_function(self, filepath: str, func_name: str) -> list:
         try:
-            with open(filepath, 'r') as f:
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                 source = f.read()
-            tree = ast.parse(source)
-            calls = []
-            for node in ast.walk(tree):
-                if isinstance(node, ast.FunctionDef) and node.name == func_name:
-                    for sub_node in ast.walk(node):
-                        if isinstance(sub_node, ast.Call) and isinstance(sub_node.func, ast.Name):
-                            calls.append(sub_node.func.id)
-                    break
-            return calls
+            if filepath.endswith('.py'):
+                tree = ast.parse(source)
+                calls = []
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+                        for sub_node in ast.walk(node):
+                            if isinstance(sub_node, ast.Call) and isinstance(sub_node.func, ast.Name):
+                                calls.append(sub_node.func.id)
+                        break
+                return calls
+            else:
+                import re
+                blocks = re.findall(rf'(?:function|const|let|class)\s+{re.escape(func_name)}\b[\s\S]*?\{{([\s\S]*?)\}}', source)
+                if blocks:
+                    raw_calls = re.findall(r'\b([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(', blocks[0])
+                    ignored = {'if', 'for', 'while', 'switch', 'catch', 'constructor', 'require', 'import'}
+                    return [c for c in raw_calls if c not in ignored and c != func_name]
+                return []
         except Exception:
             return []
 

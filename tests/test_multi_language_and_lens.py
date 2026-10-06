@@ -380,8 +380,8 @@ class TestChangeDetectorMultiLanguage(unittest.TestCase):
 
     def test_non_code_files_skipped(self):
         handler = self._detect_with_git(
-            "M\tREADME.md\nM\tsrc/app.py\n",
-            "5\t1\tREADME.md\n10\t2\tsrc/app.py\n",
+            "M\tREADME.md\nM\tsrc/app.py\nM\tpackage-lock.json\n",
+            "5\t1\tREADME.md\n10\t2\tsrc/app.py\n500\t2\tpackage-lock.json\n",
             {
                 ":src/app.py": "def main():\n    print('hi')\n",
                 "HEAD:src/app.py": "def main():\n    pass\n",
@@ -391,7 +391,13 @@ class TestChangeDetectorMultiLanguage(unittest.TestCase):
         with patch("subprocess.check_output", side_effect=handler):
             result = ChangeDetector().detect()
         paths = [f["path"] for f in result["files"]]
-        self.assertNotIn("README.md", paths)
+        # Lockfiles are always ignored
+        self.assertNotIn("package-lock.json", paths)
+        # Docs/config tracked as module-level changes (colleague's design, adopted)
+        readme = next(f for f in result["files"] if f["path"] == "README.md")
+        self.assertEqual(readme["status"], "modified")
+        self.assertEqual(readme["changed_functions"][0]["name"], "<module>")
+        # Code files still get function-level analysis
         self.assertIn("src/app.py", paths)
 
 

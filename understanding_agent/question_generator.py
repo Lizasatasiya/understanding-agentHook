@@ -20,26 +20,26 @@ class QuestionGenerator:
     }
     _VALID_TYPES = set(TIME_LIMITS.keys())
 
-    def generate(self, context: dict, summary: dict, hints: dict | None = None) -> list:
+    def generate(self, context: dict, summary: dict, hints: dict | None = None, env: dict | None = None) -> list:
         api_key = load_groq_api_key()
         if not api_key:
             print("\n  \033[93m⚠️  [LLM] Warning: GROQ_API_KEY is not set.\033[0m")
             print("  \033[2mSet GROQ_API_KEY in your .env or shell (export GROQ_API_KEY=\"gsk_...\") to generate custom questions.\033[0m\n", flush=True)
             return self._fallback(context, hints)
 
-        prompt = self._build_prompt(context, summary, hints)
+        prompt = self._build_prompt(context, summary, hints, env=env)
         is_large = context.get("is_large_change", False)
         questions = self._call_groq(api_key, prompt, is_large=is_large)
         if questions:
             return questions
         return self._fallback(context, hints)
 
-    def _build_prompt(self, context: dict, summary: dict, hints: dict | None = None) -> str:
+    def _build_prompt(self, context: dict, summary: dict, hints: dict | None = None, env: dict | None = None) -> str:
         if context.get("is_large_change", False):
-            return self._build_macro_prompt(context, summary, hints)
-        return self._build_micro_prompt(context, summary, hints)
+            return self._build_macro_prompt(context, summary, hints, env=env)
+        return self._build_micro_prompt(context, summary, hints, env=env)
 
-    def _build_micro_prompt(self, context: dict, summary: dict, hints: dict | None = None) -> str:
+    def _build_micro_prompt(self, context: dict, summary: dict, hints: dict | None = None, env: dict | None = None) -> str:
         valid_types = ", ".join(f'"{t}"' for t in self.TIME_LIMITS)
         lines = [
             "You are a senior developer reviewing a code change.",
@@ -47,6 +47,17 @@ class QuestionGenerator:
             "CRITICAL: Keep the questions short and simple (under 25 words). Ask one basic thing per question.",
             "Keep it simple but focus on logic and data flow. No generic questions.",
             "",
+        ]
+
+        if env:
+            lang = env.get("language", "unknown")
+            framework = env.get("framework", "unknown")
+            lines.append(f"Repository Stack: {framework} ({lang})")
+            if framework != "unknown":
+                lines.append(f"Tailor questions to idiomatic {framework} and {lang} paradigms (e.g. async/await patterns, lifecycle, component re-renders, state management, dependency injection, service isolation, error handling).")
+            lines.append("")
+
+        lines += [
             "## Changed Functions",
         ]
 
@@ -89,7 +100,7 @@ class QuestionGenerator:
         ]
         return "\n".join(lines)
 
-    def _build_macro_prompt(self, context: dict, summary: dict, hints: dict | None = None) -> str:
+    def _build_macro_prompt(self, context: dict, summary: dict, hints: dict | None = None, env: dict | None = None) -> str:
         """
         Build an architectural prompt for substantial commits (>80-100 lines or multi-file).
         Focuses on data flow, component interactions, failure modes, and system invariants.
@@ -107,6 +118,17 @@ class QuestionGenerator:
             "4. CRITICAL: Keep questions VERY SHORT, DIRECT, and SIMPLE (under 20 - 25 words).",
             "5. The question MUST be easily answerable in 30-45 seconds. Do NOT ask compound or essay questions.",
             "",
+        ]
+
+        if env:
+            lang = env.get("language", "unknown")
+            framework = env.get("framework", "unknown")
+            lines.append(f"Repository Stack: {framework} ({lang})")
+            if framework != "unknown":
+                lines.append(f"Tailor architectural questions specifically to {framework} architecture and {lang} paradigms (e.g., component state/lifecycle, hook dependencies, service boundaries, dependency injection, async flow, error boundaries).")
+            lines.append("")
+
+        lines += [
             "## Architectural Summary",
             f"What Changed: {summary.get('what_changed', 'N/A')}",
             f"Impact: {summary.get('impact', 'N/A')}",

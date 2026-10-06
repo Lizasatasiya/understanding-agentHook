@@ -2,6 +2,23 @@ import subprocess
 import ast
 import os
 from typing import List, Dict, Any, Set
+from .environment_detector import _EXTENSION_MAP
+
+# Non-code files still worth tracking as module-level changes (docs, config, schemas)
+_NON_CODE_EXTENSIONS = {
+    ".html", ".css", ".scss", ".json", ".yaml", ".yml",
+    ".graphql", ".prisma", ".proto", ".md",
+}
+
+_IGNORED_FILES = {
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "Cargo.lock",
+    "go.sum",
+    "composer.lock",
+}
 
 from .language_support import (
     language_for,
@@ -31,13 +48,30 @@ class ChangeDetector:
             status = parts[0]
             path = parts[-1]
 
+            ext = os.path.splitext(path)[1].lower()
+            if os.path.basename(path) in _IGNORED_FILES:
+                continue
+
+            # Deleted files: tracked so the change shows up in questions/stats
             if status == 'D':
+                files.append({
+                    "path": path,
+                    "status": "deleted",
+                    "language": _EXTENSION_MAP.get(ext, "unknown"),
+                    "changed_functions": [{"name": "<module>", "change_type": "deleted", "added_calls": []}]
+                })
                 continue
 
             language = language_for(path)
             if not language:
-                # Not a recognized code file — still tracked as a change (docs, config,
-                # SQL, notebooks get language tags; truly unknown extensions are skipped)
+                # Non-code files (docs, config, schemas): tracked as module-level changes
+                if ext in _NON_CODE_EXTENSIONS:
+                    files.append({
+                        "path": path,
+                        "status": "modified" if status == 'M' else "added",
+                        "language": _EXTENSION_MAP.get(ext, "unknown"),
+                        "changed_functions": [{"name": "<module>", "change_type": "modified" if status == 'M' else "added", "added_calls": []}]
+                    })
                 continue
 
             changed_funcs = self._analyze_changes(path, status, language)

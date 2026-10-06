@@ -96,7 +96,7 @@ def main():
         attempts = state.get("attempts", 1) + 1
     else:
         question_generator = QuestionGenerator()
-        questions = question_generator.generate(context, summary, hints)
+        questions = question_generator.generate(context, summary, hints, env=env)
         valid_questions = question_generator.validate(questions)
         for q in valid_questions:
             q["passed"] = False
@@ -160,7 +160,7 @@ def main():
                 "status": status
             }
             
-            eval_res = evaluator.evaluate(q, ans_obj, context, summary)
+            eval_res = evaluator.evaluate(q, ans_obj, context, summary, env=env)
             final_score = eval_res.score
 
             # Targeted follow-up for partial understanding: one focused question
@@ -191,7 +191,7 @@ def main():
                     {"question": followup_q, "type": q.get("type", "Reasoning"),
                      "expected_concepts": eval_res.missing_concepts,
                      "evaluation_criteria": []},
-                    fu_ans_obj, context, summary
+                    fu_ans_obj, context, summary, env=env
                 )
                 final_score = max(final_score, fu_eval.score)
                 eval_res = fu_eval
