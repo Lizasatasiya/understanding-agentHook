@@ -95,7 +95,7 @@ def main():
                 sys.exit(1)
 
         if choice in ("1", "fix", "f"):
-            print(f"{RED}Please resolve the violations listed above before committing.{RESET}\n")
+            print(f"\n{RED}Please resolve the violations listed above before committing.{RESET}\n")
             sys.exit(1)
         else:
             print(f"\n{BOLD}{GREEN}✓ Proceeding with questions...{RESET}\n")

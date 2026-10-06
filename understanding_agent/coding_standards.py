@@ -117,6 +117,46 @@ class CodingStandardsChecker:
         return results
 
     # -------------------------------------------------------------------------
+    # Helper utilities for Line Number & Diff Parsing
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _get_diff_additions(diff: str) -> List[tuple[int, str]]:
+        """Extract added lines with their 1-indexed target line numbers from unified diff."""
+        results: List[tuple[int, str]] = []
+        current_line = 1
+        has_hunk = False
+
+        for raw_line in diff.splitlines():
+            if raw_line.startswith('@@ '):
+                m = re.match(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@', raw_line)
+                if m:
+                    current_line = int(m.group(1))
+                    has_hunk = True
+                continue
+
+            if raw_line.startswith('+++') or raw_line.startswith('---'):
+                continue
+
+            if raw_line.startswith('+'):
+                results.append((current_line, raw_line[1:]))
+                current_line += 1
+            elif raw_line.startswith('-'):
+                pass
+            elif raw_line.startswith(' '):
+                current_line += 1
+            elif not has_hunk:
+                results.append((current_line, raw_line))
+                current_line += 1
+
+        return results
+
+    @staticmethod
+    def _offset_to_line(content: str, offset: int) -> int:
+        """Convert a character offset in content into a 1-indexed line number."""
+        return content[:offset].count('\n') + 1
+
+    # -------------------------------------------------------------------------
     # Individual Coding Standard Checkers
     # -------------------------------------------------------------------------
 
@@ -125,19 +165,17 @@ class CodingStandardsChecker:
         for path, diff in diffs.items():
             if not path.endswith(('.jsx', '.tsx', '.js', '.ts')):
                 continue
-            for line in diff.splitlines():
-                if not line.startswith('+') or line.startswith('+++'):
-                    continue
-                code = line[1:].strip()
+            for line_no, raw_code in self._get_diff_additions(diff):
+                code = raw_code.strip()
                 # Check for direct prop mutation: props.foo = ... or props.foo.bar = ...
                 if re.search(r'\bprops\.[a-zA-Z0-9_$]+(?:\.[a-zA-Z0-9_$]+)?\s*[\+\-\*\/]?=\s*[^=]', code):
-                    violations.append(f"{path}: Direct mutation of props (`{code[:50]}`)")
+                    violations.append(f"{path}:{line_no}: Direct mutation of props (`{code[:50]}`)")
                 # Check for in-place array mutations in render code
                 if re.search(r'\b(?:featuresList|items|list|data)\.(?:push|splice|shift|unshift|pop)\(', code):
-                    violations.append(f"{path}: In-place array mutation during component lifecycle (`{code[:50]}`)")
+                    violations.append(f"{path}:{line_no}: In-place array mutation during component lifecycle (`{code[:50]}`)")
                 # Check for parameter mutation inside calculation functions
                 if re.search(r'\bplan\.[a-zA-Z0-9_$]+\s*=\s*', code) and 'calculate' in diff:
-                    violations.append(f"{path}: Mutating input object parameter directly (`{code[:50]}`)")
+                    violations.append(f"{path}:{line_no}: Mutating input object parameter directly (`{code[:50]}`)")
 
         if violations:
             return {
@@ -145,7 +183,8 @@ class CodingStandardsChecker:
                 "status": "FAILED",
                 "is_good": False,
                 "category": "React / State",
-                "details": "; ".join(violations[:2])
+                "violations": violations[:3],
+                "details": "; ".join(violations[:3])
             }
         return {
             "name": "State & Prop Immutability",
@@ -165,7 +204,8 @@ class CodingStandardsChecker:
             for m in matches:
                 body = m.group(1)
                 if re.search(r'\b(?:props|billingCycle|state|plan|users)\b', body):
-                    violations.append(f"{path}: Stale closure in useCallback (empty `[]` dependencies while referencing outer scope)")
+                    line_no = self._offset_to_line(content, m.start())
+                    violations.append(f"{path}:{line_no}: Stale closure in useCallback (empty `[]` dependencies while referencing outer scope)")
 
         if violations:
             return {
@@ -173,7 +213,8 @@ class CodingStandardsChecker:
                 "status": "FAILED",
                 "is_good": False,
                 "category": "React / Hooks",
-                "details": "; ".join(violations[:2])
+                "violations": violations[:3],
+                "details": "; ".join(violations[:3])
             }
         return {
             "name": "React Hooks & Closure Safety",
@@ -189,12 +230,13 @@ class CodingStandardsChecker:
             if not path.endswith(('.jsx', '.tsx', '.js', '.ts')):
                 continue
             # Look for useEffect containing setInterval/addEventListener without clearInterval/removeEventListener
-            effect_blocks = re.findall(r'useEffect\s*\(\s*\(\s*\)\s*=>\s*\{([\s\S]*?)\}\s*,\s*\[.*?\]\s*\)', content)
-            for body in effect_blocks:
+            for m in re.finditer(r'useEffect\s*\(\s*\(\s*\)\s*=>\s*\{([\s\S]*?)\}\s*,\s*\[.*?\]\s*\)', content):
+                body = m.group(1)
+                line_no = self._offset_to_line(content, m.start())
                 if 'setInterval' in body and 'clearInterval' not in body:
-                    violations.append(f"{path}: `setInterval` in `useEffect` missing `clearInterval` cleanup return")
+                    violations.append(f"{path}:{line_no}: `setInterval` in `useEffect` missing `clearInterval` cleanup return")
                 if 'addEventListener' in body and 'removeEventListener' not in body:
-                    violations.append(f"{path}: `addEventListener` missing corresponding `removeEventListener` cleanup")
+                    violations.append(f"{path}:{line_no}: `addEventListener` missing corresponding `removeEventListener` cleanup")
 
         if violations:
             return {
@@ -202,7 +244,8 @@ class CodingStandardsChecker:
                 "status": "FAILED",
                 "is_good": False,
                 "category": "React / Lifecycle",
-                "details": "; ".join(violations[:2])
+                "violations": violations[:3],
+                "details": "; ".join(violations[:3])
             }
         return {
             "name": "Resource & Timer Cleanup",
@@ -217,16 +260,14 @@ class CodingStandardsChecker:
         for path, diff in diffs.items():
             if not path.endswith(('.jsx', '.tsx')):
                 continue
-            for line in diff.splitlines():
-                if not line.startswith('+') or line.startswith('+++'):
-                    continue
-                code = line[1:].strip()
+            for line_no, raw_code in self._get_diff_additions(diff):
+                code = raw_code.strip()
                 # Direct DOM queries
                 if re.search(r'\bdocument\.(?:getElementById|querySelector|getElementsByClassName)\b', code):
-                    violations.append(f"{path}: Direct DOM access via `document.*` bypasses React Virtual DOM")
+                    violations.append(f"{path}:{line_no}: Direct DOM access via `document.*` bypasses React Virtual DOM")
                 # Random keys
                 if 'Math.random()' in code and 'key=' in code:
-                    violations.append(f"{path}: Unstable key generator `key={{...Math.random()}}` degrades reconciliation")
+                    violations.append(f"{path}:{line_no}: Unstable key generator `key={{...Math.random()}}` degrades reconciliation")
 
         if violations:
             return {
@@ -234,7 +275,8 @@ class CodingStandardsChecker:
                 "status": "FAILED",
                 "is_good": False,
                 "category": "React / Architecture",
-                "details": "; ".join(violations[:2])
+                "violations": violations[:3],
+                "details": "; ".join(violations[:3])
             }
         return {
             "name": "Virtual DOM & Reconciliation Safety",
@@ -247,20 +289,18 @@ class CodingStandardsChecker:
     def _check_xss_and_code_injection(self, diffs: Dict[str, str], contents: Dict[str, str]) -> Dict[str, Any]:
         violations = []
         for path, diff in diffs.items():
-            for line in diff.splitlines():
-                if not line.startswith('+') or line.startswith('+++'):
-                    continue
-                code = line[1:].strip()
+            for line_no, raw_code in self._get_diff_additions(diff):
+                code = raw_code.strip()
                 if 'dangerouslySetInnerHTML' in code:
-                    msg = f"{path}: Unescaped HTML injection via `dangerouslySetInnerHTML`"
+                    msg = f"{path}:{line_no}: Unescaped HTML injection via `dangerouslySetInnerHTML`"
                     if msg not in violations:
                         violations.append(msg)
                 if re.search(r'\beval\s*\(', code):
-                    msg = f"{path}: Insecure dynamic execution using `eval()`"
+                    msg = f"{path}:{line_no}: Insecure dynamic execution using `eval()`"
                     if msg not in violations:
                         violations.append(msg)
                 if re.search(r'\bnew\s+Function\s*\(', code):
-                    msg = f"{path}: Arbitrary code execution via `new Function()`"
+                    msg = f"{path}:{line_no}: Arbitrary code execution via `new Function()`"
                     if msg not in violations:
                         violations.append(msg)
 
@@ -270,7 +310,8 @@ class CodingStandardsChecker:
                 "status": "FAILED",
                 "is_good": False,
                 "category": "Security / Injection",
-                "details": "; ".join(violations[:2])
+                "violations": violations[:3],
+                "details": "; ".join(violations[:3])
             }
         return {
             "name": "XSS & Script Execution Safety",
@@ -291,13 +332,11 @@ class CodingStandardsChecker:
         ]
 
         for path, diff in diffs.items():
-            for line in diff.splitlines():
-                if not line.startswith('+') or line.startswith('+++'):
-                    continue
-                code = line[1:].strip()
+            for line_no, raw_code in self._get_diff_additions(diff):
+                code = raw_code.strip()
                 for pattern, desc in secret_patterns:
                     if re.search(pattern, code, re.IGNORECASE):
-                        violations.append(f"{path}: Exposed {desc}")
+                        violations.append(f"{path}:{line_no}: Exposed {desc}")
                         break
 
         if violations:
@@ -306,7 +345,8 @@ class CodingStandardsChecker:
                 "status": "FAILED",
                 "is_good": False,
                 "category": "Security / Secrets",
-                "details": "; ".join(violations[:2])
+                "violations": violations[:3],
+                "details": "; ".join(violations[:3])
             }
         return {
             "name": "Secret & Credential Protection",
@@ -319,13 +359,11 @@ class CodingStandardsChecker:
     def _check_secure_transport(self, diffs: Dict[str, str], contents: Dict[str, str]) -> Dict[str, Any]:
         violations = []
         for path, diff in diffs.items():
-            for line in diff.splitlines():
-                if not line.startswith('+') or line.startswith('+++'):
-                    continue
-                code = line[1:].strip()
+            for line_no, raw_code in self._get_diff_additions(diff):
+                code = raw_code.strip()
                 # Check for unencrypted HTTP API endpoints (ignore schemas / namespaces)
                 if re.search(r'["\']http:\/\/(?!localhost|127\.0\.0\.1|www\.w3\.org)[a-zA-Z0-9\-_.]+', code):
-                    violations.append(f"{path}: Insecure cleartext HTTP endpoint (`{code[:50]}`)")
+                    violations.append(f"{path}:{line_no}: Insecure cleartext HTTP endpoint (`{code[:50]}`)")
 
         if violations:
             return {
@@ -333,7 +371,8 @@ class CodingStandardsChecker:
                 "status": "FAILED",
                 "is_good": False,
                 "category": "Security / Network",
-                "details": "; ".join(violations[:2])
+                "violations": violations[:3],
+                "details": "; ".join(violations[:3])
             }
         return {
             "name": "Secure Transport Protocols",
@@ -348,14 +387,12 @@ class CodingStandardsChecker:
         for path, diff in diffs.items():
             if not path.endswith(('.js', '.jsx', '.ts', '.tsx')):
                 continue
-            for line in diff.splitlines():
-                if not line.startswith('+') or line.startswith('+++'):
-                    continue
-                code = line[1:].strip()
+            for line_no, raw_code in self._get_diff_additions(diff):
+                code = raw_code.strip()
                 if re.search(r'^\s*var\s+[a-zA-Z0-9_$]+', code):
-                    violations.append(f"{path}: Legacy `var` keyword used; prefer block-scoped `const` or `let`")
+                    violations.append(f"{path}:{line_no}: Legacy `var` keyword used; prefer block-scoped `const` or `let`")
                 if 'window.' in code and '=' in code and not '==' in code:
-                    violations.append(f"{path}: Global window pollution (`{code[:50]}`)")
+                    violations.append(f"{path}:{line_no}: Global window pollution (`{code[:50]}`)")
 
         if violations:
             return {
@@ -363,7 +400,8 @@ class CodingStandardsChecker:
                 "status": "FAILED",
                 "is_good": False,
                 "category": "JS / Code Quality",
-                "details": "; ".join(violations[:2])
+                "violations": violations[:3],
+                "details": "; ".join(violations[:3])
             }
         return {
             "name": "Modern Variable Scoping",
@@ -378,13 +416,11 @@ class CodingStandardsChecker:
         for path, diff in diffs.items():
             if not path.endswith(('.js', '.jsx', '.ts', '.tsx')):
                 continue
-            for line in diff.splitlines():
-                if not line.startswith('+') or line.startswith('+++'):
-                    continue
-                code = line[1:].strip()
+            for line_no, raw_code in self._get_diff_additions(diff):
+                code = raw_code.strip()
                 # Check for loose equality == or != (not ===, !==, == null if intentional)
                 if re.search(r'(?<![!=])==(?!=)', code) or re.search(r'(?<![!=])!=(?!=)', code):
-                    violations.append(f"{path}: Loose equality operator (`==` or `!=`) used; prefer `===` and `!==`")
+                    violations.append(f"{path}:{line_no}: Loose equality operator (`==` or `!=`) used; prefer `===` and `!==`")
 
         if violations:
             return {
@@ -392,7 +428,8 @@ class CodingStandardsChecker:
                 "status": "FAILED",
                 "is_good": False,
                 "category": "JS / Types",
-                "details": "; ".join(violations[:2])
+                "violations": violations[:3],
+                "details": "; ".join(violations[:3])
             }
         return {
             "name": "Strict Equality & Type Safety",
@@ -412,7 +449,8 @@ class CodingStandardsChecker:
                 clean_body = re.sub(r'//.*', '', body)
                 clean_body = re.sub(r'/\*[\s\S]*?\*/', '', clean_body).strip()
                 if not clean_body:
-                    violations.append(f"{path}: Empty `catch` block swallows errors silently without logging or propagation")
+                    line_no = self._offset_to_line(content, m.start())
+                    violations.append(f"{path}:{line_no}: Empty `catch` block swallows errors silently without logging or propagation")
                     break
 
         if violations:
@@ -421,7 +459,8 @@ class CodingStandardsChecker:
                 "status": "FAILED",
                 "is_good": False,
                 "category": "Reliability",
-                "details": "; ".join(violations[:2])
+                "violations": violations[:3],
+                "details": "; ".join(violations[:3])
             }
         return {
             "name": "Error Handling & Resilience",
@@ -436,12 +475,10 @@ class CodingStandardsChecker:
         for path, diff in diffs.items():
             if not path.endswith('.py'):
                 continue
-            for line in diff.splitlines():
-                if not line.startswith('+') or line.startswith('+++'):
-                    continue
-                code = line[1:].strip()
+            for line_no, raw_code in self._get_diff_additions(diff):
+                code = raw_code.strip()
                 if re.match(r'except\s*:', code):
-                    violations.append(f"{path}: Bare `except:` catches SystemExit and KeyboardInterrupt")
+                    violations.append(f"{path}:{line_no}: Bare `except:` catches SystemExit and KeyboardInterrupt")
 
         if violations:
             return {
@@ -449,7 +486,8 @@ class CodingStandardsChecker:
                 "status": "FAILED",
                 "is_good": False,
                 "category": "Python / Errors",
-                "details": "; ".join(violations[:2])
+                "violations": violations[:3],
+                "details": "; ".join(violations[:3])
             }
         return {
             "name": "Python Exception Specificity",
@@ -464,12 +502,10 @@ class CodingStandardsChecker:
         for path, diff in diffs.items():
             if not path.endswith('.py'):
                 continue
-            for line in diff.splitlines():
-                if not line.startswith('+') or line.startswith('+++'):
-                    continue
-                code = line[1:].strip()
+            for line_no, raw_code in self._get_diff_additions(diff):
+                code = raw_code.strip()
                 if re.search(r'=\s*open\(', code) and 'with ' not in code:
-                    violations.append(f"{path}: Unmanaged file descriptor `open(...)` outside `with` statement")
+                    violations.append(f"{path}:{line_no}: Unmanaged file descriptor `open(...)` outside `with` statement")
 
         if violations:
             return {
@@ -477,7 +513,8 @@ class CodingStandardsChecker:
                 "status": "FAILED",
                 "is_good": False,
                 "category": "Python / Resources",
-                "details": "; ".join(violations[:2])
+                "violations": violations[:3],
+                "details": "; ".join(violations[:3])
             }
         return {
             "name": "Python Resource Management",
@@ -493,7 +530,7 @@ class CodingStandardsChecker:
         for path, content in contents.items():
             lines = content.splitlines()
             if len(lines) > 400:
-                violations.append(f"{path}: Monolithic file ({len(lines)} LOC) exceeds recommended modular threshold (350 LOC)")
+                violations.append(f"{path}:1: Monolithic file ({len(lines)} LOC) exceeds recommended modular threshold (350 LOC)")
 
         if violations:
             return {
@@ -501,7 +538,8 @@ class CodingStandardsChecker:
                 "status": "FAILED",
                 "is_good": False,
                 "category": "Architecture",
-                "details": "; ".join(violations[:2])
+                "violations": violations[:3],
+                "details": "; ".join(violations[:3])
             }
         return {
             "name": "Component & Function Modularity",
@@ -527,12 +565,22 @@ class CodingStandardsChecker:
                 "category": "Reliability",
                 "details": "Input guards and boundary checks are implemented for incoming parameters."
             }
+
+        violations = []
+        code_files = [p for p in contents.keys() if p.endswith(('.js', '.jsx', '.ts', '.tsx', '.py'))]
+        for path in code_files:
+            content = contents.get(path, "")
+            m = re.search(r'(?:export\s+(?:default\s+)?function\s+\w+|function\s+\w+|const\s+\w+\s*=\s*(?:\([^)]*\)|[a-zA-Z0-9_$]+)\s*=>|def\s+\w+)', content)
+            line_no = self._offset_to_line(content, m.start()) if m else 1
+            violations.append(f"{path}:{line_no}: Missing defensive boundary guards and input validation checks")
+
         return {
             "name": "Input Validation & Boundary Guards",
             "status": "FAILED",
             "is_good": False,
             "category": "Reliability",
-            "details": "Missing defensive boundary guards and input validation checks."
+            "violations": violations[:3] if violations else ["Missing defensive boundary guards and input validation checks."],
+            "details": "; ".join(violations[:3]) if violations else "Missing defensive boundary guards and input validation checks."
         }
 
     # -------------------------------------------------------------------------
@@ -559,7 +607,9 @@ class CodingStandardsChecker:
         # Print Failed (Not Good) first so developer immediately notices violations
         for r in failed:
             print(f"{RED}{BOLD}❌ FAILED{RESET}  {BOLD}{r['name']:<35}{RESET}")
-            print(f"         {DIM}↳ {r['details']}{RESET}")
+            violation_items = r.get("violations") or [r["details"]]
+            for v in violation_items:
+                print(f"         {DIM}↳ {v}{RESET}")
 
         # Print Passed (Good) standards
         for r in passed:
