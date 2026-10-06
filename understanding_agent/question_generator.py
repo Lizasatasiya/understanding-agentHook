@@ -196,6 +196,13 @@ class QuestionGenerator:
             for ph in (pr.get("prompt_hints") or [])[:8]:
                 out.append(f"  - {ph}")
 
+        std = (hints or {}).get("standards") or []
+        failed_std = [s for s in std if not s.get("is_good")]
+        if failed_std:
+            out.append("Coding standards violations found in this diff (prioritize asking the author to explain or defend them):")
+            for fs in failed_std[:4]:
+                out.append(f"  - [{fs['name']}]: {fs['details']}")
+
         out.append("")
         return out
 

@@ -17,6 +17,7 @@ from .followup_generator import FollowUpGenerator
 from .interaction import Interaction
 from .server_client import ServerClient
 from .answer_evaluator import AnswerEvaluator
+from .coding_standards import CodingStandardsChecker
 
 def main():
     try:
@@ -58,11 +59,18 @@ def main():
     evidence = collect_evidence(changes.get("files", []), env.get("project_root") or os.getcwd())
     evidence_hint = evidence_question_hint(evidence)
     practice_hint = practice_pack_hint(stack, context, security_hint)
+
+    # 5c. Coding Standards Audit (deterministic, printed first before questions)
+    standards_checker = CodingStandardsChecker(env.get("project_root") or os.getcwd())
+    standards_report = standards_checker.check(changes, context)
+    standards_checker.print_report(standards_report)
+
     hints = {
         "stack": stack,
         "security": security_hint,
         "evidence": evidence_hint,
         "practices": practice_hint,
+        "standards": standards_report,
     }
 
     # 5c. Security gate: deterministic critical findings (live credentials) block
