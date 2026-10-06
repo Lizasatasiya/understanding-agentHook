@@ -1,6 +1,6 @@
 import os
 import json
-from .api_utils import load_groq_api_key, extract_json, call_groq_api
+from .api_utils import load_groq_api_key, extract_json, call_groq_api, get_model
 
 
 class ChangeSummary:
@@ -87,7 +87,7 @@ class ChangeSummary:
 
     def _call_groq(self, api_key: str, prompt: str, max_tokens: int = 300) -> dict:
         payload = {
-            "model": "qwen/qwen3.8-27b",
+            "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3,
             "max_tokens": max_tokens

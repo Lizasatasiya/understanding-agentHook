@@ -1,5 +1,5 @@
 import json
-from .api_utils import load_groq_api_key, call_groq_api
+from .api_utils import load_groq_api_key, call_groq_api, get_model
 
 class FollowUpGenerator:
     def generate(self, question: dict, answer: dict, evaluation: dict) -> str:
@@ -30,7 +30,7 @@ RULES:
 
     def _call_groq(self, api_key: str, prompt: str) -> str:
         payload = {
-            "model": "qwen/qwen3.8-27b",
+            "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.5,
             "max_tokens": 128

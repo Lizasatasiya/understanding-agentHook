@@ -9,6 +9,7 @@ from .code_graph import CodeGraph
 from .context_builder import ContextBuilder
 from .change_summary import ChangeSummary
 from .question_generator import QuestionGenerator
+from .followup_generator import FollowUpGenerator
 from .interaction import Interaction
 from .server_client import ServerClient
 from .answer_evaluator import AnswerEvaluator
@@ -48,18 +49,9 @@ def main():
     summary = summary_generator.generate(context)
     
     # 6. Question Generator & State Management
-    # Try to grab the parent git command line (which contains the -m message) to include in the hash
-    try:
-        import subprocess
-        ppid = os.getppid()
-        commit_cmd = subprocess.check_output(
-            ['ps', '-p', str(ppid), '-o', 'command='],
-            stderr=subprocess.DEVNULL
-        ).decode().strip()
-    except Exception:
-        commit_cmd = ""
-        
-    diff_hash = hashlib.md5((json.dumps(changes, sort_keys=True) + commit_cmd).encode()).hexdigest()
+    # Hash only the detected changes: a retry with an edited commit message
+    # must reuse cached questions rather than regenerate everything.
+    diff_hash = hashlib.sha256(json.dumps(changes, sort_keys=True).encode()).hexdigest()
     state_file = ".git/understanding_agent_state.json"
     
     state = {}
@@ -92,6 +84,7 @@ def main():
         attempts = 1
     interaction = Interaction()
     evaluator = AnswerEvaluator()
+    followup_generator = FollowUpGenerator()
     
     # Colors
     CYAN = "\033[96m"
@@ -122,7 +115,13 @@ def main():
                 
             print(f"{YELLOW}⏳ Time Limit: {time_limit} seconds{RESET}\n")
             print(f"{BOLD}{q_text}{RESET}\n")
-            
+
+            # Follow-up state for this question (set only if a partial answer triggers one)
+            fu_ans = None
+            fu_eval = None
+            fu_ans_obj = {}
+            followup_q = ""
+
             start_time = time.time()
             ans_text = interaction.timed_input(f"{CYAN}❯ {RESET}", time_limit, speak_text=q_text)
             
@@ -143,7 +142,47 @@ def main():
             
             eval_res = evaluator.evaluate(q, ans_obj, context, summary)
             final_score = eval_res.score
-            if final_score >= 70:
+
+            # Targeted follow-up for partial understanding: one focused question
+            # on the missing concept, replacing the original score for this item.
+            if 25 <= final_score < 70 and eval_res.follow_up_required and (ans_text or "").strip():
+                missing = ", ".join(eval_res.missing_concepts) or "the missing concept"
+                followup_q = followup_generator.generate(q, ans_obj, eval_res.to_dict())
+                print(f"\n{YELLOW}⚠️ Partial understanding. Follow-up on: {missing}{RESET}\n")
+                print(f"{BOLD}{followup_q}{RESET}\n")
+
+                fu_start = time.time()
+                fu_ans = interaction.timed_input(
+                    f"{CYAN}❯ {RESET}", min(time_limit, 45), speak_text=followup_q
+                )
+                if fu_ans is None:
+                    fu_ans = ""
+                    print(f"{RED}✗ Timeout reached on follow-up{RESET}")
+                else:
+                    fu_secs = int(time.time() - fu_start)
+                    print(f"{GREEN}✓ Follow-up answer received in {fu_secs} seconds{RESET}")
+
+                fu_ans_obj = {
+                    "answer": fu_ans,
+                    "response_time_seconds": max(0, int(time.time() - fu_start)),
+                    "status": "answered" if (fu_ans or "").strip() else "timeout"
+                }
+                fu_eval = evaluator.evaluate(
+                    {"question": followup_q, "type": q.get("type", "Reasoning"),
+                     "expected_concepts": eval_res.missing_concepts,
+                     "evaluation_criteria": []},
+                    fu_ans_obj, context, summary
+                )
+                final_score = max(final_score, fu_eval.score)
+                eval_res = fu_eval
+                ans_obj = fu_ans_obj
+                if final_score >= 70:
+                    print(f"{GREEN}✓ Good understanding demonstrated on follow-up{RESET}")
+                elif final_score >= 25:
+                    print(f"{YELLOW}⚠️ Partial understanding demonstrated on follow-up{RESET}")
+                else:
+                    print(f"{RED}✗ Understanding not demonstrated on follow-up{RESET}")
+            elif final_score >= 70:
                 print(f"{GREEN}✓ Good understanding demonstrated{RESET}")
             elif final_score >= 25:
                 print(f"{YELLOW}⚠️ Partial understanding demonstrated{RESET}")
@@ -171,6 +210,14 @@ def main():
                 "status": status,
                 "evaluation": eval_res.to_dict()
             }
+            # Record the follow-up exchange when one occurred
+            if fu_ans is not None or fu_eval is not None:
+                result_entry["follow_up"] = {
+                    "question": followup_q,
+                    "answer": fu_ans_obj.get("answer", ""),
+                    "status": fu_ans_obj.get("status", "timeout"),
+                    "evaluation": fu_eval.to_dict()
+                }
             final_results.append(result_entry)
 
             # Persist state immediately

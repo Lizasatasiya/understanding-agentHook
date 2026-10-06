@@ -87,8 +87,19 @@ The hook automatically adapts its evaluation strategy based on the size and comp
 - **🛡️ Precise AST Filtering**: Parses `git diff -U0` hunks using Python's native `ast` engine. Only functions with modified lines are inspected—no false positives from untouched code in modified files.
 - **📦 Large-Change Skeletonizer**: Compresses long diffs (>35 lines) while preserving function signatures, control flow (`if/else`, `try/except`), and dependencies.
 - **🔄 Smart State Persistence**: Saves attempts in `.git/understanding_agent_state.json` hashed against the staged diff. If an attempt fails, developers can retry without regenerating or paying for redundant API calls.
-- **↩️ Targeted Follow-Up Engine**: If an answer shows partial understanding (score 40–70%), the hook generates a precise follow-up question targeting the missing concept.
-- **📊 Central Reporting**: Dispatches session audit payloads to a central server dashboard for team-wide code understanding metrics.
+- **🔄 Targeted Follow-Up Engine**: If an answer shows partial understanding (score 25–70%), the hook generates a precise follow-up question targeting the missing concept, spoken and answered like any other question.
+- **📊 Opt-In Telemetry**: Dispatches session audit payloads to a self-hosted dashboard for team-wide code understanding metrics. Disabled by default; set `UNDERSTANDING_AGENT_TELEMETRY_URL` to enable.
+
+### Configuration (Environment Variables)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GROQ_API_KEY` | — | Groq API key (required for AI-generated questions) |
+| `UNDERSTANDING_AGENT_MODEL` | `qwen/qwen3.8-27b` | LLM model used for summaries, questions, and evaluation |
+| `UNDERSTANDING_AGENT_FAIL_MODE` | `open` | `open`: if the LLM is unreachable, the commit is allowed with a warning. `closed`: the commit is blocked (strict verification) |
+| `UNDERSTANDING_AGENT_TELEMETRY_URL` | unset (off) | Endpoint to POST session audit payloads to (e.g. `http://dashboard.internal:8000/understanding-session`) |
+
+**Privacy note**: your staged diff (source code) is sent to Groq for question generation and evaluation — that is how the hook works. It is never sent anywhere else unless you explicitly set `UNDERSTANDING_AGENT_TELEMETRY_URL`.
 
 ---
 
@@ -97,6 +108,7 @@ The hook automatically adapts its evaluation strategy based on the size and comp
 ```text
 understanding-agent-hook/
 ├── .pre-commit-hooks.yaml      # Hook definitions for the pre-commit framework
+├── LICENSE                     # MIT License
 ├── setup.py                    # Package manifest & console script entrypoint
 ├── tests/
 │   └── test_large_changes.py   # Unit test suite verifying dual-mode pipeline
@@ -108,17 +120,18 @@ understanding-agent-hook/
     ├── context_builder.py      # Diff extractor & semantic skeletonizer (<35 lines)
     ├── change_summary.py       # Single-pass unified commit summarizer
     ├── question_generator.py   # Capped 2-3 question generator with macro prompts
-    ├── interaction.py          # Terminal UI, timer, TTS ('say'), & Whisper voice STT
-    ├── mic.py                  # Native microphone audio capture helpers
+    ├── interaction.py          # Terminal UI, timer, TTS ('say'), & Dictation voice input
     ├── answer_evaluator.py     # Multi-metric semantic answer scoring
     ├── followup_generator.py   # Targeted follow-up question generator
     ├── evaluation_models.py    # Dataclasses for evaluation scoring
     ├── environment_detector.py # Repository, branch, and author detector
-    ├── server_client.py        # Central telemetry and reporting client
-    └── api_utils.py            # Resilient Groq HTTP client & JSON extractors
+    ├── server_client.py        # Opt-in telemetry client (self-hosted dashboard)
+    └── api_utils.py            # Resilient Groq HTTP client, retry, & JSON extractors
 ```
 
 ---
+
+> **Scope**: this hook analyzes **Python files only** (`.py`). Changes to other languages are not inspected.
 
 ## 🛠️ Tech Stack & Dependencies
 
@@ -128,7 +141,7 @@ understanding-agent-hook/
 
 ### LLM Infrastructure
 - **Provider**: [Groq Cloud](https://groq.com/)
-- **Model**: `qwen/qwen3.8-27b` (high-reasoning, low-latency code model)
+- **Model**: `qwen/qwen3.8-27b` (high-reasoning, low-latency code model) — override with `UNDERSTANDING_AGENT_MODEL`
 - **HTTP Layer**: Native `http.client.HTTPSConnection` with socket cleanup and JSON extraction.
 
 ### Voice & Audio Stack (Optional / Plug-and-Play)
@@ -152,7 +165,7 @@ Obtain an API key from [console.groq.com](https://console.groq.com/) and export 
 ```bash
 export GROQ_API_KEY="gsk_..."
 ```
-*(The hook also automatically scans `.env`, `.env.local`, `~/.config/groq/.env`, `~/.zshrc`, and `~/.bashrc`)*
+*(The hook also reads `.env` / `.env.local` from the current directory, the git repository root, and `~/.config/understanding-agent/.env`. It intentionally does NOT read shell configs like `~/.zshrc`.)*
 
 ### 3. Install Voice Dependencies (macOS)
 ```bash

@@ -1,12 +1,32 @@
 import os
 import json
 import re
+import time
+import subprocess
 import http.client
 import ssl
 
 
+# Default Groq model (override with UNDERSTANDING_AGENT_MODEL)
+_DEFAULT_MODEL = "qwen/qwen3.8-27b"
+
+
+def get_model() -> str:
+    """Return the LLM model name, allowing override via UNDERSTANDING_AGENT_MODEL."""
+    return os.environ.get("UNDERSTANDING_AGENT_MODEL", "").strip() or _DEFAULT_MODEL
+
+
+def fail_open_enabled() -> bool:
+    """When the LLM service is unreachable, allow the commit (default) or block it.
+
+    UNDERSTANDING_AGENT_FAIL_MODE=closed blocks commits when evaluation
+    cannot run. Any other value (or unset) fails open with a warning.
+    """
+    return os.environ.get("UNDERSTANDING_AGENT_FAIL_MODE", "").strip().lower() != "closed"
+
+
 def _parse_key_from_file(filepath: str) -> str:
-    """Extract GROQ_API_KEY from an env file or shell config file."""
+    """Extract GROQ_API_KEY from an env file (KEY=VALUE or export KEY=VALUE)."""
     if not filepath or not os.path.exists(filepath):
         return ""
     try:
@@ -31,39 +51,38 @@ def _parse_key_from_file(filepath: str) -> str:
 
 
 def load_groq_api_key() -> str:
-    """Load GROQ_API_KEY from environment, directory tree .env files, or user profiles."""
+    """Load GROQ_API_KEY from the environment or explicit local env files.
+
+    Search order (intentionally conservative — no shell history/config parsing,
+    no walking up beyond the repository root):
+      1. GROQ_API_KEY environment variable
+      2. .env / .env.local in the current working directory
+      3. .env / .env.local in the git repository root
+      4. ~/.config/understanding-agent/.env
+    """
     api_key = os.environ.get("GROQ_API_KEY", "").strip()
     if api_key:
         return api_key
 
-    # Walk up from current working directory to filesystem root
-    search_dir = os.path.abspath(os.getcwd())
-    while True:
+    search_dirs = [os.path.abspath(os.getcwd())]
+
+    try:
+        repo_root = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            text=True, stderr=subprocess.DEVNULL
+        ).strip()
+        if repo_root:
+            search_dirs.append(repo_root)
+    except Exception:
+        pass
+
+    for d in search_dirs:
         for fname in (".env", ".env.local"):
-            key = _parse_key_from_file(os.path.join(search_dir, fname))
+            key = _parse_key_from_file(os.path.join(d, fname))
             if key:
                 return key
-        parent = os.path.dirname(search_dir)
-        if parent == search_dir:
-            break
-        search_dir = parent
 
-    # Check common user configs and shell profile paths
-    user_locations = [
-        os.path.expanduser("~/.env"),
-        os.path.expanduser("~/.config/groq/.env"),
-        os.path.expanduser("~/.config/understanding-agent/.env"),
-        os.path.expanduser("~/.zshrc"),
-        os.path.expanduser("~/.zprofile"),
-        os.path.expanduser("~/.bash_profile"),
-        os.path.expanduser("~/.bashrc"),
-    ]
-    for loc in user_locations:
-        key = _parse_key_from_file(loc)
-        if key:
-            return key
-
-    return ""
+    return _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"))
 
 
 def _safe_json_loads(s: str):
@@ -147,14 +166,28 @@ def extract_json(text: str):
     return _safe_json_loads(cleaned)
 
 
-def call_groq_api(api_key: str, payload_dict: dict, timeout: int = 30) -> tuple[int, str]:
+def call_groq_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: int = 2) -> tuple[int, str]:
     """Send an HTTP request to the Groq Chat Completions API.
 
-    Returns (status_code, response_text_or_error).
+    Retries transient failures (connection errors, 429, 5xx) with a short
+    exponential backoff. Returns (status_code, response_text_or_error).
+    status_code 0 means the request never got a response.
     """
     if not api_key:
         return 0, "No GROQ_API_KEY found"
 
+    last_status, last_body = 0, ""
+    for attempt in range(retries + 1):
+        status, body = _groq_request_once(api_key, payload_dict, timeout)
+        if status == 200 or (status != 0 and status != 429 and status < 500):
+            return status, body
+        last_status, last_body = status, body
+        if attempt < retries:
+            time.sleep(1.5 * (attempt + 1))
+    return last_status, last_body
+
+
+def _groq_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[int, str]:
     payload = json.dumps(payload_dict).encode("utf-8")
     headers = {
         "Content-Type": "application/json",

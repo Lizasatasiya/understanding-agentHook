@@ -1,6 +1,6 @@
 import os
 import json
-from .api_utils import load_groq_api_key, extract_json, call_groq_api
+from .api_utils import load_groq_api_key, extract_json, call_groq_api, get_model
 
 
 import re
@@ -139,7 +139,7 @@ class QuestionGenerator:
     def _call_groq(self, api_key: str, prompt: str, is_large: bool = False) -> list:
         """Call Groq API and robustly parse question array from response."""
         payload = {
-            "model": "qwen/qwen3.8-27b",
+            "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.4,
             "max_tokens": 800

@@ -1,23 +1,50 @@
 from .evaluation_models import EvaluationResult
-from .api_utils import load_groq_api_key, extract_json, call_groq_api
+from .api_utils import load_groq_api_key, extract_json, call_groq_api, get_model, fail_open_enabled
 import json
 
 class AnswerEvaluator:
     def evaluate(self, question: dict, answer: dict, context: dict, summary: dict) -> EvaluationResult:
-        api_key = load_groq_api_key()
-        if not api_key:
+        # Empty or timed-out answers need no LLM evaluation: they are wrong by definition
+        if not (answer.get("answer") or "").strip():
             return EvaluationResult({
-                "score": 75, 
-                "evaluation": "Offline evaluation (no GROQ_API_KEY configured).",
+                "score": 0,
+                "evaluation": "No answer provided (empty or timed out).",
                 "follow_up_required": False,
                 "missing_concepts": []
             })
-        
+
+        api_key = load_groq_api_key()
+        if not api_key:
+            # No key configured: fail open rather than fail the whole commit pipeline
+            if fail_open_enabled():
+                return EvaluationResult({
+                    "score": 75,
+                    "evaluation": "Offline evaluation (no GROQ_API_KEY configured).",
+                    "follow_up_required": False,
+                    "missing_concepts": []
+                })
+            return EvaluationResult({
+                "score": 0,
+                "evaluation": "Cannot verify understanding: GROQ_API_KEY is not configured and UNDERSTANDING_AGENT_FAIL_MODE=closed.",
+                "follow_up_required": False,
+                "missing_concepts": []
+            })
+
         prompt = self._build_prompt(question, answer, context, summary)
         result_dict = self._call_groq(api_key, prompt)
         if result_dict:
             return EvaluationResult(result_dict)
-            
+
+        # LLM evaluation failed (API error, unparseable response, or timeout).
+        # Fail open with a warning so a third-party outage never blocks commits,
+        # unless UNDERSTANDING_AGENT_FAIL_MODE=closed is explicitly set.
+        if fail_open_enabled():
+            return EvaluationResult({
+                "score": 75,
+                "evaluation": "LLM evaluation unavailable (API error or timeout); failing open.",
+                "follow_up_required": False,
+                "missing_concepts": []
+            })
         return EvaluationResult({"score": 50, "evaluation": "Failed to evaluate answer", "follow_up_required": False})
 
     def _build_prompt(self, question: dict, answer: dict, context: dict, summary: dict) -> str:
@@ -91,7 +118,7 @@ class AnswerEvaluator:
 
     def _call_groq(self, api_key: str, prompt: str) -> dict:
         payload = {
-            "model": "qwen/qwen3.8-27b",
+            "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3,
             "max_tokens": 1024
