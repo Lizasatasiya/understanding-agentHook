@@ -65,6 +65,16 @@ def main():
     standards_report = standards_checker.check(changes, context)
     standards_checker.print_report(standards_report)
 
+    # Abort commit immediately if any coding standard fails — no questions asked
+    failed_standards = [s for s in standards_report if not s.get("is_good", True)]
+    if failed_standards:
+        RED = "\033[91m"
+        BOLD = "\033[1m"
+        RESET = "\033[0m"
+        print(f"{BOLD}{RED}🚫 Commit aborted: {len(failed_standards)} coding standard violation(s) found.{RESET}")
+        print(f"{RED}Please fix the violations listed above before committing. Verification questions are skipped.{RESET}\n")
+        sys.exit(1)
+
     hints = {
         "stack": stack,
         "security": security_hint,
