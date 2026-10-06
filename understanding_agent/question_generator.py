@@ -351,6 +351,8 @@ class QuestionGenerator:
                     
                 result_list.append(item)
             return result_list
+        except Exception:
+            return []
 
     def _ensure_standards_questions(self, questions: list, failed_std: list) -> list:
         """Ensure 1-2 questions directly address failed coding standards violations."""
