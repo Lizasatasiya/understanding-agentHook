@@ -15,10 +15,12 @@ class AnswerEvaluator:
 
         api_key = load_groq_api_key()
         if not api_key:
-            # No key configured: fail open rather than fail the whole commit pipeline
+            # No key configured: fail open rather than fail the whole commit pipeline.
+            # 76 (not 75): the overall pass check is avg > 75, so a fail-open score
+            # must land strictly above it or offline commits could never pass.
             if fail_open_enabled():
                 return EvaluationResult({
-                    "score": 75,
+                    "score": 76,
                     "evaluation": "Offline evaluation (no GROQ_API_KEY configured).",
                     "follow_up_required": False,
                     "missing_concepts": []
@@ -40,7 +42,7 @@ class AnswerEvaluator:
         # unless UNDERSTANDING_AGENT_FAIL_MODE=closed is explicitly set.
         if fail_open_enabled():
             return EvaluationResult({
-                "score": 75,
+                "score": 76,
                 "evaluation": "LLM evaluation unavailable (API error or timeout); failing open.",
                 "follow_up_required": False,
                 "missing_concepts": []

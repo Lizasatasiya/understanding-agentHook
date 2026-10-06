@@ -11,7 +11,9 @@ This module is deterministic pattern classification — no LLM, no network.
 It produces a security_profile that question_generator weights questions with.
 """
 
+import os
 import re
+import subprocess
 from typing import Dict, Any, List
 
 
@@ -85,9 +87,114 @@ _SECURITY_PATTERNS = [
 # Patterns that downgrade severity when the change TOUCHES tests or docs only
 _TEST_PATH_HINTS = ("test", "spec", "mock", "fixture", "__tests__")
 
+# Deterministic, catastrophic findings: known live-credential formats.
+# These BLOCK the commit outright (before questions) — no answer the developer
+# could give makes committing a real credential safe, and git history is
+# permanent. Test/doc files are exempt (that's where example keys legitimately
+# live). Distinct from _SECURITY_PATTERNS, which are heuristic and stay
+# questions.
+_CRITICAL_PATTERNS = [
+    (r"AKIA[0-9A-Z]{16}", "aws-access-key", "AWS access key ID"),
+    (r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----",
+     "private-key", "Private key material"),
+    (r"\bgsk_[A-Za-z0-9]{30,}\b", "groq-api-token", "Groq API token"),
+    (r"\bghp_[A-Za-z0-9]{30,}\b", "github-token", "GitHub access token"),
+    (r"\bgho_[A-Za-z0-9]{30,}\b", "github-token", "GitHub access token"),
+    (r"\bsk-(?:proj-)?[A-Za-z0-9_-]{40,}\b", "openai-api-token", "OpenAI API token"),
+    (r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b", "slack-token", "Slack token"),
+]
+
+
+def security_gate_enabled() -> bool:
+    """Critical-finding gate is ON by default; UNDERSTANDING_AGENT_SECURITY_GATE=off disables."""
+    return os.environ.get("UNDERSTANDING_AGENT_SECURITY_GATE", "").strip().lower() != "off"
+
 
 class SecurityLens:
     """Deterministic security-relevance classifier for staged changes."""
+
+    def find_critical_findings(self, context: dict) -> List[dict]:
+        """Deterministic, catastrophic findings (live credentials) that must block.
+
+        Scans BOTH the per-function diffs in context AND the raw staged diff —
+        credentials typically live at module level, outside any function, so the
+        raw scan is the primary source; the function-level context scan adds
+        function attribution where available.
+
+        Returns [{file, function, label, description, redacted}]. Empty list
+        means the commit may proceed. Test paths are exempt.
+        """
+        findings = []
+        seen = set()
+
+        def _record(path, func, label, description, secret):
+            key = (path, label, secret)
+            if key in seen:
+                return
+            seen.add(key)
+            findings.append({
+                "file": path,
+                "function": func,
+                "label": label,
+                "description": description,
+                "redacted": secret[:8] + "…" if len(secret) > 8 else "***",
+            })
+
+        # 1. Raw staged diff scan (module-level code, config files, everything)
+        raw = self._raw_staged_added_lines()
+        for path, added in raw.items():
+            if any(h in path.lower() for h in _TEST_PATH_HINTS):
+                continue
+            for pattern, label, description in _CRITICAL_PATTERNS:
+                for m in re.finditer(pattern, added):
+                    _record(path, "", label, description, m.group(0))
+
+        # 2. Function-level context scan (adds function attribution)
+        for change in context.get("structured_changes", []):
+            path = change.get("file", "")
+            if any(h in path.lower() for h in _TEST_PATH_HINTS):
+                continue
+            diff = change.get("diff", "")
+            if not diff:
+                continue
+            changed_lines = [l for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++")]
+            added = "\n".join(changed_lines)
+            for pattern, label, description in _CRITICAL_PATTERNS:
+                for m in re.finditer(pattern, added):
+                    _record(path, change.get("function", ""), label, description, m.group(0))
+
+        return findings
+
+    def _raw_staged_added_lines(self) -> Dict[str, str]:
+        """Return {path: added-lines-text} from the raw staged diff.
+
+        Covers ALL staged files (module-level code, configs, dotfiles) — not
+        just those with detected functions.
+        """
+        try:
+            diff = subprocess.check_output(
+                ["git", "diff", "--cached", "-U0"],
+                text=True, stderr=subprocess.DEVNULL
+            )
+        except Exception:
+            return {}
+
+        result: Dict[str, str] = {}
+        current_path = None
+        current_lines: List[str] = []
+        for line in diff.splitlines():
+            if line.startswith("+++ b/"):
+                if current_path and current_lines:
+                    result[current_path] = "\n".join(current_lines)
+                current_path = line[6:]
+                current_lines = []
+            elif line.startswith("+") and not line.startswith("+++"):
+                current_lines.append(line[1:])
+            elif line.startswith("---"):
+                continue
+        if current_path and current_lines:
+            result[current_path] = "\n".join(current_lines)
+        return result
 
     def profile_change(self, context: dict) -> dict:
         """Build a security profile from the analysis context.

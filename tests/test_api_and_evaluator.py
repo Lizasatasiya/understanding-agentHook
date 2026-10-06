@@ -124,7 +124,7 @@ class TestAnswerEvaluator(unittest.TestCase):
              patch.object(AnswerEvaluator, "_call_groq", return_value={}):
             res = self.evaluator.evaluate(
                 self.q, {"answer": "my answer", "status": "answered"}, self.context, {})
-        self.assertEqual(res.score, 75)
+        self.assertEqual(res.score, 76)
         self.assertIn("failing open", res.evaluation)
 
     def test_api_failure_blocks_in_closed_mode(self):
@@ -139,7 +139,7 @@ class TestAnswerEvaluator(unittest.TestCase):
         with patch("understanding_agent.answer_evaluator.load_groq_api_key", return_value=""):
             res = self.evaluator.evaluate(
                 self.q, {"answer": "my answer", "status": "answered"}, self.context, {})
-        self.assertEqual(res.score, 75)
+        self.assertEqual(res.score, 76)
 
     def test_no_key_blocks_in_closed_mode(self):
         with patch.dict(os.environ, {"UNDERSTANDING_AGENT_FAIL_MODE": "closed"}), \

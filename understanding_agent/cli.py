@@ -9,7 +9,7 @@ from .stack_detector import StackDetector
 from .code_graph import CodeGraph
 from .context_builder import ContextBuilder
 from .change_summary import ChangeSummary
-from .security_lens import SecurityLens, security_question_hint
+from .security_lens import SecurityLens, security_question_hint, security_gate_enabled
 from .evidence_collector import collect_evidence, evidence_question_hint
 from .practice_packs import practice_pack_hint
 from .question_generator import QuestionGenerator
@@ -52,7 +52,8 @@ def main():
     context = context_builder.build(changes, graph)
 
     # 5b. Security lens + evidence collection (deterministic, no LLM, fast)
-    security_profile = SecurityLens().profile_change(context)
+    lens = SecurityLens()
+    security_profile = lens.profile_change(context)
     security_hint = security_question_hint(security_profile)
     evidence = collect_evidence(changes.get("files", []), env.get("project_root") or os.getcwd())
     evidence_hint = evidence_question_hint(evidence)
@@ -63,6 +64,25 @@ def main():
         "evidence": evidence_hint,
         "practices": practice_hint,
     }
+
+    # 5c. Security gate: deterministic critical findings (live credentials) block
+    # before any questions are generated. Unlike the oral defense, no answer can
+    # make committing a real credential safe, and git history is permanent.
+    if security_gate_enabled():
+        critical = lens.find_critical_findings(context)
+        if critical:
+            print(f"\n\033[91m⛔ Commit blocked: credential detected in staged code.\033[0m\n")
+            for f in critical:
+                print(f"  \033[91m✗ {f['description']} ({f['redacted']}) in {f['file']}"
+                      + (f" :: {f['function']}()" if f['function'] else "") + "\033[0m")
+            print("""
+\033[93m  Remove the credential before committing:\033[0m
+  1. Move it to an environment variable or your .env (already gitignored)
+  2. If it was ever committed before, rotate it — history keeps it forever
+  3. If this is a false positive, set UNDERSTANDING_AGENT_SECURITY_GATE=off
+     for this commit: git commit  # after unsetting, or use --no-verify
+""")
+            sys.exit(1)
 
     # 6. Change Summary
     summary_generator = ChangeSummary()
