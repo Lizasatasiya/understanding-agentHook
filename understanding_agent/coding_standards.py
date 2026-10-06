@@ -554,7 +554,7 @@ class CodingStandardsChecker:
         passed = [r for r in results if r["is_good"]]
         failed = [r for r in results if not r["is_good"]]
 
-        print(f"{BOLD}{CYAN}📋 Coding Standards Audit (Staged Changes){RESET}")
+        print(f"\n{BOLD}{CYAN}📋 Coding Standards Audit (Staged Changes){RESET}")
 
         # Print Failed (Not Good) first so developer immediately notices violations
         for r in failed:
@@ -568,5 +568,5 @@ class CodingStandardsChecker:
 
         pass_text = f"{GREEN}{BOLD}{len(passed)} Passed (Good){RESET}"
         fail_text = f"{RED}{BOLD}{len(failed)} Failed (Violations){RESET}" if failed else f"{GREEN}0 Violations{RESET}"
-        print(f"{BOLD}Summary: {pass_text} │ {fail_text}")
+        print(f"{BOLD}\nSummary: {pass_text} │ {fail_text}\n")
         
