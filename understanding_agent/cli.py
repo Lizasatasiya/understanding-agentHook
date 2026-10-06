@@ -77,8 +77,8 @@ def main():
 
         print(f"{BOLD}{YELLOW}⚠️  Coding standards violations detected ({len(failed_standards)} failed).{RESET}")
         print(f"{BOLD}Do you want to fix these violations or proceed further?{RESET}\n")
-        print(f"  {BOLD}[1]{RESET} {RED}Fix violations{RESET} (Abort commit)")
-        print(f"  {BOLD}[2]{RESET} {GREEN}Proceed further{RESET} (Continue to questions)\n")
+        print(f"  {BOLD}[1]{RESET} {RED}Fix violations)")
+        print(f"  {BOLD}[2]{RESET} {GREEN}Proceed further\n")
 
         choice = ""
         while choice not in ("1", "2", "fix", "proceed", "f", "p"):
@@ -95,11 +95,10 @@ def main():
                 sys.exit(1)
 
         if choice in ("1", "fix", "f"):
-            print(f"\n{BOLD}{RED}🚫 Commit aborted so you can fix coding standards violations.{RESET}")
             print(f"{RED}Please resolve the violations listed above before committing.{RESET}\n")
             sys.exit(1)
         else:
-            print(f"\n{BOLD}{GREEN}✓ Proceeding with verification questions (including standards violations)...{RESET}\n")
+            print(f"\n{BOLD}{GREEN}✓ Proceeding with questions...\n")
 
     hints = {
         "stack": stack,
