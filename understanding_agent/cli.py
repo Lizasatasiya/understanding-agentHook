@@ -5,9 +5,13 @@ import os
 import hashlib
 from .environment_detector import EnvironmentDetector
 from .change_detector import ChangeDetector
+from .stack_detector import StackDetector
 from .code_graph import CodeGraph
 from .context_builder import ContextBuilder
 from .change_summary import ChangeSummary
+from .security_lens import SecurityLens, security_question_hint
+from .evidence_collector import collect_evidence, evidence_question_hint
+from .practice_packs import practice_pack_hint
 from .question_generator import QuestionGenerator
 from .followup_generator import FollowUpGenerator
 from .interaction import Interaction
@@ -36,15 +40,31 @@ def main():
     if not changes.get("files"):
         sys.exit(0)
         
-    # 3. Code Graph
+    # 3. Stack Detection (languages, frameworks, domains — keys all downstream hints)
+    stack = StackDetector().detect(env.get("project_root") or os.getcwd())
+
+    # 4. Code Graph
     graph = CodeGraph()
-    graph.build(changes.get("files"))
-    
-    # 4. Context Builder
+    graph.build(changes.get("files") or [])
+
+    # 5. Context Builder
     context_builder = ContextBuilder()
     context = context_builder.build(changes, graph)
-    
-    # 5. Change Summary
+
+    # 5b. Security lens + evidence collection (deterministic, no LLM, fast)
+    security_profile = SecurityLens().profile_change(context)
+    security_hint = security_question_hint(security_profile)
+    evidence = collect_evidence(changes.get("files", []), env.get("project_root") or os.getcwd())
+    evidence_hint = evidence_question_hint(evidence)
+    practice_hint = practice_pack_hint(stack, context, security_hint)
+    hints = {
+        "stack": stack,
+        "security": security_hint,
+        "evidence": evidence_hint,
+        "practices": practice_hint,
+    }
+
+    # 6. Change Summary
     summary_generator = ChangeSummary()
     summary = summary_generator.generate(context)
     
@@ -76,7 +96,7 @@ def main():
         attempts = state.get("attempts", 1) + 1
     else:
         question_generator = QuestionGenerator()
-        questions = question_generator.generate(context, summary)
+        questions = question_generator.generate(context, summary, hints)
         valid_questions = question_generator.validate(questions)
         for q in valid_questions:
             q["passed"] = False

@@ -1,6 +1,8 @@
 # 🧠 Understanding Agent: AI-Powered Code Understanding Pre-Commit Hook
 
-> An intelligent, voice-interactive Git pre-commit hook that verifies developers actually understand the code they are committing before allowing it into the repository.
+> An intelligent, voice-interactive Git pre-commit hook that verifies developers actually understand the code they are committing — now **multi-language**, **security-aware**, and **domain-aware**.
+
+**Supported stacks**: Python (incl. ML/data-science), JavaScript/TypeScript (React, Next, Vue, Angular, Node, Express, NestJS), C#/.NET (ASP.NET Core, EF Core), Go, Rust, Java, Kotlin, Ruby, PHP, Swift, C/C++, SQL. Frameworks and domains are detected from your manifests (package.json, pyproject/requirements, *.csproj, go.mod, Cargo.toml, ...) and questions adapt accordingly.
 
 ---
 
@@ -84,8 +86,10 @@ The hook automatically adapts its evaluation strategy based on the size and comp
 
 - **🎙️ Voice-First Interaction**: Reads questions aloud (`say`) and transcribes developer speech in real-time using local OpenAI Whisper (`sounddevice` / `pyaudio`). Press **[Tab]** to toggle speech capture.
 - **⚡ Ultra-Fast Execution with Groq**: Uses Groq-hosted `qwen/qwen3.8-27b` for sub-second summary and question generation.
-- **🛡️ Precise AST Filtering**: Parses `git diff -U0` hunks using Python's native `ast` engine. Only functions with modified lines are inspected—no false positives from untouched code in modified files.
-- **📦 Large-Change Skeletonizer**: Compresses long diffs (>35 lines) while preserving function signatures, control flow (`if/else`, `try/except`), and dependencies.
+- **🎯 Multi-Language Change Analysis**: Function-level change detection across 15+ languages — native Python `ast` for Python, line-anchored definition matching for TS/JS/C#/Go/Rust/Java and more. Only genuinely-touched functions become questions.
+- **🛡️ Security Lens (deterministic)**: Every staged change is scanned for security-relevant surfaces — injection sinks, auth flows, hardcoded secrets, unsafe deserialization, command injection, LLM-output trust, disabled TLS. Security-relevant changes always get one targeted security question (never a hard block).
+- **🔬 Evidence-Driven Questions**: Reuses your already-installed scanners (semgrep, gitleaks) and test-gap analysis as *question evidence* — scanner findings become "explain this finding" questions, inheriting scanner recall without false-positive-blocking commits.
+- **📚 Domain Practice Packs**: Framework- and domain-aware best-practice topics: React state/effect invariants, NestJS DTO validation boundaries, .NET async/CancellationToken and EF Core behavior, ML train/test separation and reproducibility, data-pipeline idempotency, SQL migration safety.
 - **🔄 Smart State Persistence**: Saves attempts in `.git/understanding_agent_state.json` hashed against the staged diff. If an attempt fails, developers can retry without regenerating or paying for redundant API calls.
 - **🔄 Targeted Follow-Up Engine**: If an answer shows partial understanding (score 25–70%), the hook generates a precise follow-up question targeting the missing concept, spoken and answered like any other question.
 - **📊 Opt-In Telemetry**: Dispatches session audit payloads to a self-hosted dashboard for team-wide code understanding metrics. Disabled by default; set `UNDERSTANDING_AGENT_TELEMETRY_URL` to enable.
@@ -115,11 +119,16 @@ understanding-agent-hook/
 └── understanding_agent/
     ├── __init__.py
     ├── cli.py                  # CLI orchestrator & pre-commit entrypoint
-    ├── change_detector.py      # AST-based git diff parser & scale metric calculator
+    ├── change_detector.py      # Multi-language git diff parser & scale metrics
+    ├── language_support.py     # Per-language function extraction (TS/JS/C#/Go/Rust/Java/...)
+    ├── stack_detector.py       # Manifest-driven language/framework/domain detection
+    ├── security_lens.py        # Deterministic security-surface classifier
+    ├── evidence_collector.py   # semgrep/gitleaks/test-gap evidence as question input
+    ├── practice_packs.py       # Domain best-practice question topics
     ├── code_graph.py           # Dependency graph analyzer (caller/callee relations)
     ├── context_builder.py      # Diff extractor & semantic skeletonizer (<35 lines)
     ├── change_summary.py       # Single-pass unified commit summarizer
-    ├── question_generator.py   # Capped 2-3 question generator with macro prompts
+    ├── question_generator.py   # Capped 2-3 question generator with hints & macro prompts
     ├── interaction.py          # Terminal UI, timer, TTS ('say'), & Dictation voice input
     ├── answer_evaluator.py     # Multi-metric semantic answer scoring
     ├── followup_generator.py   # Targeted follow-up question generator
@@ -131,7 +140,7 @@ understanding-agent-hook/
 
 ---
 
-> **Scope**: this hook analyzes **Python files only** (`.py`). Changes to other languages are not inspected.
+> **Scope**: code understanding questions are generated for the staged code files in the supported language list above. Docs/config-only commits are skipped.
 
 ## 🛠️ Tech Stack & Dependencies
 

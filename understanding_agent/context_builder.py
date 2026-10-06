@@ -1,9 +1,15 @@
 import subprocess
 import ast
 
+from .language_support import (
+    language_for,
+    extract_functions as generic_extract_functions,
+)
+
+
 class ContextBuilder:
     def build(self, changes: dict, graph) -> dict:
-        
+
         changed_code = changes.get("files", [])
         
         # Determine all functions that were modified in the commit
@@ -43,31 +49,32 @@ class ContextBuilder:
         structured_changes = []
         for f in changed_code:
             filepath = f["path"]
-            
+            language = language_for(filepath)
+
             # Get old and new source
             try:
                 old_source = subprocess.check_output(["git", "show", f"HEAD:{filepath}"], text=True, stderr=subprocess.DEVNULL)
             except subprocess.CalledProcessError:
                 old_source = ""
-                
+
             try:
                 new_source = subprocess.check_output(["git", "show", f":{filepath}"], text=True, stderr=subprocess.DEVNULL)
             except subprocess.CalledProcessError:
                 new_source = ""
-                
+
             for func in f.get("changed_functions", []):
                 func_name = func["name"]
                 added_calls = func.get("added_calls", [])
-                
+
                 dep_text = self._build_dependency_summary(func_name, added_calls, dep_summaries)
-                
+
                 # Extract function diff
                 if func_name == "<module>":
                     old_func_body = old_source
                     new_func_body = new_source
                 else:
-                    old_func_body = self._extract_function_source(old_source, func_name)
-                    new_func_body = self._extract_function_source(new_source, func_name)
+                    old_func_body = self._extract_function_source(old_source, func_name, language)
+                    new_func_body = self._extract_function_source(new_source, func_name, language)
                 
                 # Skip if the function body is unchanged (hunk overlap false-positive)
                 if old_func_body == new_func_body and old_func_body != "":
@@ -180,16 +187,25 @@ class ContextBuilder:
             pass
         return {"args": [], "returns": "unknown", "docstring": "No description.", "is_async": False}
         
-    def _extract_function_source(self, source: str, func_name: str) -> str:
+    def _extract_function_source(self, source: str, func_name: str, language: str = "python") -> str:
         if not source:
             return ""
-        try:
-            tree = ast.parse(source)
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
-                    return ast.get_source_segment(source, node) or ""
-        except SyntaxError:
-            pass
+        if language == "python":
+            try:
+                tree = ast.parse(source)
+                for node in ast.walk(tree):
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+                        return ast.get_source_segment(source, node) or ""
+            except SyntaxError:
+                pass
+            return ""
+        # Non-Python: slice the function's heuristic span from the source
+        for fn in generic_extract_functions(source, language):
+            if fn["name"] == func_name:
+                lines = source.splitlines()
+                start = fn["start_line"] - 1
+                end = min(fn["end_line"], len(lines))
+                return "\n".join(lines[start:end])
         return ""
         
     def _build_dependency_summary(self, func_name: str, direct_calls: list, dep_summaries: dict) -> str:

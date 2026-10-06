@@ -3,6 +3,12 @@ import ast
 import os
 from typing import List, Dict, Any, Set
 
+from .language_support import (
+    language_for,
+    functions_touching_lines as generic_functions_touching_lines,
+    extract_functions as generic_extract_functions,
+)
+
 
 class ChangeDetector:
     def detect(self) -> Dict[str, Any]:
@@ -25,14 +31,20 @@ class ChangeDetector:
             status = parts[0]
             path = parts[-1]
 
-            if not path.endswith('.py') or status == 'D':
+            if status == 'D':
                 continue
 
-            changed_funcs = self._analyze_ast_changes(path, status)
+            language = language_for(path)
+            if not language:
+                # Not a recognized code file — still tracked as a change (docs, config,
+                # SQL, notebooks get language tags; truly unknown extensions are skipped)
+                continue
+
+            changed_funcs = self._analyze_changes(path, status, language)
             files.append({
                 "path": path,
                 "status": "modified" if status == 'M' else "added",
-                "language": "python",
+                "language": language,
                 "changed_functions": changed_funcs
             })
 
@@ -71,10 +83,8 @@ class ChangeDetector:
             }
         }
 
-    def _analyze_ast_changes(self, filepath: str, status: str) -> List[Dict[str, Any]]:
-        """
-        Identify only the functions that were actually changed (added, modified, or deleted).
-        """
+    def _analyze_changes(self, filepath: str, status: str, language: str) -> List[Dict[str, Any]]:
+        """Identify functions changed (added, modified, or deleted), any language."""
         try:
             new_content = subprocess.check_output(
                 ["git", "show", f":{filepath}"], text=True, stderr=subprocess.DEVNULL
@@ -90,34 +100,50 @@ class ChangeDetector:
             old_content = ""
 
         if status == 'added':
-            funcs = self._all_functions(new_content)
-            if not funcs and new_content.strip():
+            if language == "python":
+                funcs = self._all_functions(new_content)
+                if not funcs and new_content.strip():
+                    return [{"name": "<module>", "change_type": "added", "added_calls": []}]
+                return funcs
+            generic = generic_extract_functions(new_content, language)
+            if not generic and new_content.strip():
                 return [{"name": "<module>", "change_type": "added", "added_calls": []}]
-            return funcs
+            return [{"name": g["name"], "change_type": "added",
+                     "added_calls": []} for g in generic]
 
-        # For modified files, filter specifically by changed line numbers in git diff
+        # For modified files, filter by changed line numbers in git diff
         changed_lines = self._get_changed_line_numbers(filepath)
-        touched = self._functions_touching_lines(new_content, changed_lines)
+        if language == "python":
+            touched = self._functions_touching_lines(new_content, changed_lines)
+        else:
+            touched = generic_functions_touching_lines(new_content, language, changed_lines)
         if touched:
             return touched
 
-        # Check if functions were deleted
-        old_funcs = self._all_functions(old_content)
-        new_funcs = self._all_functions(new_content)
-        new_names = {f["name"] for f in new_funcs}
-        deleted = [f for f in old_funcs if f["name"] not in new_names]
-        if deleted:
-            for d in deleted:
-                d["change_type"] = "deleted"
-            return deleted
+        # Check for deleted functions
+        if language != "python":
+            old_fn = {g["name"] for g in generic_extract_functions(old_content, language)}
+            new_fn = {g["name"] for g in generic_extract_functions(new_content, language)}
+            deleted_names = old_fn - new_fn
+            if deleted_names:
+                return [{"name": n, "change_type": "deleted", "added_calls": []} for n in deleted_names]
+            # No exact function match — treat as module-level change
+            if new_content.strip():
+                return [{"name": "<module>", "change_type": "modified", "added_calls": []}]
+            return []
 
-        # If modified lines don't fall neatly into an existing function, mark as module-level change
+        old_names = {f["name"] for f in self._all_functions(old_content)}
+        new_names = {f["name"] for f in self._all_functions(new_content)}
+        deleted = old_names - new_names
+        if deleted:
+            return [{"name": n, "change_type": "deleted", "added_calls": []} for n in deleted]
+
         if new_content.strip():
             return [{"name": "<module>", "change_type": "modified", "added_calls": []}]
 
         return []
 
-   
+
     # Helpers
 
 

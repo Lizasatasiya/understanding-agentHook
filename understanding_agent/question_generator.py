@@ -20,24 +20,26 @@ class QuestionGenerator:
     }
     _VALID_TYPES = set(TIME_LIMITS.keys())
 
-    def generate(self, context: dict, summary: dict) -> list:
+    def generate(self, context: dict, summary: dict, hints: dict | None = None) -> list:
         api_key = load_groq_api_key()
         if not api_key:
             print("\n  \033[93m⚠️  [LLM] Warning: GROQ_API_KEY is not set.\033[0m")
             print("  \033[2mSet GROQ_API_KEY in your .env or shell (export GROQ_API_KEY=\"gsk_...\") to generate custom questions.\033[0m\n", flush=True)
-            return self._fallback(context)
+            return self._fallback(context, hints)
 
-        prompt = self._build_prompt(context, summary)
+        prompt = self._build_prompt(context, summary, hints)
         is_large = context.get("is_large_change", False)
         questions = self._call_groq(api_key, prompt, is_large=is_large)
         if questions:
             return questions
-        return self._fallback(context)
+        return self._fallback(context, hints)
 
-    def _build_prompt(self, context: dict, summary: dict) -> str:
+    def _build_prompt(self, context: dict, summary: dict, hints: dict | None = None) -> str:
         if context.get("is_large_change", False):
-            return self._build_macro_prompt(context, summary)
+            return self._build_macro_prompt(context, summary, hints)
+        return self._build_micro_prompt(context, summary, hints)
 
+    def _build_micro_prompt(self, context: dict, summary: dict, hints: dict | None = None) -> str:
         valid_types = ", ".join(f'"{t}"' for t in self.TIME_LIMITS)
         lines = [
             "You are a senior developer reviewing a code change.",
@@ -69,6 +71,10 @@ class QuestionGenerator:
             lines.append(f"{f.get('dependency_summary', '')}")
             lines.append("")
 
+        # Domain / security / evidence hints (multi-language & stack-aware)
+        if hints:
+            lines += self._hint_lines(hints)
+
         lines += [
             "",
             "## Output Format",
@@ -83,7 +89,7 @@ class QuestionGenerator:
         ]
         return "\n".join(lines)
 
-    def _build_macro_prompt(self, context: dict, summary: dict) -> str:
+    def _build_macro_prompt(self, context: dict, summary: dict, hints: dict | None = None) -> str:
         """
         Build an architectural prompt for substantial commits (>80-100 lines or multi-file).
         Focuses on data flow, component interactions, failure modes, and system invariants.
@@ -122,6 +128,10 @@ class QuestionGenerator:
                 lines.append(f"Dependencies: {dep_summary}")
             lines.append("")
 
+        # Domain / security / evidence hints (multi-language & stack-aware)
+        if hints:
+            lines += self._hint_lines(hints)
+
         valid_types = ", ".join(f'"{t}"' for t in self.TIME_LIMITS)
         lines += [
             "## Output Format",
@@ -135,6 +145,37 @@ class QuestionGenerator:
             'Example: [{"question_id": "q1", "question": "Why is stock reserved before payment rather than after?", "type": "System Architecture", "expected_concepts": ["prevents overselling", "ensures availability"], "evaluation_criteria": ["understands reservation order"]}]'
         ]
         return "\n".join(lines)
+
+    def _hint_lines(self, hints: dict) -> list:
+        """Render stack/security/evidence/practice hints into prompt lines."""
+        out = ["\n## Question Guidance (detected stack & findings)"]
+
+        stack = (hints or {}).get("stack") or {}
+        if stack.get("frameworks"):
+            out.append(f"Detected stack: {', '.join(stack['frameworks'])} ({', '.join(stack.get('languages', [])[:3])}); domains: {', '.join(stack.get('domains', []) or ['general'])}")
+
+        sec = (hints or {}).get("security") or {}
+        if sec.get("include_security_question"):
+            out.append("MANDATORY: include exactly ONE security question. It must be answerable by the author and target:")
+            for ask in (sec.get("ask_about") or [])[:3]:
+                out.append(f"  - {ask}")
+            if sec.get("top_file"):
+                out.append(f"  Focus file: {sec['top_file']}")
+
+        ev = (hints or {}).get("evidence") or {}
+        for f in (ev.get("evidence_findings") or [])[:3]:
+            out.append(f"Tool finding ({f['source']}): {f['detail']}. Consider asking the author to address it.")
+        if ev.get("has_high_severity_evidence"):
+            out.append("  Prioritize asking about these tool findings over generic topics.")
+
+        pr = (hints or {}).get("practices") or {}
+        if pr.get("prompt_hints"):
+            out.append("Domain best-practice topics to draw from (pick the most relevant 1-2):")
+            for ph in (pr.get("prompt_hints") or [])[:8]:
+                out.append(f"  - {ph}")
+
+        out.append("")
+        return out
 
     def _call_groq(self, api_key: str, prompt: str, is_large: bool = False) -> list:
         """Call Groq API and robustly parse question array from response."""
@@ -214,8 +255,52 @@ class QuestionGenerator:
         except Exception as e:
             return []
 
-    def _fallback(self, context: dict = None) -> list:
-        if (context or {}).get("is_large_change", False):
+    def _fallback(self, context: dict | None = None, hints: dict | None = None) -> list:
+        context = context or {}
+        sec = (hints or {}).get("security") or {}
+        ev = (hints or {}).get("evidence") or {}
+
+        # Security-aware fallback: if the lens flagged risk, ask about it directly
+        if sec.get("include_security_question"):
+            focus = ", ".join(sec.get("focus_areas", [])[:2]) or "the security implications"
+            target = sec.get("top_file") or "this change"
+            base = [
+                {
+                    "question_id": "q1",
+                    "question": f"Your change touches {focus} in {target}. What are the security risks and how does your code handle them?",
+                    "type": "Invariants",
+                    "time_limit": 60,
+                    "expected_concepts": sec.get("focus_areas", []),
+                    "evaluation_criteria": ["understands security implications of the change"],
+                    "is_fallback": True
+                },
+            ]
+            # Evidence finding as a second question when present
+            findings = ev.get("evidence_findings") or []
+            if findings:
+                f0 = findings[0]
+                base.append({
+                    "question_id": "q2",
+                    "question": f"A scan flagged: {f0['detail']}. Can you explain and address this finding?",
+                    "type": "Edge Cases",
+                    "time_limit": 60,
+                    "expected_concepts": ["understands the flagged finding", "knows the mitigation"],
+                    "evaluation_criteria": ["can address tool findings"],
+                    "is_fallback": True
+                })
+            else:
+                base.append({
+                    "question_id": "q2",
+                    "question": "What input or failure case could make this code behave incorrectly, and what happens then?",
+                    "type": "Edge Cases",
+                    "time_limit": 60,
+                    "expected_concepts": ["handles error states", "validates input"],
+                    "evaluation_criteria": ["understands edge cases"],
+                    "is_fallback": True
+                })
+            return base
+
+        if context.get("is_large_change", False):
             files = [f.get("file") for f in (context or {}).get("file_summary", [])]
             scope = f"across {len(files)} files" if files else "in this commit"
             return [
