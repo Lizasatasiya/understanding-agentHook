@@ -46,51 +46,57 @@ flowchart TD
     A["git commit -m '...'"] --> B["1. Environment & Change Detection\n(AST Hunk Filtering + Scale Metrics)"]
     B --> C["2. CodeGraph Builder\n(Extract Callers, Callees & Signatures)"]
     C --> D["3. Context Builder & Skeletonizer\n(Compress Large Diffs > 35 lines)"]
-    D --> E{Commit Scale Check}
     
-    E -- "< 80 LoC (Micro)" --> F1["Micro Pipeline\n- Granular Function Diff\n- Line-Level Logic Questions"]
-    E -- ">= 80 LoC (Macro)" --> F2["Macro Pipeline\n- Single-Pass Architectural Summary\n- High-Leverage System Questions (2-3)"]
+    D --> G{"Credential Gate\n(deterministic, no LLM)"}
+    G -- "live key staged" --> X["⛔ Commit Blocked Immediately\n(zero prompts, zero LLM calls)"]
+    G -- "clean" --> E{Commit Scale Check}
     
-    F1 --> G["4. Question Generation (Groq API)"]
-    F2 --> G
+    E -- "< 100 LoC (Small)" --> F1["Micro Pipeline\n- Granular Function Diff\n- 2-3 Line-Level Logic Questions"]
+    E -- "100-250 LoC (Medium)" --> F2["Medium Pipeline\n- 3-5 Questions"]
+    E -- "> 250 LoC (Large)" --> F3["Macro Pipeline\n- 6-8 Architectural Questions"]
     
-    G --> H["5. Interactive Terminal UI\n- macOS 'say' TTS\n- [Tab] Mic Input (Local Whisper STT)\n- ANSI Live Countdown Timer"]
-    H --> I["6. Answer Evaluator\n(Rubric: Correctness, Understanding, Reasoning, Specificity)"]
+    F1 --> H["4. Coding Standards Audit\n(deterministic) → fix or proceed"]
+    F2 --> H
+    F3 --> H
+    H --> I["5. Summary + Question Generation\n(via central LLM provider manager)"]
+    I --> J["6. Interactive Terminal UI\n- macOS 'say' TTS\n- [Tab] Mic Input (Local Whisper STT)\n- ANSI Live Countdown Timer"]
+    J --> K["7. Answer Evaluator\n(Rubric: Correctness, Understanding, Reasoning, Specificity)"]
     
-    I --> J{Score >= 75%?}
-    J -- "Yes" --> K["✅ Commit Allowed"]
-    J -- "No" --> L["⚠️ Optional Targeted Follow-Up\n(Clarifies Missing Concepts)"]
-    L --> M{Combined Score >= 75%?}
-    M -- "Yes" --> K
-    M -- "No" --> N["⛔ Commit Aborted (Attempt Saved for Retry)"]
+    K --> L{Score >= 75%?}
+    L -- "Yes" --> M["✅ Commit Allowed"]
+    L -- "No" --> N["⛔ Commit Aborted (Attempt Saved for Retry)"]
 ```
 
 ---
 
-## ⚡ Dual-Mode Engine: Micro vs. Macro Changes
+## ⚡ Adaptive Question Scaling: Small vs. Medium vs. Large Changes
 
 The hook automatically adapts its evaluation strategy based on the size and complexity of the commit:
 
-| Feature | Micro Mode (`< 80 LoC`) | Macro Mode (`≥ 80 LoC` or multi-file) |
-|---|---|---|
-| **Primary Focus** | Line-by-line logic, return values, local loops | System architecture, component coordination, data contracts |
-| **Diff Representation** | Full per-function unified diff | Semantic skeleton (signatures, branches, calls, omitting boilerplate) |
-| **Summarization** | Per-function summary | **Single-pass unified architectural summary** (1 fast Groq call) |
-| **Questions Count** | 2–3 focused questions | **Strictly capped at 2–3 questions** (never 5–7 to prevent fatigue) |
-| **Terminal UI** | Function diff view | **Architectural Change Dashboard** (no terminal buffer overflow) |
-| **Evaluation Rubric** | Specific line & data accuracy | Conceptual grasp of state invariants, error boundaries & system intent |
+| Feature | Small (`< 100 LoC`) | Medium (`100–250 LoC`) | Large (`> 250 LoC`) |
+|---|---|---|---|
+| **Primary Focus** | Line-by-line logic, return values, local loops | Cross-function data flow, component coordination | System architecture, data contracts, failure modes |
+| **Questions** | 2–3 focused questions | 3–5 questions | 6–8 architectural questions (never essay-length) |
+| **Diff Representation** | Full per-function unified diff | Compressed per-function diff | Semantic skeleton (signatures, branches, calls) |
+| **Question Style** | Specific, under 25 words, answerable in 30–45s | Same constraints, broader scope | Architectural, no syntax trivia |
+| **Evaluation Rubric** | Specific line & data accuracy | Component interaction accuracy | Conceptual grasp of state invariants, error boundaries & system intent |
+
+Within every scale, ~80% of questions target the actual diff and at most ~20% address flagged coding-standards violations.
 
 ---
 
 ## 🚀 Key Features
 
 - **🎙️ Voice-First Interaction**: Reads questions aloud (`say`) and transcribes developer speech in real-time using local OpenAI Whisper (`sounddevice` / `pyaudio`). Press **[Tab]** to toggle speech capture.
-- **⚡ Ultra-Fast Execution with Nous Research**: Uses Nous Research OpenAI-compatible Subscription API (`deepseek/deepseek-v4-flash` or custom models) for sub-second summary and question generation.
+- **🔌 Central LLM Provider Manager**: One module (`llm_manager.py`) resolves provider, model, base URL, and API key. Switch between Nous Research, Groq, OpenAI, OpenRouter, Together, Ollama (local), or ANY OpenAI-compatible endpoint by changing ONE environment variable — no code changes, no five-variable dances.
+- **⚡ Fast, Resilient Execution**: Sub-second question generation with the configured provider; retries with exponential backoff on transient errors; robust JSON extraction from reasoning models.
 - **🎯 Multi-Language Change Analysis**: Function-level change detection across 15+ languages — native Python `ast` for Python, line-anchored definition matching for TS/JS/C#/Go/Rust/Java and more. Only genuinely-touched functions become questions.
-- **🛡️ Security Lens (deterministic)**: Every staged change is scanned for security-relevant surfaces — injection sinks, auth flows, hardcoded secrets, unsafe deserialization, command injection, LLM-output trust, disabled TLS, cleartext HTTP. Security-relevant changes always get one targeted security question (never a hard block). **Exception: stealable credentials hard-block the commit before questions are asked** — git history is permanent, so no answer can make committing a real credential safe. The gate covers: 25+ vendor-pinned token formats (AWS, Google, Stripe, Anthropic, GitHub, GitLab, npm, PyPI, Slack, Telegram, SendGrid, Twilio, ...), private key material, connection strings with inline credentials (`postgres://user:pass@...`), basic-auth URLs, high-entropy values assigned to secret-named variables (Shannon-entropy gated, with a `# pragma: allow-secret` escape hatch), and **staged key files** (`.pem`, `.p12`, `id_rsa`, `.npmrc`, `.netrc`, ... — detected by filename alone, contents never read). Exact vendor formats block even in test files (a real leaked key is real anywhere); fixture-shaped values in tests stay exempt. The gate scans the raw staged diff (module-level code included), redacts secrets in its output, suggests `git restore --staged <file>` per finding, calls out staged-but-gitignored files, and can be disabled per-commit with `UNDERSTANDING_AGENT_SECURITY_GATE=off`.
+- **🛡️ Security Lens (deterministic)**: Every staged change is scanned for security-relevant surfaces — injection sinks, auth flows, hardcoded secrets, unsafe deserialization, command injection, LLM-output trust, disabled TLS, cleartext HTTP. Security-relevant changes always get one targeted security question (never a hard block). **Exception: stealable credentials hard-block the commit BEFORE any prompt or LLM call** — git history is permanent, so no answer can make committing a real credential safe. The gate covers: 25+ vendor-pinned token formats (AWS, Google, Stripe, Anthropic, GitHub, GitLab, npm, PyPI, Slack, Telegram, SendGrid, Twilio, ...), private key material, connection strings with inline credentials (`postgres://user:***@...`), basic-auth URLs, high-entropy values assigned to secret-named variables (Shannon-entropy gated, with a `# pragma: allow-secret` escape hatch), and **staged key files** (`.pem`, `.p12`, `id_rsa`, `.npmrc`, `.netrc`, ... — detected by filename alone, contents never read). Exact vendor formats block even in test files (a real leaked key is real anywhere); fixture-shaped values in tests stay exempt. The gate scans the raw staged diff (module-level code included), redacts secrets in its output, suggests `git restore --staged <file>` per finding, calls out staged-but-gitignored files, and can be disabled per-commit with `UNDERSTANDING_AGENT_SECURITY_GATE=off`.
+- **🚫 No Wasted LLM Calls**: The credential gate and coding-standards audit run BEFORE any LLM call. A blocked credential or a "fix violations" choice costs zero API spend. Same-diff retries reuse cached questions.
+- **🔍 Honest Verification Marking**: If the LLM is unreachable, the hook fails open with fallback questions, but the session is recorded as `llm-unverified` and the terminal says so — dashboards never show an offline fallback pass as a verified pass.
 - **🔬 Evidence-Driven Questions**: Reuses your already-installed scanners (semgrep, gitleaks) and test-gap analysis as *question evidence* — scanner findings become "explain this finding" questions, inheriting scanner recall without false-positive-blocking commits.
 - **📚 Domain Practice Packs**: Framework- and domain-aware best-practice topics: React state/effect invariants, NestJS DTO validation boundaries, .NET async/CancellationToken and EF Core behavior, ML train/test separation and reproducibility, data-pipeline idempotency, SQL migration safety.
-- **🔄 Smart State Persistence**: Saves attempts in `.git/understanding_agent_state.json` hashed against the staged diff. If an attempt fails, developers can retry without regenerating or paying for redundant API calls.
+- **🔄 Smart State Persistence**: Saves attempts in `.git/understanding_agent_state.json` hashed against the staged diff. If an attempt fails, developers can retry without regenerating or paying for redundant API calls. The sessions log is auto-pruned (default: last 500 sessions).
 - **🔄 Targeted Follow-Up Engine**: If an answer shows partial understanding (score 25–70%), the hook generates a precise follow-up question targeting the missing concept, spoken and answered like any other question.
 - **📊 Opt-In Telemetry**: Dispatches session audit payloads to a self-hosted dashboard for team-wide code understanding metrics. Disabled by default; set `UNDERSTANDING_AGENT_TELEMETRY_URL` to enable.
 
@@ -98,14 +104,17 @@ The hook automatically adapts its evaluation strategy based on the size and comp
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `NOUS_API_KEY` | — | Nous Research Portal API key (required for AI questions; `GROQ_API_KEY` supported as fallback) |
-| `NOUS_BASE_URL` | `https://inference-api.nousresearch.com/v1` | OpenAI-compatible endpoint URL for Nous Research |
-| `UNDERSTANDING_AGENT_MODEL` / `NOUS_MODEL` | `deepseek/deepseek-v4-flash` | LLM model used for summaries, questions, and evaluation |
-| `UNDERSTANDING_AGENT_FAIL_MODE` | `open` | `open`: if the LLM is unreachable, the commit is allowed with a warning. `closed`: the commit is blocked (strict verification) |
+| `UNDERSTANDING_AGENT_PROVIDER` | `nous` | LLM provider preset: `nous`, `groq`, `openai`, `openrouter`, `together`, `ollama`, `custom` |
+| `UNDERSTANDING_AGENT_MODEL` | preset default | Model id for any provider (e.g. `deepseek/deepseek-v4-flash` on Nous, `llama-3.3-70b-versatile` on Groq) |
+| `UNDERSTANDING_AGENT_BASE_URL` | preset default | Override to point at ANY OpenAI-compatible endpoint (this alone enables custom providers) |
+| `UNDERSTANDING_AGENT_API_KEY` | — | API key for the active provider. Legacy `NOUS_API_KEY` / `GROQ_API_KEY` still work |
+| `UNDERSTANDING_AGENT_FAIL_MODE` | `open` | `open`: if the LLM is unreachable, the commit is allowed with a warning and marked `llm-unverified`. `closed`: the commit is blocked (strict verification) |
 | `UNDERSTANDING_AGENT_TELEMETRY_URL` | unset (off) | Endpoint to POST session audit payloads to (e.g. `http://dashboard.internal:8000/understanding-session`) |
 | `UNDERSTANDING_AGENT_SECURITY_GATE` | on | Hard-blocks commits containing live credentials (AWS keys, private keys, API tokens). `off` disables the credential gate for a commit (questions still run) |
+| `UNDERSTANDING_AGENT_MAX_SESSIONS` | `500` | Cap on persisted session records in `.git/understanding_sessions.json`. Values < 2 disable pruning |
+| `UNDERSTANDING_AGENT_DISABLE_THINKING` | on | Suppresses model thinking/reasoning (sends `reasoning_effort=none` on Nous). Bench-measured: deepseek-v4-flash drops from ~51s to ~10s per call. Set `off` to re-enable thinking |
 
-**Privacy note**: your staged diff (source code) is sent to Nous Research for question generation and evaluation — that is how the hook works. It is never sent anywhere else unless you explicitly set `UNDERSTANDING_AGENT_TELEMETRY_URL`.
+**Privacy note**: your staged diff (source code) is sent to the configured LLM provider for question generation and evaluation — that is how the hook works. It is never sent anywhere else unless you explicitly set `UNDERSTANDING_AGENT_TELEMETRY_URL`.
 
 ---
 
@@ -115,29 +124,35 @@ The hook automatically adapts its evaluation strategy based on the size and comp
 understanding-agent-hook/
 ├── .pre-commit-hooks.yaml      # Hook definitions for the pre-commit framework
 ├── LICENSE                     # MIT License
-├── setup.py                    # Package manifest & console script entrypoint
-├── tests/
-│   └── test_large_changes.py   # Unit test suite verifying dual-mode pipeline
+├── PLAN.md                     # PoC → production hardening plan & status
+├── setup.py                    # Package manifest & console script entrypoints
+├── tests/                      # 160+ unit and e2e tests (gate matrix, standards, evaluator, attempts)
 └── understanding_agent/
     ├── __init__.py
     ├── cli.py                  # CLI orchestrator & pre-commit entrypoint
     ├── change_detector.py      # Multi-language git diff parser & scale metrics
     ├── language_support.py     # Per-language function extraction (TS/JS/C#/Go/Rust/Java/...)
     ├── stack_detector.py       # Manifest-driven language/framework/domain detection
-    ├── security_lens.py        # Deterministic security-surface classifier
+    ├── security_lens.py        # Deterministic security classifier + credential gate
+    ├── coding_standards.py     # Deterministic coding-standards audit (changed lines only)
     ├── evidence_collector.py   # semgrep/gitleaks/test-gap evidence as question input
     ├── practice_packs.py       # Domain best-practice question topics
     ├── code_graph.py           # Dependency graph analyzer (caller/callee relations)
-    ├── context_builder.py      # Diff extractor & semantic skeletonizer (<35 lines)
+    ├── context_builder.py     # Diff extractor & semantic skeletonizer (<35 lines)
     ├── change_summary.py       # Single-pass unified commit summarizer
-    ├── question_generator.py   # Capped 2-3 question generator with hints & macro prompts
+    ├── question_generator.py   # Scale-aware question generator with hints & macro prompts
+    ├── llm_manager.py          # Central LLM provider manager (presets, plug-and-play)
+    ├── api_utils.py            # Resilient HTTP client, retry, & JSON extractors
     ├── interaction.py          # Terminal UI, timer, TTS ('say'), & Dictation voice input
     ├── answer_evaluator.py     # Multi-metric semantic answer scoring
     ├── followup_generator.py   # Targeted follow-up question generator
     ├── evaluation_models.py    # Dataclasses for evaluation scoring
     ├── environment_detector.py # Repository, branch, and author detector
+    ├── commit_context.py       # Head-commit / attempt-key helpers
+    ├── session_store.py        # Session persistence, reconciliation & pruning
+    ├── server.py               # FastAPI dashboard API (opt-in)
     ├── server_client.py        # Opt-in telemetry client (self-hosted dashboard)
-    └── api_utils.py            # Resilient Groq HTTP client, retry, & JSON extractors
+    └── ui/                     # Vanilla JS/CSS single-page dashboard (index.html, app.js, style.css)
 ```
 
 ---
@@ -147,19 +162,18 @@ understanding-agent-hook/
 ## 🛠️ Tech Stack & Dependencies
 
 ### Core Python Runtime
-- **Python 3.10+** (Tested on Python 3.12 & 3.14 on macOS)
-- **Standard Library Zero-Dependency Core**: The core git parsing, AST analysis, terminal UI, and HTTP client use native Python modules (`ast`, `subprocess`, `hashlib`, `http.client`, `ssl`, `difflib`, `termios`, `tty`, `select`).
+- **Python 3.10+** (enforced via `python_requires` in setup.py; tested on 3.12 & 3.14 on macOS)
+- **Standard Library Zero-Dependency Core**: The core git parsing, AST analysis, LLM transport, terminal UI, and HTTP client use native Python modules (`ast`, `subprocess`, `hashlib`, `http.client`, `ssl`, `difflib`, `termios`, `tty`, `select`).
 
 ### LLM Infrastructure
-- **Provider**: [Nous Research Portal](https://portal.nousresearch.com/) (OpenAI-compatible Subscription API)
-- **Model**: `deepseek/deepseek-v4-flash` (or any model from the Nous catalog like `meta-llama/llama-3.1-8b-instruct`) — override with `NOUS_MODEL` or `UNDERSTANDING_AGENT_MODEL`
-- **HTTP Layer**: Native `http.client.HTTPSConnection` with socket cleanup and robust JSON extraction.
+- **Provider**: any OpenAI-compatible API — Nous Research (default), Groq, OpenAI, OpenRouter, Together, Ollama/local, or a custom endpoint via `UNDERSTANDING_AGENT_BASE_URL`
+- **Default model**: `qwen/qwen3-coder-30b-a3b-instruct` on Nous — override with `UNDERSTANDING_AGENT_MODEL` (or legacy `NOUS_MODEL` / `GROQ_MODEL`)
+- **Configuration**: one central manager (`llm_manager.py`) — provider, model, base URL, and key resolution in one place; switching platforms is one env var
+- **HTTP Layer**: Native `http.client.HTTPSConnection` with socket cleanup, retry + exponential backoff, and robust JSON extraction (handles reasoning tags, code fences, trailing commas)
 
-### Voice & Audio Stack (Optional / Plug-and-Play)
-- **Text-to-Speech (TTS)**: Built-in macOS `say` utility (no external package needed).
-- **Speech-to-Text (STT)**: [OpenAI Whisper](https://github.com/openai/whisper) (`base` model running locally).
-- **Audio Capture**: `sounddevice` or `pyaudio` + `numpy`.
-- **System Audio Backend**: `ffmpeg` (for macOS AVFoundation capture).
+### Optional Extras
+- **Voice** (`pip install -e ".[voice]"`): `sounddevice`, `openai-whisper`, `numpy` + system `ffmpeg`
+- **Dashboard UI** (`pip install -e ".[ui]"`): `fastapi`, `uvicorn`, `pydantic>=2`
 
 ---
 
@@ -171,12 +185,15 @@ git clone https://github.com/Lizasatasiya/understanding-agentHook.git
 cd understanding-agentHook
 ```
 
-### 2. Configure Your Nous Research API Key
-Obtain an API key from [portal.nousresearch.com](https://portal.nousresearch.com/) and export it:
+### 2. Configure Your LLM Provider
+Obtain an API key from [portal.nousresearch.com](https://portal.nousresearch.com/) (default) or use any OpenAI-compatible provider:
 ```bash
-export NOUS_API_KEY="sk-nous-..."
+export UNDERSTANDING_AGENT_API_KEY="..."
+# Optional: switch provider/model with one variable each
+# export UNDERSTANDING_AGENT_PROVIDER=groq
+# export UNDERSTANDING_AGENT_MODEL=llama-3.3-70b-versatile
 ```
-*(The hook also reads `.env` / `.env.local` from the current directory, the git repository root, and `~/.config/understanding-agent/.env`. Existing `GROQ_API_KEY` is also supported as a fallback.)*
+*(The hook also reads `.env` / `.env.local` from the current directory, the git repository root, and `~/.config/understanding-agent/.env`. Legacy `NOUS_API_KEY` / `GROQ_API_KEY` are still honored.)*
 
 ### 3. Install Voice Dependencies (macOS)
 ```bash
@@ -244,14 +261,18 @@ When `pre-commit` runs hooks, it runs inside an isolated virtualenv sandbox. The
 
 ## 💡 Design Decisions & Trade-Offs
 
-1. **Why Groq over local LLMs?**
-   - Git pre-commit hooks run synchronously. Local 7B/14B models on CPU/GPU take 8–15 seconds to load and generate tokens. Groq delivers complete summaries and questions in **< 1.5 seconds**, keeping commit latency negligible.
-2. **Why Cap Questions at 2–3 for Large Commits?**
-   - Generating 7 questions for a 200 LoC commit turns a git commit into a 10-minute exam. Developers will inevitably bypass the hook (`git commit --no-verify`). Capping at 2–3 high-level architectural questions provides rigorous verification while respecting developer velocity.
-3. **Why Semantic Diff Skeletons?**
+1. **Why a hosted OpenAI-compatible API over local LLMs?**
+   - Git pre-commit hooks run synchronously. Local 7B/14B models on CPU/GPU take 8–15 seconds to load and generate tokens. Hosted inference delivers complete summaries and questions in **< 1.5 seconds**, keeping commit latency negligible. The provider manager makes the choice reversible per-team: point `UNDERSTANDING_AGENT_PROVIDER=ollama` at a local server and nothing else changes.
+2. **Why scale questions 2–8 instead of a flat 2–3?**
+   - A 500-LoC architectural change genuinely needs more coverage than a 20-LoC fix, but an unbounded exam turns every commit into a 10-minute exam — developers would bypass the hook (`git commit --no-verify`). The scale ladder (2–3 / 3–5 / 6–8) with hard length limits ("under 25 words, answerable in 30–45 seconds") balances rigor against velocity.
+3. **Why hard-block credentials before asking questions?**
+   - An oral defense verifies understanding; it cannot verify that a secret is safe to leak. Git history is permanent and cloned everywhere — the only safe time to stop a credential is before the commit object exists. So the gate runs before any prompt and costs zero LLM spend.
+4. **Why fail open (by default) but mark the session `llm-unverified`?**
+   - A third-party LLM outage must not freeze every commit in the org — that turns a hook into an outage amplifier. But failing open silently would let dashboards claim verified commits that were scored by a keyword-matching fallback. The `llm-unverified` marker keeps the fail-open ergonomics AND the telemetry honest. Strict teams set `UNDERSTANDING_AGENT_FAIL_MODE=closed`.
+5. **Why deterministic checks before any LLM call?**
+   - The credential gate, coding-standards audit, security lens, and evidence collection are pure pattern/AST analysis — fast, free, and reproducible. Running them first means blocked commits spend nothing, and the LLM only ever sees diffs that already passed the deterministic filters.
+6. **Why semantic diff skeletons for large diffs?**
    - Diffs > 50 lines consume thousands of tokens, triggering LLM "lost in the middle" hallucinations. Compressing diffs to signatures, branch conditions, and external calls focuses the LLM on architecture rather than boilerplate syntax.
-4. **Why Native macOS `say` for TTS?**
-   - Zero-latency, zero-cost, zero-dependency audio playback that runs natively on all macOS developer machines.
 
 ---
 

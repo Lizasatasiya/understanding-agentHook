@@ -13,7 +13,8 @@ class AnswerEvaluator:
                 "score": 0,
                 "evaluation": "No answer provided (empty or timed out).",
                 "follow_up_required": False,
-                "missing_concepts": []
+                "missing_concepts": [],
+                "llm_verified": False,
             })
 
         # Check if load_groq_api_key or load_nous_api_key is patched by mock
@@ -29,7 +30,8 @@ class AnswerEvaluator:
                 "score": 0,
                 "evaluation": "Cannot verify understanding: NOUS_API_KEY is not configured and UNDERSTANDING_AGENT_FAIL_MODE=closed.",
                 "follow_up_required": False,
-                "missing_concepts": []
+                "missing_concepts": [],
+                "llm_verified": False,
             })
 
         prompt = self._build_prompt(question, answer, context, summary, env=env)
@@ -42,7 +44,7 @@ class AnswerEvaluator:
         # unless UNDERSTANDING_AGENT_FAIL_MODE=closed is explicitly set.
         if fail_open_enabled():
             return self._evaluate_fallback(question, answer, is_offline=False)
-        return EvaluationResult({"score": 50, "evaluation": "Failed to evaluate answer", "follow_up_required": False})
+        return EvaluationResult({"score": 50, "evaluation": "Failed to evaluate answer", "follow_up_required": False, "llm_verified": False})
 
     def _evaluate_fallback(self, question: dict, answer: dict, is_offline: bool = False) -> EvaluationResult:
         """Intelligent semantic concept-matching fallback when LLM is unavailable."""
@@ -67,7 +69,8 @@ class AnswerEvaluator:
                 "incorrect_claims": [],
                 "evaluation": f"{status_prefix} Answer is dismissive or lacks technical substance.",
                 "confidence": 0.8,
-                "follow_up_required": True
+                "follow_up_required": True,
+                "llm_verified": False
             })
 
         covered = []
@@ -117,7 +120,8 @@ class AnswerEvaluator:
             "incorrect_claims": [],
             "evaluation": eval_text,
             "confidence": 0.8,
-            "follow_up_required": follow_up
+            "follow_up_required": follow_up,
+            "llm_verified": False
         })
 
     def _build_prompt(self, question: dict, answer: dict, context: dict, summary: dict, env: dict | None = None) -> str:

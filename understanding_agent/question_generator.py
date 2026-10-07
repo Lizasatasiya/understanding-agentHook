@@ -151,14 +151,14 @@ class QuestionGenerator:
             print("\n  \033[93m[LLM] Warning: NOUS_API_KEY is not set.\033[0m")
             print("  \033[2mSet NOUS_API_KEY in your .env or shell (export NOUS_API_KEY=\"...\") to generate custom questions.\033[0m\n", flush=True)
             questions = self._fallback(context, hints)
-            return self._ensure_standards_questions(questions, failed_std, context, api_key=None)
+            return self._ensure_standards_questions(questions, failed_std, context, api_key=None, hints=hints)
 
         prompt = self._build_prompt(context, summary, hints, env=env)
         is_large = (scale == "large")
         questions = self._call_groq(api_key, prompt, target_count=target_count, is_large=is_large)
         if not questions:
             questions = self._fallback(context, hints)
-        return self._ensure_standards_questions(questions, failed_std, context, api_key=api_key)
+        return self._ensure_standards_questions(questions, failed_std, context, api_key=api_key, hints=hints)
 
     def _build_prompt(self, context: dict, summary: dict, hints: dict | None = None, env: dict | None = None) -> str:
         scale, _ = self.get_diff_scale(context)
@@ -634,7 +634,7 @@ class QuestionGenerator:
             pass
         return None
 
-    def _ensure_standards_questions(self, questions: list, failed_std: list, context: dict | None = None, api_key: str | None = None) -> list:
+    def _ensure_standards_questions(self, questions: list, failed_std: list, context: dict | None = None, api_key: str | None = None, hints: dict | None = None) -> list:
         """Enforce target question count and the 80% diff / 20% standards ratio."""
         scale, target_count = self.get_diff_scale(context)
         allowed_standards, required_diff = self.get_standards_and_diff_counts(target_count, failed_std)
@@ -685,12 +685,10 @@ class QuestionGenerator:
         # Fill diff questions to reach required_diff
         final_diff = matched_diff[:required_diff]
         if len(final_diff) < required_diff:
-            fb_diff = self._fallback_diff_questions(context, count=target_count)
+            fb_diff = self._fallback_diff_questions(context, hints, count=target_count)
             for fb in fb_diff:
                 if len(final_diff) >= required_diff:
                     break
-                if not any(fb["question"] == q["question"] for q in final_diff):
-                    final_diff.append(fb)
                 if not any(fb["question"] == q["question"] for q in final_diff):
                     final_diff.append(fb)
 

@@ -7,42 +7,17 @@ import http.client
 import ssl
 from urllib.parse import urlparse
 
-
-# Default Nous Research Subscription API base URL and model (override with NOUS_BASE_URL / NOUS_MODEL / UNDERSTANDING_AGENT_MODEL)
-_DEFAULT_BASE_URL = "https://inference-api.nousresearch.com/v1"
-_DEFAULT_MODEL = "qwen/qwen3-coder-30b-a3b-instruct"
+from .llm_manager import resolve_base_url, resolve_model, resolve_api_key, get_provider, PROVIDER_PRESETS, thinking_control_params
 
 
 def get_base_url() -> str:
-    """Return the OpenAI-compatible base URL for Nous Research or Groq API."""
-    explicit = os.environ.get("NOUS_BASE_URL", "").strip() or \
-               os.environ.get("UNDERSTANDING_AGENT_BASE_URL", "").strip() or \
-               os.environ.get("GROQ_BASE_URL", "").strip()
-    if explicit:
-        return explicit
-    provider = os.environ.get("UNDERSTANDING_AGENT_PROVIDER", "").strip().lower()
-    if provider == "groq":
-        return "https://api.groq.com/openai/v1"
-    key = load_nous_api_key()
-    if key.startswith("gsk_"):
-        return "https://api.groq.com/openai/v1"
-    return _DEFAULT_BASE_URL
+    """Return the OpenAI-compatible base URL (resolved by llm_manager)."""
+    return resolve_base_url()
 
 
 def get_model() -> str:
-    """Return the LLM model name, allowing override via NOUS_MODEL, GROQ_MODEL, or UNDERSTANDING_AGENT_MODEL."""
-    explicit = os.environ.get("NOUS_MODEL", "").strip() or \
-               os.environ.get("UNDERSTANDING_AGENT_MODEL", "").strip() or \
-               os.environ.get("GROQ_MODEL", "").strip()
-    if explicit:
-        return explicit
-    provider = os.environ.get("UNDERSTANDING_AGENT_PROVIDER", "").strip().lower()
-    if provider == "groq":
-        return "qwen/qwen3.8-27b"
-    key = load_nous_api_key()
-    if key.startswith("gsk_"):
-        return "qwen/qwen3.8-27b"
-    return _DEFAULT_MODEL
+    """Return the LLM model id (resolved by llm_manager)."""
+    return resolve_model()
 
 
 def fail_open_enabled() -> bool:
@@ -84,45 +59,8 @@ def _parse_key_from_file(filepath: str, preferred_keys: tuple = ("NOUS_API_KEY",
     return ""
 
 
-def load_nous_api_key() -> str:
-    """Load NOUS_API_KEY (or fallback GROQ_API_KEY) from the environment or explicit local env files.
-
-    Search order:
-      1. Explicit NOUS_API_KEY / NOUSRESEARCH_API_KEY / NOUS_PORTAL_API_KEY environment variables
-      2. .env / .env.local in search dirs (cwd, parents, git root, ~/.config) strictly searching for NOUS keys
-      3. Fallback GROQ_API_KEY from environment or .env files only if no NOUS key was found
-    """
-    nous_key_names = ("NOUS_API_KEY", "NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY")
-    provider = os.environ.get("UNDERSTANDING_AGENT_PROVIDER", "").strip().lower()
-
-    if provider == "groq":
-        groq_env = os.environ.get("GROQ_API_KEY", "").strip()
-        if groq_env:
-            return groq_env
-        search_dirs_early = []
-        cur_e = os.path.abspath(os.getcwd())
-        for _ in range(4):
-            search_dirs_early.append(cur_e)
-            parent_e = os.path.dirname(cur_e)
-            if parent_e == cur_e:
-                break
-            cur_e = parent_e
-        for d in search_dirs_early:
-            for fname in (".env", ".env.local"):
-                key = _parse_key_from_file(os.path.join(d, fname), ("GROQ_API_KEY",))
-                if key:
-                    return key
-
-    # 1. Direct environment variables (process environment takes precedence over disk files)
-    for env_var in nous_key_names:
-        api_key = os.environ.get(env_var, "").strip()
-        if api_key:
-            return api_key
-
-    groq_env = os.environ.get("GROQ_API_KEY", "").strip()
-    if groq_env:
-        return groq_env
-
+def _env_search_dirs():
+    """Directories searched for .env / .env.local: cwd, its parents, git root."""
     search_dirs = []
     cur = os.path.abspath(os.getcwd())
     for _ in range(4):
@@ -141,22 +79,56 @@ def load_nous_api_key() -> str:
             search_dirs.append(repo_root)
     except Exception:
         pass
+    return search_dirs
 
-    # 2. Check all .env files specifically for NOUS keys first
-    for d in search_dirs:
-        for fname in (".env", ".env.local"):
-            key = _parse_key_from_file(os.path.join(d, fname), nous_key_names)
-            if key:
-                return key
 
-    key = _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), nous_key_names)
-    if key:
-        return key
+def load_nous_api_key() -> str:
+    """Load the active provider's API key from the environment or .env files.
 
-    # 3. Fallback to GROQ_API_KEY only if no NOUS key was defined anywhere
+    Provider-aware, resolved via llm_manager:
+      1. UNDERSTANDING_AGENT_API_KEY / the provider preset's env vars
+      2. .env / .env.local in cwd, parents, git root, ~/.config
+      3. Legacy NOUS_* then GROQ_API_KEY names, for backward compatibility
+    """
+    # 1. Environment variables (process env takes precedence over disk files)
+    env_key = resolve_api_key()
+    if env_key:
+        return env_key
+
+    # Legacy GROQ_API_KEY env var outranks any key found in .env files
+    # (preserves the pre-manager precedence: all env vars before all files).
     groq_env = os.environ.get("GROQ_API_KEY", "").strip()
     if groq_env:
         return groq_env
+
+    provider = get_provider()
+    preset = PROVIDER_PRESETS[provider]
+    file_key_names = (preset["api_key_env"],) + preset["alt_api_key_envs"] + ("UNDERSTANDING_AGENT_API_KEY",)
+
+    search_dirs = _env_search_dirs()
+
+    # 2. Check .env files for the provider's key names first
+    for d in search_dirs:
+        for fname in (".env", ".env.local"):
+            key = _parse_key_from_file(os.path.join(d, fname), file_key_names)
+            if key:
+                return key
+
+    key = _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), file_key_names)
+    if key:
+        return key
+
+    # 3. Legacy fallback names (NOUS_* then GROQ) for pre-manager setups
+    legacy_nous = ("NOUS_API_KEY", "NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY")
+    for d in search_dirs:
+        for fname in (".env", ".env.local"):
+            key = _parse_key_from_file(os.path.join(d, fname), legacy_nous)
+            if key:
+                return key
+
+    key = _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), legacy_nous)
+    if key:
+        return key
 
     for d in search_dirs:
         for fname in (".env", ".env.local"):
@@ -177,7 +149,7 @@ def _safe_json_loads(s: str):
     if not s or not isinstance(s, str):
         return None
     s = s.strip()
-    
+
     # 1. Standard json.loads
     try:
         return json.loads(s)
@@ -210,7 +182,7 @@ def extract_json(text: str):
     """Robustly extract a JSON object or array from LLM response text.
 
     Handles:
-    - <think>...</think> reasoning tags
+    - Reasoning/thinking tags
     - Markdown code fences (```json ... ```)
     - Trailing commas before } and ]
     - Single quotes / python syntax
@@ -221,7 +193,7 @@ def extract_json(text: str):
         return None
 
     # 1. Remove reasoning / thinking tags (e.g. Qwen, DeepSeek)
-    cleaned = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
+    cleaned = _strip_reasoning(text).strip()
 
     # 2. Try markdown code fences first
     fence_pattern = r"```(?:json)?\s*([\s\S]*?)\s*```"
@@ -253,25 +225,75 @@ def extract_json(text: str):
     return _safe_json_loads(cleaned)
 
 
-def call_nous_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: int = 2) -> tuple[int, str]:
-    """Send an HTTP request to the Nous Research OpenAI-compatible Chat Completions API.
+def _strip_reasoning(text: str) -> str:
+    """Remove <think>...</think> reasoning tags emitted by reasoning models."""
+    return re.sub(r"<think>[\s\S]*?</think>", "", text)
 
-    Retries transient failures (connection errors, 429, 5xx) with a short
-    exponential backoff. Returns (status_code, response_text_or_error).
-    status_code 0 means the request never got a response.
+
+def _extract_message_text(data: dict) -> str:
+    """Pull the assistant text out of an OpenAI-compatible response dict.
+
+    Returns "" for the gateway's intermittent empty-content glitch
+    (HTTP 200, finish_reason=stop, content=null — observed on the Nous
+    gateway roughly 1 call in 5; bench data in scripts/bench_capture_anomaly.py).
+    """
+    choices = data.get("choices") or []
+    if not choices:
+        return ""
+    msg = choices[0].get("message") or {}
+    text = (msg.get("content") or "").strip()
+    if not text and msg.get("reasoning"):
+        text = (msg.get("reasoning") or "").strip()
+    if not text and msg.get("reasoning_content"):
+        text = (msg.get("reasoning_content") or "").strip()
+    if not text and choices[0].get("text"):
+        text = (choices[0].get("text") or "").strip()
+    return text
+
+
+def call_nous_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: int = 2) -> tuple[int, str]:
+    """Send an HTTP request to the provider's OpenAI-compatible chat-completions API.
+
+    Retries transient failures (connection errors, 429, 5xx, and the gateway's
+    200-with-empty-content glitch) with a short exponential backoff. Returns
+    (status_code, response_text_or_error). status_code 0 means the request
+    never got a response.
     """
     if not api_key:
-        return 0, "No NOUS_API_KEY or GROQ_API_KEY found"
+        return 0, "No API key configured for the active provider (set UNDERSTANDING_AGENT_API_KEY, NOUS_API_KEY, or GROQ_API_KEY)"
+
+    # Suppress model thinking for providers that support it (bench-measured:
+    # deepseek-v4-flash 51s -> 10s per call). Kill switch:
+    # UNDERSTANDING_AGENT_DISABLE_THINKING=off
+    payload_dict = dict(payload_dict)
+    payload_dict.update(thinking_control_params())
 
     last_status, last_body = 0, ""
     for attempt in range(retries + 1):
         status, body = _groq_request_once(api_key, payload_dict, timeout)
-        if status == 200 or (status != 0 and status != 429 and status < 500):
+        if _is_meaningful_response(status, body):
             return status, body
         last_status, last_body = status, body
         if attempt < retries:
             time.sleep(1.5 * (attempt + 1))
     return last_status, last_body
+
+
+def _is_meaningful_response(status: int, body: str) -> bool:
+    """A response is final only if it succeeded AND carries assistant text.
+
+    The Nous gateway intermittently returns HTTP 200 with
+    finish_reason=stop and content=null while still charging tokens
+    (completion_tokens=206 in the captured sample). Treating that as
+    success made callers silently fall back and re-call the LLM.
+    """
+    if status != 200:
+        return status != 0 and status != 429 and status < 500
+    try:
+        data = json.loads(body)
+    except Exception:
+        return True  # can't judge; let the caller's parser deal with it
+    return bool(_extract_message_text(data))
 
 
 def _groq_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[int, str]:
@@ -299,7 +321,7 @@ def _nous_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "User-Agent": "understanding-agent/0.3.0",
         "Content-Length": str(len(payload))
     }
 
@@ -310,7 +332,7 @@ def _nous_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[
         else:
             ctx = ssl.create_default_context()
             conn = http.client.HTTPSConnection(host, context=ctx, timeout=timeout)
-            
+
         conn.request("POST", endpoint_path, body=payload, headers=headers)
         response = conn.getresponse()
         body = response.read().decode("utf-8", errors="replace")

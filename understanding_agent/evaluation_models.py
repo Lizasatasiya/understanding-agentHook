@@ -18,6 +18,9 @@ class EvaluationResult:
         self.incorrect_claims = data.get("incorrect_claims", [])
         self.evaluation = data.get("evaluation", "")
         self.confidence = data.get("confidence", 0.0)
+        # True when this score came from an LLM evaluation rather than the
+        # offline/semantic fallback — the session is then not LLM-verified.
+        self.llm_verified = bool(data.get("llm_verified", True))
 
         
         # If there are missing concepts, or the prompt explicitly asked for follow up
@@ -35,5 +38,6 @@ class EvaluationResult:
             "incorrect_claims": self.incorrect_claims,
             "evaluation": self.evaluation,
             "confidence": self.confidence,
-            "follow_up_required": self.follow_up_required
+            "follow_up_required": self.follow_up_required,
+            "llm_verified": self.llm_verified
         }

@@ -40,6 +40,26 @@ def _is_gitignored(repo_root: str, path: str) -> bool:
         return False
 
 
+def _write_state(state_file: str, attempt_key: str, head_commit, commit_msg,
+                 diff_hash: str, attempts: int, valid_questions: list) -> None:
+    """Persist hook state so attempts and answered questions survive retries.
+
+    Best-effort: a state-file failure must never abort the commit flow.
+    """
+    try:
+        with open(state_file, "w") as f:
+            json.dump({
+                "attempt_key": attempt_key,
+                "head_commit": head_commit,
+                "commit_message": commit_msg,
+                "diff_hash": diff_hash,
+                "attempts": attempts,
+                "questions": valid_questions
+            }, f)
+    except Exception:
+        pass
+
+
 def main():
     try:
         con = 'CON' if sys.platform == 'win32' else '/dev/tty'
@@ -87,7 +107,39 @@ def main():
     evidence_hint = evidence_question_hint(evidence)
     practice_hint = practice_pack_hint(stack, context, security_hint)
 
-    # 5c. Coding Standards Audit (deterministic, printed first before questions)
+    # 5c. Security gate FIRST: deterministic critical findings (live
+    # credentials) block before any prompt or LLM call. Unlike the oral
+    # defense, no answer can make committing a real credential safe, and git
+    # history is permanent — so a doomed commit must fail fast, before the
+    # developer is asked to sit through the standards report or questions.
+    if security_gate_enabled():
+        critical = lens.find_critical_findings(context)
+        if critical:
+            print(f"\n\033[91mCommit blocked: credential detected in staged code.\033[0m\n")
+            for f in critical:
+                print(f"  \033[91m✗ {f['description']} ({f['redacted']}) in {f['file']}"
+                      + (f" :: {f['function']}()" if f["function"] else "") + "\033[0m")
+            # B6: actionable unstage suggestion per finding
+            unstaged_files = sorted({f["file"] for f in critical if f.get("file")})
+            if unstaged_files:
+                print("\n\033[93m  Unstage the offending file(s) to abort this commit path:\033[0m")
+                for path in unstaged_files:
+                    print(f"    git restore --staged {path}")
+            # B6: call out staged-but-gitignored files (the exact mistake)
+            ignored = [p for p in unstaged_files if _is_gitignored(env.get("project_root") or os.getcwd(), p)]
+            if ignored:
+                print(f"\n\033[93m  Note: {', '.join(ignored)} is listed in .gitignore — it was staged "
+                      "explicitly (e.g. `git add -f` or `git add .` after editing).\033[0m")
+            print("""
+\033[93m  Remove the credential before committing:\033[0m
+  1. Move it to an environment variable or your .env (already gitignored)
+  2. If it was ever committed before, rotate it — history keeps it forever
+  3. If this is a false positive, set UNDERSTANDING_AGENT_SECURITY_GATE=off
+     for this commit: git commit  # after unsetting, or use --no-verify
+""")
+            sys.exit(1)
+
+    # 5d. Coding Standards Audit (deterministic, printed after the gate passes)
     standards_checker = CodingStandardsChecker(project_root)
     standards_report = standards_checker.check(changes, context)
     standards_checker.print_report(standards_report)
@@ -99,9 +151,6 @@ def main():
         "practices": practice_hint,
         "standards": standards_report,
     }
-
-    prefetch_holder = {"summary": None, "questions": None}
-    prefetch_thread = None
 
     failed_standards = [s for s in standards_report if not s.get("is_good", True)]
     if failed_standards:
@@ -116,19 +165,6 @@ def main():
         print(f"{BOLD}Do you want to fix these violations or proceed further?{RESET}\n")
         print(f"  {BOLD}[1]{RESET} {RED}Fix violations{RESET}")
         print(f"  {BOLD}[2]{RESET} {GREEN}Proceed further{RESET}\n")
-
-        # Start pre-fetching summary & questions in background while user reads the report
-        import threading
-        def _bg_prefetch():
-            try:
-                s = ChangeSummary().generate(context)
-                prefetch_holder["summary"] = s
-                prefetch_holder["questions"] = QuestionGenerator().generate(context, s, hints, env=env)
-            except Exception:
-                pass
-
-        prefetch_thread = threading.Thread(target=_bg_prefetch, daemon=True)
-        prefetch_thread.start()
 
         choice = ""
         while choice not in ("1", "2", "fix", "proceed", "f", "p"):
@@ -183,45 +219,8 @@ def main():
         else:
             print(f"\n{BOLD}{GREEN}✓ Proceeding with questions...{RESET}\n")
 
-    # 5c. Security gate: deterministic critical findings (live credentials) block
-    # before any questions are generated. Unlike the oral defense, no answer can
-    # make committing a real credential safe, and git history is permanent.
-    if security_gate_enabled():
-        critical = lens.find_critical_findings(context)
-        if critical:
-            print(f"\n\033[91mCommit blocked: credential detected in staged code.\033[0m\n")
-            for f in critical:
-                print(f"  \033[91m✗ {f['description']} ({f['redacted']}) in {f['file']}"
-                      + (f" :: {f['function']}()" if f['function'] else "") + "\033[0m")
-            # B6: actionable unstage suggestion per finding
-            unstaged_files = sorted({f["file"] for f in critical if f.get("file")})
-            if unstaged_files:
-                print("\n\033[93m  Unstage the offending file(s) to abort this commit path:\033[0m")
-                for path in unstaged_files:
-                    print(f"    git restore --staged {path}")
-            # B6: call out staged-but-gitignored files (the exact mistake)
-            ignored = [p for p in unstaged_files if _is_gitignored(env.get("project_root") or os.getcwd(), p)]
-            if ignored:
-                print(f"\n\033[93m  Note: {', '.join(ignored)} is listed in .gitignore — it was staged "
-                      "explicitly (e.g. `git add -f` or `git add .` after editing).\033[0m")
-            print("""
-\033[93m  Remove the credential before committing:\033[0m
-  1. Move it to an environment variable or your .env (already gitignored)
-  2. If it was ever committed before, rotate it — history keeps it forever
-  3. If this is a false positive, set UNDERSTANDING_AGENT_SECURITY_GATE=off
-     for this commit: git commit  # after unsetting, or use --no-verify
-""")
-            sys.exit(1)
-
     # 6. Change Summary
-    if prefetch_thread and prefetch_holder.get("summary") is None:
-        prefetch_thread.join(timeout=8)
-
-    if prefetch_holder.get("summary") is not None:
-        summary = prefetch_holder["summary"]
-    else:
-        summary_generator = ChangeSummary()
-        summary = summary_generator.generate(context)
+    summary = ChangeSummary().generate(context)
     
     # 6. Question Generator & State Management
     # Attempt count depends solely on attempts made towards the next commit (under head_commit).
@@ -347,17 +346,18 @@ def main():
                     q["evaluation_criteria"] = modern_q["evaluation_criteria"]
                     q["is_standards_violation"] = True
     else:
-        # Generate fresh questions for new diff (use prefetched if ready)
+        # Generate fresh questions for new diff
         question_generator = QuestionGenerator()
-        if prefetch_holder.get("questions"):
-            questions = prefetch_holder["questions"]
-        else:
-            questions = question_generator.generate(context, summary, hints, env=env)
+        questions = question_generator.generate(context, summary, hints, env=env)
         valid_questions = question_generator.validate(questions)
         for q in valid_questions:
             q["passed"] = False
             q["answered"] = False
             q["best_score"] = 0
+
+    # An attempt is LLM-verified only when questions were LLM-generated AND
+    # every evaluation came from the LLM (not the offline fallback).
+    questions_llm_generated = not all(q.get("is_fallback", False) for q in valid_questions) if valid_questions else True
 
     interaction = Interaction()
     evaluator = AnswerEvaluator()
@@ -373,22 +373,13 @@ def main():
 
     while True:
         # Persist state so attempt number and questions are tracked even if interrupted
-        try:
-            with open(state_file, "w") as f:
-                json.dump({
-                    "attempt_key": attempt_key,
-                    "head_commit": head_commit,
-                    "commit_message": commit_msg,
-                    "diff_hash": diff_hash,
-                    "attempts": attempts,
-                    "questions": valid_questions
-                }, f)
-        except Exception:
-            pass
+        _write_state(state_file, attempt_key, head_commit, commit_msg,
+                     diff_hash, attempts, valid_questions)
 
         print(f"\n\n{BOLD}{CYAN}Questions [Attempt {attempts}]{RESET}\n")
         final_results = []
         total_score = 0
+        any_eval_unverified = False
         
         for i, q in enumerate(valid_questions, 1):
             q_id = q.get("question_id", f"q{i}")
@@ -458,6 +449,8 @@ def main():
             
             eval_res = evaluator.evaluate(q, ans_obj, context, summary, env=env)
             final_score = eval_res.score
+            if not eval_res.llm_verified:
+                any_eval_unverified = True
 
             # Targeted follow-up for partial understanding: one focused question
             # on the missing concept, replacing the original score for this item.
@@ -497,6 +490,8 @@ def main():
                 final_score = max(final_score, fu_eval.score)
                 eval_res = fu_eval
                 ans_obj = fu_ans_obj
+                if not fu_eval.llm_verified:
+                    any_eval_unverified = True
                 if final_score >= 70:
                     print(f"{GREEN}✓ Good understanding demonstrated on follow-up{RESET}")
                 elif final_score >= 25:
@@ -549,18 +544,8 @@ def main():
             q["response_time_seconds"] = response_time
 
             # Persist state immediately so answered questions are preserved across attempts
-            try:
-                with open(state_file, "w") as f:
-                    json.dump({
-                        "attempt_key": attempt_key,
-                        "head_commit": head_commit,
-                        "commit_message": commit_msg,
-                        "diff_hash": diff_hash,
-                        "attempts": attempts,
-                        "questions": valid_questions
-                    }, f)
-            except Exception:
-                pass
+            _write_state(state_file, attempt_key, head_commit, commit_msg,
+                         diff_hash, attempts, valid_questions)
 
             # If user gives wrong answer (< 25%), ask no next questions and abort
             if final_score < 25:
@@ -580,6 +565,7 @@ def main():
                         "branch": env.get("branch", "unknown"),
                         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
                         "status": "FAILED",
+                        "verification": "llm-verified" if (questions_llm_generated and not any_eval_unverified) else "llm-unverified",
                         "score": round(final_score, 1),
                         "changed_files": changes.get("files", []),
                         "change_summary": summary,
@@ -595,8 +581,15 @@ def main():
 
         avg_score = total_score / len(valid_questions) if valid_questions else 100
         attempt_status = "PASSED" if avg_score > 75 else "FAILED"
+        # LLM verification: honest even when failing open. A session is only
+        # "llm-verified" when questions were LLM-generated and no evaluation
+        # fell back to the offline scorer.
+        verification = "llm-verified" if (questions_llm_generated and not any_eval_unverified) else "llm-unverified"
         if avg_score > 75:
             print(f"\n{BOLD}{GREEN}Overall Understanding: Verified{RESET}")
+            if verification == "llm-unverified":
+                print(f"{YELLOW}⚠ LLM unreachable — answers evaluated by the offline fallback, not an LLM.{RESET}")
+                print(f"{YELLOW}  Commit may proceed (fail-open), but it is marked UNVERIFIED in the dashboard.{RESET}")
         else:
             print(f"\n{BOLD}{RED}Overall Understanding: Insufficient{RESET}")
 
@@ -614,6 +607,7 @@ def main():
             "branch": env.get("branch", "unknown"),
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "status": attempt_status,
+            "verification": verification,
             "score": round(avg_score, 1),
             "changed_files": changes.get("files", []),
             "change_summary": summary,
@@ -628,19 +622,8 @@ def main():
             pass
         
         # Save state: keep attempts tracked and preserve questions across attempts
-        new_state = {
-            "attempt_key": attempt_key,
-            "head_commit": head_commit,
-            "commit_message": commit_msg,
-            "diff_hash": diff_hash,
-            "attempts": attempts,
-            "questions": valid_questions
-        }
-        try:
-            with open(state_file, "w") as f:
-                json.dump(new_state, f)
-        except Exception:
-            pass
+        _write_state(state_file, attempt_key, head_commit, commit_msg,
+                     diff_hash, attempts, valid_questions)
         
         if avg_score <= 75:
             print(f"\n{RED}Attempt {attempts} failed. Understanding criteria not met.{RESET}")

@@ -89,8 +89,11 @@ _SECURITY_PATTERNS = [
      "tls-verification-disabled", 5, "why TLS verification is disabled"),
 ]
 
-# Patterns that downgrade severity when the change TOUCHES tests or docs only
+# Paths where example-shaped content legitimately lives: tests, fixtures, and
+# documentation. Exact vendor formats STILL block in these paths (a real key
+# is real anywhere); only the generic/example-shaped tiers are exempt here.
 _TEST_PATH_HINTS = ("test", "spec", "mock", "fixture", "__tests__")
+_DOC_PATH_HINTS = (".md", ".rst", ".txt", "docs/", "readme")
 
 # Deterministic, catastrophic findings: known live-credential formats.
 # These BLOCK the commit outright (before questions) — no answer the developer
@@ -172,7 +175,10 @@ _GENERIC_SECRET_PATTERN = re.compile(
     r"""signing_?key|jwt_?secret|session_?key)\b['\"]?\s*[:=]\s*['\"]([^'\"]{20,})['\"]""",
     re.IGNORECASE)
 _PLACEHOLDER_HINTS = ("example", "sample", "placeholder", "changeme", "change-me",
-                      "xxx", "your", "dummy", "fake", "test", "todo", "fixme")
+                      "xxx", "your", "dummy", "fake", "test", "todo", "fixme",
+                      # redaction markers — no real credential contains these,
+                      # so they exempt everywhere, not just tests/docs
+                      "***", "…", "...", "[redacted]", "<", "»")
 _SECRET_ESCAPE_COMMENTS = ("# pragma: allow-secret", "# example", "# allow-secret")
 
 _ENTROPY_BITS_THRESHOLD = 3.5  # per char, over values ≥ 20 chars
@@ -228,19 +234,20 @@ class SecurityLens:
         raw = self._raw_staged_added_lines()
         for path, added in raw.items():
             is_test = self._is_test_path(path)
+            is_doc = self._is_doc_path(path)
             # Exact vendor formats block EVERYWHERE, including tests (PLAN.md B5):
             # a real leaked key is real in a test file — the classic org leak.
             for pattern, label, description in _CRITICAL_PATTERNS:
                 for m in re.finditer(pattern, added):
                     _record(path, "", label, description, m.group(0))
             # Creded connection strings/basic-auth: exempt placeholder-looking
-            # fixtures in test paths, block real-shaped ones.
+            # fixtures in test AND doc paths, block real-shaped ones.
             for m in re.finditer(_CONNECTION_STRING_PATTERN, added):
-                if is_test and self._looks_like_placeholder(m.group(0)):
+                if (is_test or is_doc) and self._looks_like_placeholder(m.group(0)):
                     continue
                 _record(path, "", _CONNECTION_LABEL, _CONNECTION_DESC, m.group(0))
             for m in re.finditer(_BASIC_AUTH_URL_PATTERN, added):
-                if is_test and self._looks_like_placeholder(m.group(0)):
+                if (is_test or is_doc) and self._looks_like_placeholder(m.group(0)):
                     continue
                 _record(path, "", _BASIC_AUTH_LABEL, _BASIC_AUTH_DESC, m.group(0))
             # Generic entropy-gated secrets: test paths exempt (fixtures live there)
@@ -251,6 +258,7 @@ class SecurityLens:
         for change in context.get("structured_changes", []):
             path = change.get("file", "")
             is_test = self._is_test_path(path)
+            is_doc = self._is_doc_path(path)
             diff = change.get("diff", "")
             if not diff:
                 continue
@@ -261,12 +269,12 @@ class SecurityLens:
                 for m in re.finditer(pattern, added):
                     _record(path, change.get("function", ""), label, description, m.group(0))
             for m in re.finditer(_CONNECTION_STRING_PATTERN, added):
-                if is_test and self._looks_like_placeholder(m.group(0)):
+                if (is_test or is_doc) and self._looks_like_placeholder(m.group(0)):
                     continue
                 _record(path, change.get("function", ""), _CONNECTION_LABEL,
                         _CONNECTION_DESC, m.group(0))
             for m in re.finditer(_BASIC_AUTH_URL_PATTERN, added):
-                if is_test and self._looks_like_placeholder(m.group(0)):
+                if (is_test or is_doc) and self._looks_like_placeholder(m.group(0)):
                     continue
                 _record(path, change.get("function", ""), _BASIC_AUTH_LABEL,
                         _BASIC_AUTH_DESC, m.group(0))
@@ -279,6 +287,10 @@ class SecurityLens:
     @staticmethod
     def _is_test_path(path: str) -> bool:
         return any(h in path.lower() for h in _TEST_PATH_HINTS)
+
+    @staticmethod
+    def _is_doc_path(path: str) -> bool:
+        return any(h in path.lower() for h in _DOC_PATH_HINTS)
 
     def _staged_file_names(self) -> List[str]:
         """Return the staged file list via git (name-status). Never raises."""

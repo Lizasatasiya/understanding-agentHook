@@ -181,12 +181,9 @@ class CodingStandardsChecker:
                 # Check for direct prop mutation: props.foo = ... or props.foo.bar = ...
                 if re.search(r'\bprops\.[a-zA-Z0-9_$]+(?:\.[a-zA-Z0-9_$]+)?\s*[\+\-\*\/]?=\s*[^=]', code):
                     violations.append(f"{path}:{line_no}: Direct mutation of props (`{code[:50]}`)")
-                # Check for in-place array mutations in render code
-                if re.search(r'\b(?:featuresList|items|list|data)\.(?:push|splice|shift|unshift|pop)\(', code):
-                    violations.append(f"{path}:{line_no}: In-place array mutation during component lifecycle (`{code[:50]}`)")
-                # Check for parameter mutation inside calculation functions
-                if re.search(r'\bplan\.[a-zA-Z0-9_$]+\s*=\s*', code) and 'calculate' in diff:
-                    violations.append(f"{path}:{line_no}: Mutating input object parameter directly (`{code[:50]}`)")
+                # In-place array mutation on state-like names (setX / setState convention)
+                if re.search(r'\b(?:set[A-Z]\w*|state|this\.state|this\.props)\.[a-zA-Z0-9_$]*\.(?:push|splice|shift|unshift|pop)\(', code):
+                    violations.append(f"{path}:{line_no}: In-place array mutation of state (`{code[:50]}`)")
 
         if violations:
             return {
@@ -210,13 +207,30 @@ class CodingStandardsChecker:
         for path, content in contents.items():
             if not path.endswith(('.jsx', '.tsx', '.js', '.ts')):
                 continue
-            # Look for useCallback with empty dependency array referencing external variables
-            matches = re.finditer(r'useCallback\s*\(\s*\(\s*\)\s*=>\s*\{([\s\S]*?)\}\s*,\s*\[\s*\]\s*\)', content)
-            for m in matches:
+            # Look for useCallback/useMemo with empty dependency array referencing
+            # identifiers declared OUTSIDE the hook body (stale closure risk).
+            for m in re.finditer(r'use(?:Callback|Memo)\s*\(\s*(?:\([^)]*\)|[a-zA-Z0-9_$]+)\s*=>?\s*\{?([\s\S]*?)\}?\s*,\s*\[\s*\]\s*\)', content):
                 body = m.group(1)
-                if re.search(r'\b(?:props|billingCycle|state|plan|users)\b', body):
+                # `props` is always outer scope; other identifiers are checked
+                # only when they are not parameters of the callback itself.
+                if re.search(r'\bprops\b', body):
                     line_no = self._offset_to_line(content, m.start())
                     violations.append(f"{path}:{line_no}: Stale closure in useCallback (empty `[]` dependencies while referencing outer scope)")
+                    break
+                # Generic heuristic: body references a camelCase identifier that
+                # is assigned somewhere in the file but never passed through a
+                # dependency array or the callback's own parameter list.
+                for ident_m in re.finditer(r'\b([a-z][a-zA-Z0-9]{2,})\b', body):
+                    ident = ident_m.group(1)
+                    if ident in ("const", "let", "return", "console", "JSON", "Math", "window", "document", "true", "false", "null", "undefined"):
+                        continue
+                    # Declared at file/function scope and used bare in the body → stale-closure candidate
+                    if re.search(rf'\b(?:const|let|var)\s+{re.escape(ident)}\b', content[:m.start()]):
+                        line_no = self._offset_to_line(content, m.start())
+                        violations.append(f"{path}:{line_no}: Stale closure risk in useCallback (empty `[]` while referencing `{ident}` from outer scope)")
+                        break
+                if violations and violations[-1].startswith(f"{path}:"):
+                    break
 
         if violations:
             return {

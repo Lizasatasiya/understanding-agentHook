@@ -32,16 +32,7 @@ def get_default_repo_root() -> str:
     if os.path.exists(os.path.join(cwd, ".git")):
         return cwd
 
-    # Check if code-understanding-demo is adjacent
-    candidate_demo = os.path.join(cwd, "code-understanding-demo")
-    if os.path.exists(os.path.join(candidate_demo, ".git")):
-        return candidate_demo
-
     parent = os.path.dirname(cwd)
-    candidate_parent_demo = os.path.join(parent, "code-understanding-demo")
-    if os.path.exists(os.path.join(candidate_parent_demo, ".git")):
-        return candidate_parent_demo
-
     if os.path.exists(os.path.join(parent, ".git")):
         return parent
 
@@ -478,12 +469,7 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
         """Retrieve full details of an attempt (questions, answers, evaluations, violations)."""
         session = get_session_by_id(effective_repo_root, attempt_id)
         if not session:
-            # Check if attempt_id is an index or 'latest'
-            sessions = load_sessions(effective_repo_root)
-            if sessions:
-                session = sessions[-1]
-            else:
-                raise HTTPException(status_code=404, detail=f"Attempt '{attempt_id}' not found.")
+            raise HTTPException(status_code=404, detail=f"Attempt '{attempt_id}' not found.")
 
         commit_id = session.get("commit_id") or "staged"
         commit_attempts = get_sessions_for_commit(effective_repo_root, commit_id)

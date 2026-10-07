@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="understanding-agent",
-    version="0.2.3",
+    version="0.3.0",
     packages=find_packages(),
     package_data={"understanding_agent": ["ui/*"]},
     include_package_data=True,
@@ -12,12 +12,18 @@ setup(
             "understanding-agent-ui = understanding_agent.server:run",
         ]
     },
+    python_requires=">=3.10",
     install_requires=[],
     extras_require={
         "voice": [
             "sounddevice",
             "openai-whisper",
             "numpy",
-        ]
+        ],
+        "ui": [
+            "fastapi",
+            "uvicorn",
+            "pydantic>=2",
+        ],
     },
 )

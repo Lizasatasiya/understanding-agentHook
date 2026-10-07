@@ -235,6 +235,30 @@ def _seed_from_state(repo_root: str, state_data: dict, attempt_number: Optional[
     }
 
 
+def _max_sessions() -> int:
+    """Cap on persisted sessions; UNDERSTANDING_AGENT_MAX_SESSIONS tunes it.
+
+    Values < 2 disable pruning (keep everything). Default: 500.
+    """
+    try:
+        v = int(os.environ.get("UNDERSTANDING_AGENT_MAX_SESSIONS", "500"))
+        return v if v >= 2 else 0
+    except ValueError:
+        return 500
+
+
+def _prune_sessions(sessions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Keep only the most recent N sessions (by attempt_number, then timestamp)."""
+    limit = _max_sessions()
+    if not limit or len(sessions) <= limit:
+        return sessions
+    ranked = sorted(
+        sessions,
+        key=lambda s: (s.get("attempt_number", 1), s.get("timestamp", "")),
+    )
+    return ranked[-limit:]
+
+
 def save_session(repo_root: str, session_data: Dict[str, Any]) -> Dict[str, Any]:
     """Save or update a session in the repository's sessions file."""
     path = get_sessions_file(repo_root)
@@ -292,6 +316,9 @@ def save_session(repo_root: str, session_data: Dict[str, Any]) -> Dict[str, Any]
             break
     if not updated:
         sessions.append(session_data)
+
+    # Prune BEFORE writing so the file never grows unboundedly on busy repos
+    sessions = _prune_sessions(sessions)
 
     try:
         with open(path, "w", encoding="utf-8") as f:
