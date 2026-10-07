@@ -171,16 +171,45 @@ class CodingStandardsChecker:
     # Individual Coding Standard Checkers
     # -------------------------------------------------------------------------
 
+    _DESTRUCTURED_SIG = re.compile(
+        r'(?:function\s+[A-Z]\w*|const\s+[A-Z]\w*\s*=|=>)\s*\(\s*\{([^}]*)\}\s*\)')
+
+    def _prop_like_names(self, added_lines: List[str]) -> set:
+        """Names destructured from props in changed component signatures.
+
+        `function Comp({ invoice, user })` / `const Comp = ({ invoice }) =>`
+        — every one of these names IS a prop, so any mutation of them is a
+        prop mutation even without a literal `props.` prefix.
+        """
+        names: set = set()
+        for line in added_lines:
+            for m in self._DESTRUCTURED_SIG.finditer(line):
+                for raw in m.group(1).split(','):
+                    name = raw.strip().split(':')[0].strip()
+                    if re.fullmatch(r'[a-zA-Z_$][\w$]*', name or ''):
+                        names.add(name)
+        return names
+
     def _check_react_immutability(self, diffs: Dict[str, str], contents: Dict[str, str]) -> Dict[str, Any]:
         violations = []
         for path, diff in diffs.items():
             if not path.endswith(('.jsx', '.tsx', '.js', '.ts')):
                 continue
-            for line_no, raw_code in self._get_diff_additions(diff):
+            added = self._get_diff_additions(diff)
+            prop_names = self._prop_like_names([raw for _, raw in added])
+            for line_no, raw_code in added:
                 code = raw_code.strip()
-                # Check for direct prop mutation: props.foo = ... or props.foo.bar = ...
+                # Direct prop mutation: props.foo = ... or props.foo.bar = ...
                 if re.search(r'\bprops\.[a-zA-Z0-9_$]+(?:\.[a-zA-Z0-9_$]+)?\s*[\+\-\*\/]?=\s*[^=]', code):
                     violations.append(f"{path}:{line_no}: Direct mutation of props (`{code[:50]}`)")
+                # Mutation of a DESTRUCTURED prop name (from the component signature)
+                for name in prop_names:
+                    if re.search(rf'\b{re.escape(name)}\.[a-zA-Z0-9_$]+\s*[\+\-\*\/]?=\s*[^=]', code):
+                        violations.append(f"{path}:{line_no}: Direct mutation of prop `{name}` (`{code[:50]}`)")
+                        break
+                    if re.search(rf'\b{re.escape(name)}\.[a-zA-Z0-9_$]*\.(?:push|splice|shift|unshift|pop)\(', code):
+                        violations.append(f"{path}:{line_no}: In-place array mutation of prop `{name}` (`{code[:50]}`)")
+                        break
                 # In-place array mutation on state-like names (setX / setState convention)
                 if re.search(r'\b(?:set[A-Z]\w*|state|this\.state|this\.props)\.[a-zA-Z0-9_$]*\.(?:push|splice|shift|unshift|pop)\(', code):
                     violations.append(f"{path}:{line_no}: In-place array mutation of state (`{code[:50]}`)")
