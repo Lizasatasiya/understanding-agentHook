@@ -299,7 +299,10 @@ class SecurityLens:
         p = path.lower()
         if any(h in p for h in _DOC_PATH_HINTS):
             return True
-        return any(p.endswith(s) for s in _EXAMPLE_FILE_SUFFIXES)
+        # config.example.yaml / settings.sample.json — an example marker in
+        # the filename stem, not necessarily at the end.
+        stem = p.rsplit(".", 1)[0]
+        return any(stem.endswith(s) for s in _EXAMPLE_FILE_SUFFIXES)
 
     def _staged_file_names(self) -> List[str]:
         """Return the staged file list via git (name-status). Never raises."""
