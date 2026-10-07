@@ -19,6 +19,7 @@ from .interaction import Interaction
 from .server_client import ServerClient
 from .answer_evaluator import AnswerEvaluator
 from .coding_standards import CodingStandardsChecker
+from .session_store import save_session
 
 def main():
     try:
@@ -96,6 +97,36 @@ def main():
 
         if choice in ("1", "fix", "f"):
             print(f"\n{RED}Please resolve the violations listed above before committing.{RESET}\n")
+            project_root = env.get("project_root") or os.getcwd()
+            try:
+                from .session_store import load_sessions
+                _existing = load_sessions(project_root)
+                _staged = [s for s in _existing if s.get("commit_id") == "staged"]
+                fix_attempt_num = max([s.get("attempt_number", 0) for s in _staged], default=0) + 1
+            except Exception:
+                fix_attempt_num = 1
+            session_data = {
+                "session_id": f"sess_{int(time.time()*1000)}_1",
+                "attempt_id": f"sess_{int(time.time()*1000)}_1",
+                "attempt_number": fix_attempt_num,
+                "commit_id": "staged",
+                "diff_hash": hashlib.sha256(json.dumps(changes, sort_keys=True).encode()).hexdigest(),
+                "repository": env.get("repository", "unknown"),
+                "branch": env.get("branch", "unknown"),
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "status": "FAILED",
+                "score": 0,
+                "changed_files": changes.get("files", []),
+                "change_summary": {"what_changed": "Staged changes blocked by coding standards."},
+                "standards_report": standards_report,
+                "violations_count": len(failed_standards),
+                "questions": []
+            }
+            try:
+                save_session(env.get("project_root") or os.getcwd(), session_data)
+                ServerClient().send(session_data)
+            except Exception:
+                pass
             sys.exit(1)
         else:
             print(f"\n{BOLD}{GREEN}✓ Proceeding with questions...{RESET}\n")
@@ -154,6 +185,16 @@ def main():
         for q in cached_questions
     )
 
+    project_root = env.get("project_root") or os.getcwd()
+    existing_sessions = []
+    try:
+        from .session_store import load_sessions
+        existing_sessions = load_sessions(project_root)
+    except Exception:
+        pass
+    staged_sessions = [s for s in existing_sessions if s.get("commit_id") == "staged"]
+    max_recorded_attempt = max([s.get("attempt_number", 0) for s in staged_sessions], default=0)
+
     if state.get("diff_hash") == diff_hash and cached_questions and not has_fallback and has_std_in_cache:
         valid_questions = cached_questions
         for q in valid_questions:
@@ -162,7 +203,7 @@ def main():
                 q["passed"] = True
             else:
                 q["passed"] = False
-        attempts = state.get("attempts", 1) + 1
+        attempts = max(state.get("attempts", 0) + 1, max_recorded_attempt + 1)
     else:
         question_generator = QuestionGenerator()
         questions = question_generator.generate(context, summary, hints, env=env)
@@ -170,7 +211,7 @@ def main():
         for q in valid_questions:
             q["passed"] = False
             q["best_score"] = 0
-        attempts = 1
+        attempts = max(max_recorded_attempt + 1, 1)
     interaction = Interaction()
     evaluator = AnswerEvaluator()
     followup_generator = FollowUpGenerator()
@@ -326,55 +367,72 @@ def main():
                 print(f"\n{BOLD}{RED}⛔ Commit aborted. Please review the code and then try again.{RESET}\n")
                 
                 try:
-                    client = ServerClient()
                     session_data = {
+                        "session_id": f"sess_{int(time.time()*1000)}_{attempts}",
+                        "attempt_id": f"sess_{int(time.time()*1000)}_{attempts}",
+                        "attempt_number": attempts,
+                        "commit_id": "staged",
+                        "diff_hash": diff_hash,
                         "repository": env.get("repository", "unknown"),
                         "branch": env.get("branch", "unknown"),
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        "status": "FAILED",
+                        "score": round(final_score, 1),
                         "changed_files": changes.get("files", []),
                         "change_summary": summary,
+                        "standards_report": standards_report,
+                        "violations_count": len(failed_standards),
                         "questions": final_results
                     }
-                    client.send(session_data)
+                    save_session(env.get("project_root") or os.getcwd(), session_data)
+                    ServerClient().send(session_data)
                 except Exception:
                     pass
                 sys.exit(1)
 
-        # 9. Server Client
-        client = ServerClient()
-        session_data = {
-            "repository": env.get("repository", "unknown"),
-            "branch": env.get("branch", "unknown"),
-            "changed_files": changes.get("files", []),
-            "change_summary": summary,
-            "questions": final_results
-        }
-        client.send(session_data)
-        
         avg_score = total_score / len(valid_questions) if valid_questions else 100
+        attempt_status = "PASSED" if avg_score > 75 else "FAILED"
         if avg_score > 75:
             print(f"\n{BOLD}{GREEN}✅ Overall Understanding: Verified{RESET}")
         else:
             print(f"\n{BOLD}{RED}⛔ Overall Understanding: Insufficient{RESET}")
+
+        # 9. Server Client & Session Storage
+        session_data = {
+            "session_id": f"sess_{int(time.time()*1000)}_{attempts}",
+            "attempt_id": f"sess_{int(time.time()*1000)}_{attempts}",
+            "attempt_number": attempts,
+            "commit_id": "staged",
+            "diff_hash": diff_hash,
+            "repository": env.get("repository", "unknown"),
+            "branch": env.get("branch", "unknown"),
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "status": attempt_status,
+            "score": round(avg_score, 1),
+            "changed_files": changes.get("files", []),
+            "change_summary": summary,
+            "standards_report": standards_report,
+            "violations_count": len(failed_standards),
+            "questions": final_results
+        }
+        try:
+            save_session(env.get("project_root") or os.getcwd(), session_data)
+            ServerClient().send(session_data)
+        except Exception:
+            pass
         
-        # Save state (only persist if not fallback, so subsequent runs can retry AI generation)
+        # Save state: keep attempts tracked, but don't cache fallback questions so AI questions can retry
         is_fallback_run = any(q.get("is_fallback") for q in valid_questions)
-        if not is_fallback_run:
-            new_state = {
-                "diff_hash": diff_hash,
-                "attempts": attempts,
-                "questions": valid_questions
-            }
-            try:
-                with open(state_file, "w") as f:
-                    json.dump(new_state, f)
-            except Exception:
-                pass
-        else:
-            if os.path.exists(state_file):
-                try:
-                    os.remove(state_file)
-                except Exception:
-                    pass
+        new_state = {
+            "diff_hash": diff_hash,
+            "attempts": attempts,
+            "questions": valid_questions if not is_fallback_run else []
+        }
+        try:
+            with open(state_file, "w") as f:
+                json.dump(new_state, f)
+        except Exception:
+            pass
         
         if avg_score <= 75:
             print(f"\n{RED}⛔ Attempt {attempts} failed. Understanding criteria not met.{RESET}")

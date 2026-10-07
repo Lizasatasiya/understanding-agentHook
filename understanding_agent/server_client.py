@@ -14,7 +14,7 @@ class ServerClient:
 
     def send(self, session_data: dict):
         url = os.environ.get("UNDERSTANDING_AGENT_TELEMETRY_URL", "").strip()
-        if not url:
+        if not url or url.lower() in ("off", "none", "disabled", "false"):
             return
 
         data = json.dumps(session_data).encode('utf-8')
@@ -27,9 +27,9 @@ class ServerClient:
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=5) as response:
+            with urllib.request.urlopen(req, timeout=3) as response:
                 if response.status != 200:
-                    print(f"  [telemetry: dashboard returned HTTP {response.status}]", flush=True)
-        except Exception as e:
-            # Do not fail the commit if the server is offline
-            print(f"  [telemetry: could not reach dashboard: {e}]", flush=True)
+                    pass
+        except Exception:
+            # Do not fail or disrupt the commit if the server is offline
+            pass

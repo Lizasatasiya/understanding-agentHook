@@ -1,6 +1,6 @@
 import os
 import json
-from .api_utils import load_groq_api_key, extract_json, call_groq_api, get_model
+from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, load_groq_api_key, call_groq_api
 
 
 import re
@@ -88,10 +88,10 @@ class QuestionGenerator:
         std = (hints or {}).get("standards") or []
         failed_std = [s for s in std if not s.get("is_good")]
 
-        api_key = load_groq_api_key()
+        api_key = load_nous_api_key()
         if not api_key:
-            print("\n  \033[93m⚠️  [LLM] Warning: GROQ_API_KEY is not set.\033[0m")
-            print("  \033[2mSet GROQ_API_KEY in your .env or shell (export GROQ_API_KEY=\"gsk_...\") to generate custom questions.\033[0m\n", flush=True)
+            print("\n  \033[93m⚠️  [LLM] Warning: NOUS_API_KEY is not set.\033[0m")
+            print("  \033[2mSet NOUS_API_KEY in your .env or shell (export NOUS_API_KEY=\"...\") to generate custom questions.\033[0m\n", flush=True)
             questions = self._fallback(context, hints)
             return self._ensure_standards_questions(questions, failed_std)
 
@@ -277,8 +277,8 @@ class QuestionGenerator:
         out.append("")
         return out
 
-    def _call_groq(self, api_key: str, prompt: str, is_large: bool = False) -> list:
-        """Call Groq API and robustly parse question array from response."""
+    def _call_nous(self, api_key: str, prompt: str, is_large: bool = False) -> list:
+        """Call Nous Research API and robustly parse question array from response."""
         payload = {
             "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
@@ -286,10 +286,10 @@ class QuestionGenerator:
             "max_tokens": 800
         }
 
-        status, body = call_groq_api(api_key, payload, timeout=30)
+        status, body = call_nous_api(api_key, payload, timeout=30)
         if status != 200:
             if status != 0:
-                print(f"\n  \033[93m[⚠️  Groq API returned HTTP {status}: {body[:200]}]\033[0m\n", flush=True)
+                print(f"\n  \033[93m[⚠️  Nous API returned HTTP {status}: {body[:200]}]\033[0m\n", flush=True)
             return []
 
         try:
@@ -353,6 +353,9 @@ class QuestionGenerator:
             return result_list
         except Exception:
             return []
+
+    def _call_groq(self, api_key: str, prompt: str, is_large: bool = False) -> list:
+        return self._call_nous(api_key, prompt, is_large=is_large)
 
     def _ensure_standards_questions(self, questions: list, failed_std: list) -> list:
         """Ensure 1-2 questions directly address failed coding standards violations."""

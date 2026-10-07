@@ -98,6 +98,7 @@ _CRITICAL_PATTERNS = [
     (r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----",
      "private-key", "Private key material"),
     (r"\bgsk_[A-Za-z0-9]{30,}\b", "groq-api-token", "Groq API token"),
+    (r"\bsk-nous-[A-Za-z0-9_-]{20,}\b", "nous-api-token", "Nous Research API token"),
     (r"\bghp_[A-Za-z0-9]{30,}\b", "github-token", "GitHub access token"),
     (r"\bgho_[A-Za-z0-9]{30,}\b", "github-token", "GitHub access token"),
     (r"\bsk-(?:proj-)?[A-Za-z0-9_-]{40,}\b", "openai-api-token", "OpenAI API token"),

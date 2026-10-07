@@ -1,11 +1,11 @@
 import os
 import json
-from .api_utils import load_groq_api_key, extract_json, call_groq_api, get_model
+from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model
 
 
 class ChangeSummary:
     def generate(self, context: dict) -> dict:
-        api_key = load_groq_api_key()
+        api_key = load_nous_api_key()
         changes = context.get("structured_changes", [])
         is_large = context.get("is_large_change", False) or len(changes) > 1
 
@@ -85,7 +85,7 @@ class ChangeSummary:
         ]
         return "\n".join(lines)
 
-    def _call_groq(self, api_key: str, prompt: str, max_tokens: int = 300) -> dict:
+    def _call_nous(self, api_key: str, prompt: str, max_tokens: int = 300) -> dict:
         payload = {
             "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
@@ -93,7 +93,7 @@ class ChangeSummary:
             "max_tokens": max_tokens
         }
 
-        status, body = call_groq_api(api_key, payload, timeout=30)
+        status, body = call_nous_api(api_key, payload, timeout=30)
         if status != 200:
             return {}
 
@@ -106,6 +106,9 @@ class ChangeSummary:
             return {}
         except Exception:
             return {}
+
+    def _call_groq(self, api_key: str, prompt: str, max_tokens: int = 300) -> dict:
+        return self._call_nous(api_key, prompt, max_tokens=max_tokens)
 
     def _unified_fallback(self, context: dict) -> dict:
         stats = context.get("stats", {})

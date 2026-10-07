@@ -85,9 +85,9 @@ The hook automatically adapts its evaluation strategy based on the size and comp
 ## 🚀 Key Features
 
 - **🎙️ Voice-First Interaction**: Reads questions aloud (`say`) and transcribes developer speech in real-time using local OpenAI Whisper (`sounddevice` / `pyaudio`). Press **[Tab]** to toggle speech capture.
-- **⚡ Ultra-Fast Execution with Groq**: Uses Groq-hosted `qwen/qwen3.8-27b` for sub-second summary and question generation.
+- **⚡ Ultra-Fast Execution with Nous Research**: Uses Nous Research OpenAI-compatible Subscription API (`deepseek/deepseek-v4-flash` or custom models) for sub-second summary and question generation.
 - **🎯 Multi-Language Change Analysis**: Function-level change detection across 15+ languages — native Python `ast` for Python, line-anchored definition matching for TS/JS/C#/Go/Rust/Java and more. Only genuinely-touched functions become questions.
-- **🛡️ Security Lens (deterministic)**: Every staged change is scanned for security-relevant surfaces — injection sinks, auth flows, hardcoded secrets, unsafe deserialization, command injection, LLM-output trust, disabled TLS. Security-relevant changes always get one targeted security question (never a hard block). **Exception: live credentials (AWS keys, private keys, GitHub/OpenAI/Slack tokens...) hard-block the commit before questions are asked** — git history is permanent, so no answer can make committing a real credential safe. The gate scans the raw staged diff (module-level code included), redacts the secret in its output, and can be disabled per-commit with `UNDERSTANDING_AGENT_SECURITY_GATE=off`.
+- **🛡️ Security Lens (deterministic)**: Every staged change is scanned for security-relevant surfaces — injection sinks, auth flows, hardcoded secrets, unsafe deserialization, command injection, LLM-output trust, disabled TLS. Security-relevant changes always get one targeted security question (never a hard block). **Exception: live credentials (AWS keys, private keys, GitHub/OpenAI/Slack/Nous tokens...) hard-block the commit before questions are asked** — git history is permanent, so no answer can make committing a real credential safe. The gate scans the raw staged diff (module-level code included), redacts the secret in its output, and can be disabled per-commit with `UNDERSTANDING_AGENT_SECURITY_GATE=off`.
 - **🔬 Evidence-Driven Questions**: Reuses your already-installed scanners (semgrep, gitleaks) and test-gap analysis as *question evidence* — scanner findings become "explain this finding" questions, inheriting scanner recall without false-positive-blocking commits.
 - **📚 Domain Practice Packs**: Framework- and domain-aware best-practice topics: React state/effect invariants, NestJS DTO validation boundaries, .NET async/CancellationToken and EF Core behavior, ML train/test separation and reproducibility, data-pipeline idempotency, SQL migration safety.
 - **🔄 Smart State Persistence**: Saves attempts in `.git/understanding_agent_state.json` hashed against the staged diff. If an attempt fails, developers can retry without regenerating or paying for redundant API calls.
@@ -98,13 +98,14 @@ The hook automatically adapts its evaluation strategy based on the size and comp
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GROQ_API_KEY` | — | Groq API key (required for AI-generated questions) |
-| `UNDERSTANDING_AGENT_MODEL` | `qwen/qwen3.8-27b` | LLM model used for summaries, questions, and evaluation |
+| `NOUS_API_KEY` | — | Nous Research Portal API key (required for AI questions; `GROQ_API_KEY` supported as fallback) |
+| `NOUS_BASE_URL` | `https://inference-api.nousresearch.com/v1` | OpenAI-compatible endpoint URL for Nous Research |
+| `UNDERSTANDING_AGENT_MODEL` / `NOUS_MODEL` | `deepseek/deepseek-v4-flash` | LLM model used for summaries, questions, and evaluation |
 | `UNDERSTANDING_AGENT_FAIL_MODE` | `open` | `open`: if the LLM is unreachable, the commit is allowed with a warning. `closed`: the commit is blocked (strict verification) |
 | `UNDERSTANDING_AGENT_TELEMETRY_URL` | unset (off) | Endpoint to POST session audit payloads to (e.g. `http://dashboard.internal:8000/understanding-session`) |
 | `UNDERSTANDING_AGENT_SECURITY_GATE` | on | Hard-blocks commits containing live credentials (AWS keys, private keys, API tokens). `off` disables the credential gate for a commit (questions still run) |
 
-**Privacy note**: your staged diff (source code) is sent to Groq for question generation and evaluation — that is how the hook works. It is never sent anywhere else unless you explicitly set `UNDERSTANDING_AGENT_TELEMETRY_URL`.
+**Privacy note**: your staged diff (source code) is sent to Nous Research for question generation and evaluation — that is how the hook works. It is never sent anywhere else unless you explicitly set `UNDERSTANDING_AGENT_TELEMETRY_URL`.
 
 ---
 
@@ -150,9 +151,9 @@ understanding-agent-hook/
 - **Standard Library Zero-Dependency Core**: The core git parsing, AST analysis, terminal UI, and HTTP client use native Python modules (`ast`, `subprocess`, `hashlib`, `http.client`, `ssl`, `difflib`, `termios`, `tty`, `select`).
 
 ### LLM Infrastructure
-- **Provider**: [Groq Cloud](https://groq.com/)
-- **Model**: `qwen/qwen3.8-27b` (high-reasoning, low-latency code model) — override with `UNDERSTANDING_AGENT_MODEL`
-- **HTTP Layer**: Native `http.client.HTTPSConnection` with socket cleanup and JSON extraction.
+- **Provider**: [Nous Research Portal](https://portal.nousresearch.com/) (OpenAI-compatible Subscription API)
+- **Model**: `deepseek/deepseek-v4-flash` (or any model from the Nous catalog like `meta-llama/llama-3.1-8b-instruct`) — override with `NOUS_MODEL` or `UNDERSTANDING_AGENT_MODEL`
+- **HTTP Layer**: Native `http.client.HTTPSConnection` with socket cleanup and robust JSON extraction.
 
 ### Voice & Audio Stack (Optional / Plug-and-Play)
 - **Text-to-Speech (TTS)**: Built-in macOS `say` utility (no external package needed).
@@ -170,12 +171,12 @@ git clone https://github.com/Lizasatasiya/understanding-agentHook.git
 cd understanding-agentHook
 ```
 
-### 2. Configure Your Groq API Key
-Obtain an API key from [console.groq.com](https://console.groq.com/) and export it:
+### 2. Configure Your Nous Research API Key
+Obtain an API key from [portal.nousresearch.com](https://portal.nousresearch.com/) and export it:
 ```bash
-export GROQ_API_KEY="gsk_..."
+export NOUS_API_KEY="sk-nous-..."
 ```
-*(The hook also reads `.env` / `.env.local` from the current directory, the git repository root, and `~/.config/understanding-agent/.env`. It intentionally does NOT read shell configs like `~/.zshrc`.)*
+*(The hook also reads `.env` / `.env.local` from the current directory, the git repository root, and `~/.config/understanding-agent/.env`. Existing `GROQ_API_KEY` is also supported as a fallback.)*
 
 ### 3. Install Voice Dependencies (macOS)
 ```bash

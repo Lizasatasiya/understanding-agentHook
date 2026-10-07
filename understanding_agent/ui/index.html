@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Understanding Agent — Pre-Commit & Coding Standards Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- LEFT SIDEBAR: COMMIT LIST -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="brand">
+          <div class="brand-icon">🛡️</div>
+          <div class="brand-info">
+            <h1 class="brand-title">Understanding Agent</h1>
+            <span class="brand-subtitle">Pre-Commit Defense & Standards</span>
+          </div>
+        </div>
+        <div class="search-box">
+          <svg class="search-icon" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/>
+          </svg>
+          <input type="text" id="commit-search" placeholder="Search commits or hash..." autocomplete="off">
+          <button id="refresh-btn" class="btn-icon" title="Refresh commit history">
+            <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="sidebar-section-title">
+        <span>Commits</span>
+        <span id="commits-count" class="badge-count">0</span>
+      </div>
+
+      <div class="commit-list" id="commit-list">
+        <!-- Rendered dynamically from real data -->
+        <div class="sidebar-loading">
+          <div class="spinner"></div>
+          <span>Loading repository commits...</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-content" id="main-content">
+      <!-- Breadcrumb / Top Bar -->
+      <header class="top-nav">
+        <div class="nav-breadcrumbs" id="breadcrumbs">
+          <span class="crumb-root">Repository</span>
+          <span class="crumb-sep">/</span>
+          <span class="crumb-current" id="crumb-commit-title">Select a Commit</span>
+        </div>
+        <div class="nav-actions" id="top-nav-actions"></div>
+      </header>
+
+      <!-- Scrollable Container -->
+      <div class="content-scroll" id="content-scroll">
+        <!-- Empty Placeholder State -->
+        <div class="empty-state" id="empty-state">
+          <div class="empty-icon">💬</div>
+          <h2>Select a commit to view details</h2>
+          <p>Choose any real commit from the left sidebar to review changed files, architectural summary, coding standards violations, and pre-commit interactive attempts.</p>
+        </div>
+
+        <!-- VIEW 1: COMMIT OVERVIEW -->
+        <div class="commit-overview-view hidden" id="commit-overview-view">
+          <!-- Commit Header Card -->
+          <section class="card commit-header-card">
+            <div class="commit-header-top">
+              <div class="commit-status-badge" id="overview-status-badge">PASSED</div>
+              <span class="commit-branch-badge" id="overview-branch-badge">main</span>
+            </div>
+            <h2 class="commit-full-title" id="overview-message-title">Commit Title</h2>
+            <p class="commit-body-text hidden" id="overview-message-body"></p>
+
+            <div class="commit-meta-row">
+              <div class="meta-item">
+                <span class="meta-label">Hash:</span>
+                <code class="meta-code" id="overview-hash">--------</code>
+                <button class="btn-copy" id="btn-copy-hash" title="Copy full hash">📋</button>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Author:</span>
+                <span class="meta-val" id="overview-author">Author Name</span>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Timestamp:</span>
+                <span class="meta-val" id="overview-timestamp">--</span>
+              </div>
+            </div>
+          </section>
+
+          <!-- Section: Changed Files -->
+          <section class="card changed-files-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <span class="card-icon">📁</span>
+                <h3 class="card-title">Changed Files</h3>
+              </div>
+              <span class="badge-count" id="files-count-badge">0 files</span>
+            </div>
+            <div class="files-list" id="files-list">
+              <!-- Rendered files -->
+            </div>
+          </section>
+
+          <!-- Section: Change Summary -->
+          <section class="card change-summary-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <span class="card-icon">🧠</span>
+                <h3 class="card-title">Change Summary</h3>
+              </div>
+              <span class="badge-ai">AI Analysis</span>
+            </div>
+            <div class="summary-grid" id="summary-grid">
+              <div class="summary-box">
+                <div class="summary-box-title">What Changed</div>
+                <div class="summary-box-content" id="sum-what-changed">--</div>
+              </div>
+              <div class="summary-box">
+                <div class="summary-box-title">Impact</div>
+                <div class="summary-box-content" id="sum-impact">--</div>
+              </div>
+              <div class="summary-box">
+                <div class="summary-box-title">Why It Matters</div>
+                <div class="summary-box-content" id="sum-why">--</div>
+              </div>
+              <div class="summary-box summary-box-risks">
+                <div class="summary-box-title">Key Risks</div>
+                <div class="summary-box-content" id="sum-risks">--</div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Section: Pre-Commit Attempts -->
+          <section class="card attempts-section-card">
+            <div class="card-header">
+              <div class="card-title-group">
+                <span class="card-icon">⚡</span>
+                <h3 class="card-title">Pre-Commit Attempts</h3>
+              </div>
+              <span class="badge-count" id="attempts-count-badge">0 attempts</span>
+            </div>
+            <div class="attempts-grid" id="attempts-grid">
+              <!-- Attempt Cards -->
+            </div>
+          </section>
+        </div>
+
+        <!-- VIEW 2: ATTEMPT DETAIL (CHATGPT CONVERSATION + VIOLATIONS) -->
+        <div class="attempt-detail-view hidden" id="attempt-detail-view">
+          <!-- Attempt Header & Stepper -->
+          <section class="card attempt-header-card">
+            <div class="attempt-nav-bar">
+              <button class="btn btn-secondary" id="btn-back-to-commit">
+                <svg viewBox="0 0 20 20" fill="currentColor" class="btn-svg"><path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd"/></svg>
+                Back to Commit Overview
+              </button>
+
+              <div class="attempt-stepper" id="attempt-stepper">
+                <!-- e.g. Attempt 1 → Attempt 2 buttons -->
+              </div>
+
+              <div class="attempt-nav-buttons">
+                <button class="btn btn-secondary" id="btn-prev-attempt">← Previous</button>
+                <button class="btn btn-secondary" id="btn-next-attempt">Next →</button>
+              </div>
+            </div>
+
+            <div class="attempt-title-row">
+              <div class="attempt-title-group">
+                <h2 class="attempt-main-title" id="attempt-title">Attempt #1</h2>
+                <span class="commit-status-badge" id="attempt-status-badge">FAILED</span>
+                <span class="score-badge" id="attempt-score-badge">Score: 0%</span>
+              </div>
+              <div class="attempt-meta-info" id="attempt-timestamp">2026-10-07 11:32 AM</div>
+            </div>
+          </section>
+
+          <!-- ChatGPT Conversation View -->
+          <section class="conversation-section">
+            <div class="section-title-bar">
+              <div class="title-with-icon">
+                <span class="title-icon">💬</span>
+                <h3>Code Understanding Defense</h3>
+              </div>
+              <span class="badge-tag">Interactive Q&amp;A</span>
+            </div>
+
+            <div class="chat-thread" id="chat-thread">
+              <!-- Rendered questions and answers in ChatGPT style -->
+            </div>
+          </section>
+
+          <!-- Coding Standards Audit Section -->
+          <section class="violations-section">
+            <div class="section-title-bar">
+              <div class="title-with-icon">
+                <span class="title-icon">🛡️</span>
+                <h3>Coding Standards Audit Engine</h3>
+                <span class="badge-tag">AST Static Analysis</span>
+              </div>
+              <div class="audit-actions-group">
+                <div class="audit-filter-pills" id="audit-filter-pills">
+                  <button class="audit-filter-btn active" data-filter="all" id="btn-filter-all">
+                    All (<span id="filter-count-all">0</span>)
+                  </button>
+                  <button class="audit-filter-btn" data-filter="failed" id="btn-filter-failed">
+                    Failed (<span id="filter-count-failed">0</span>)
+                  </button>
+                  <button class="audit-filter-btn" data-filter="passed" id="btn-filter-passed">
+                    Passed (<span id="filter-count-passed">0</span>)
+                  </button>
+                </div>
+                <button class="btn btn-secondary btn-sm" id="btn-copy-terminal" title="Copy ASCII Terminal Report">
+                  <span id="btn-copy-terminal-icon">📋</span> Copy Output
+                </button>
+              </div>
+            </div>
+
+            <!-- Sleek macOS-Style Terminal Audit Console Card -->
+            <div class="terminal-card">
+              <div class="terminal-bar">
+                <div class="terminal-left-group">
+                  <div class="terminal-controls">
+                    <span class="dot dot-close"></span>
+                    <span class="dot dot-min"></span>
+                    <span class="dot dot-max"></span>
+                  </div>
+                  <div class="terminal-title">
+                    <span class="terminal-prompt-sym">❯</span> coding-standards audit --staged
+                  </div>
+                </div>
+                <div class="terminal-badges">
+                  <span class="badge-mini badge-fail-mini" id="term-badge-failed">0 Failed</span>
+                  <span class="badge-mini badge-pass-mini" id="term-badge-passed">0 Passed</span>
+                </div>
+              </div>
+
+              <!-- Content Lines -->
+              <div class="terminal-body" id="attempt-violations-list">
+                <!-- Rendered dynamically -->
+              </div>
+
+              <!-- Terminal Footer Summary Bar -->
+              <div class="terminal-footer">
+                <div class="compliance-track">
+                  <div class="compliance-bar" id="term-compliance-bar" style="width: 0%"></div>
+                </div>
+                <div class="terminal-summary-row" id="attempt-violations-footer">
+                  <div class="compliance-label" id="term-compliance-label">0% Compliance</div>
+                  <div class="terminal-summary-counts" id="term-summary-counts">
+                    <!-- Summary: 3 Passed (Good) │ 9 Failed (Violations) -->
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

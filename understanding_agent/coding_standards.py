@@ -22,15 +22,15 @@ class CodingStandardsChecker:
     def __init__(self, repo_root: str | None = None):
         self.repo_root = repo_root or os.getcwd()
 
-    def check(self, changes: Dict[str, Any], context: Dict[str, Any] | None = None) -> List[Dict[str, Any]]:
-        """Run all coding standard checks across the staged files."""
+    def check(self, changes: Dict[str, Any], context: Dict[str, Any] | None = None, commit_hash: str | None = None) -> List[Dict[str, Any]]:
+        """Run all coding standard checks across the staged or commit files."""
         staged_files = changes.get("files", [])
         if not staged_files:
             return []
 
         results: List[Dict[str, Any]] = []
 
-        # Collect raw staged diff and added lines per file
+        # Collect raw diff and added lines per file
         file_diffs = {}
         file_contents = {}
         for f in staged_files:
@@ -38,19 +38,31 @@ class CodingStandardsChecker:
             if not path or f.get("status") == "deleted":
                 continue
             try:
-                diff_out = subprocess.check_output(
-                    ["git", "diff", "--cached", "-U3", path],
-                    text=True, stderr=subprocess.DEVNULL, cwd=self.repo_root
-                )
+                if commit_hash:
+                    diff_out = subprocess.check_output(
+                        ["git", "show", "-U3", commit_hash, "--", path],
+                        text=True, stderr=subprocess.DEVNULL, cwd=self.repo_root
+                    )
+                else:
+                    diff_out = subprocess.check_output(
+                        ["git", "diff", "--cached", "-U3", path],
+                        text=True, stderr=subprocess.DEVNULL, cwd=self.repo_root
+                    )
                 file_diffs[path] = diff_out
             except Exception:
                 file_diffs[path] = ""
 
             try:
-                content_out = subprocess.check_output(
-                    ["git", "show", f":{path}"],
-                    text=True, stderr=subprocess.DEVNULL, cwd=self.repo_root
-                )
+                if commit_hash:
+                    content_out = subprocess.check_output(
+                        ["git", "show", f"{commit_hash}:{path}"],
+                        text=True, stderr=subprocess.DEVNULL, cwd=self.repo_root
+                    )
+                else:
+                    content_out = subprocess.check_output(
+                        ["git", "show", f":{path}"],
+                        text=True, stderr=subprocess.DEVNULL, cwd=self.repo_root
+                    )
                 file_contents[path] = content_out
             except Exception:
                 file_contents[path] = ""

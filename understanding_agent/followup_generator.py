@@ -1,9 +1,9 @@
 import json
-from .api_utils import load_groq_api_key, call_groq_api, get_model
+from .api_utils import load_nous_api_key, call_nous_api, get_model
 
 class FollowUpGenerator:
     def generate(self, question: dict, answer: dict, evaluation: dict) -> str:
-        api_key = load_groq_api_key()
+        api_key = load_nous_api_key()
         if not api_key:
             return "Could you elaborate on what happens when the validation fails?"
             
@@ -28,7 +28,7 @@ RULES:
 5. Return ONLY the question text. No quotes, no markdown, no intros.
 """
 
-    def _call_groq(self, api_key: str, prompt: str) -> str:
+    def _call_nous(self, api_key: str, prompt: str) -> str:
         payload = {
             "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
@@ -36,7 +36,7 @@ RULES:
             "max_tokens": 128
         }
 
-        status, body = call_groq_api(api_key, payload, timeout=30)
+        status, body = call_nous_api(api_key, payload, timeout=30)
         if status != 200:
             return ""
 
@@ -57,3 +57,6 @@ RULES:
             return text.strip()
         except Exception:
             return ""
+
+    def _call_groq(self, api_key: str, prompt: str) -> str:
+        return self._call_nous(api_key, prompt)

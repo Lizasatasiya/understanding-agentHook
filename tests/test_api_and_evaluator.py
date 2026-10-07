@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import os
 
-from understanding_agent.api_utils import extract_json, load_groq_api_key, call_groq_api
+from understanding_agent.api_utils import extract_json, load_groq_api_key, call_groq_api, load_nous_api_key, call_nous_api
 from understanding_agent.answer_evaluator import AnswerEvaluator
 from understanding_agent.server_client import ServerClient
 
@@ -70,6 +70,10 @@ class TestApiRetry(unittest.TestCase):
 
 
 class TestApiKeyLoading(unittest.TestCase):
+    def test_nous_env_var_wins(self):
+        with patch.dict(os.environ, {"NOUS_API_KEY": "from-nous-env"}):
+            self.assertEqual(load_nous_api_key(), "from-nous-env")
+
     def test_env_var_wins(self):
         with patch.dict(os.environ, {"GROQ_API_KEY": "from-env"}):
             self.assertEqual(load_groq_api_key(), "from-env")

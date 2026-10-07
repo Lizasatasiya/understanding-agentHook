@@ -5,15 +5,26 @@ import time
 import subprocess
 import http.client
 import ssl
+from urllib.parse import urlparse
 
 
-# Default Groq model (override with UNDERSTANDING_AGENT_MODEL)
-_DEFAULT_MODEL = "qwen/qwen3.8-27b"
+# Default Nous Research Subscription API base URL and model (override with NOUS_BASE_URL / NOUS_MODEL / UNDERSTANDING_AGENT_MODEL)
+_DEFAULT_BASE_URL = "https://inference-api.nousresearch.com/v1"
+_DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
+
+
+def get_base_url() -> str:
+    """Return the OpenAI-compatible base URL for Nous Research Subscription API."""
+    return os.environ.get("NOUS_BASE_URL", "").strip() or \
+           os.environ.get("UNDERSTANDING_AGENT_BASE_URL", "").strip() or \
+           _DEFAULT_BASE_URL
 
 
 def get_model() -> str:
-    """Return the LLM model name, allowing override via UNDERSTANDING_AGENT_MODEL."""
-    return os.environ.get("UNDERSTANDING_AGENT_MODEL", "").strip() or _DEFAULT_MODEL
+    """Return the LLM model name, allowing override via NOUS_MODEL or UNDERSTANDING_AGENT_MODEL."""
+    return os.environ.get("NOUS_MODEL", "").strip() or \
+           os.environ.get("UNDERSTANDING_AGENT_MODEL", "").strip() or \
+           _DEFAULT_MODEL
 
 
 def fail_open_enabled() -> bool:
@@ -25,11 +36,12 @@ def fail_open_enabled() -> bool:
     return os.environ.get("UNDERSTANDING_AGENT_FAIL_MODE", "").strip().lower() != "closed"
 
 
-def _parse_key_from_file(filepath: str) -> str:
-    """Extract GROQ_API_KEY from an env file (KEY=VALUE or export KEY=VALUE)."""
+def _parse_key_from_file(filepath: str, preferred_keys: tuple = ("NOUS_API_KEY", "NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY", "GROQ_API_KEY")) -> str:
+    """Extract specified keys from an env file (KEY=VALUE or export KEY=VALUE)."""
     if not filepath or not os.path.exists(filepath):
         return ""
     try:
+        found_keys = {}
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
                 line = line.strip()
@@ -37,32 +49,42 @@ def _parse_key_from_file(filepath: str) -> str:
                     continue
                 if line.startswith("export "):
                     line = line[7:].strip()
-                if line.startswith("GROQ_API_KEY"):
-                    parts = line.split("=", 1)
-                    if len(parts) == 2 and parts[0].strip() == "GROQ_API_KEY":
-                        val = parts[1].strip()
-                        if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
-                            val = val[1:-1].strip()
-                        if val:
-                            return val
+                for key_name in preferred_keys:
+                    if line.startswith(key_name):
+                        parts = line.split("=", 1)
+                        if len(parts) == 2 and parts[0].strip() == key_name:
+                            val = parts[1].strip()
+                            if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                                val = val[1:-1].strip()
+                            if val:
+                                found_keys[key_name] = val
+        for pref in preferred_keys:
+            if pref in found_keys:
+                return found_keys[pref]
     except Exception:
         pass
     return ""
 
 
-def load_groq_api_key() -> str:
-    """Load GROQ_API_KEY from the environment or explicit local env files.
+def load_nous_api_key() -> str:
+    """Load NOUS_API_KEY (or fallback GROQ_API_KEY) from the environment or explicit local env files.
 
-    Search order (intentionally conservative — no shell history/config parsing,
-    no walking up beyond the repository root):
-      1. GROQ_API_KEY environment variable
-      2. .env / .env.local in the current working directory
-      3. .env / .env.local in the git repository root
-      4. ~/.config/understanding-agent/.env
+    Search order:
+      1. Explicit NOUS_API_KEY / NOUSRESEARCH_API_KEY / NOUS_PORTAL_API_KEY environment variables
+      2. .env / .env.local in search dirs (cwd, parents, git root, ~/.config) strictly searching for NOUS keys
+      3. Fallback GROQ_API_KEY from environment or .env files only if no NOUS key was found
     """
-    api_key = os.environ.get("GROQ_API_KEY", "").strip()
-    if api_key:
-        return api_key
+    nous_key_names = ("NOUS_API_KEY", "NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY")
+
+    # 1. Direct environment variables (process environment takes precedence over disk files)
+    for env_var in nous_key_names:
+        api_key = os.environ.get(env_var, "").strip()
+        if api_key:
+            return api_key
+
+    groq_env = os.environ.get("GROQ_API_KEY", "").strip()
+    if groq_env:
+        return groq_env
 
     search_dirs = []
     cur = os.path.abspath(os.getcwd())
@@ -83,13 +105,34 @@ def load_groq_api_key() -> str:
     except Exception:
         pass
 
+    # 2. Check all .env files specifically for NOUS keys first
     for d in search_dirs:
         for fname in (".env", ".env.local"):
-            key = _parse_key_from_file(os.path.join(d, fname))
+            key = _parse_key_from_file(os.path.join(d, fname), nous_key_names)
             if key:
                 return key
 
-    return _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"))
+    key = _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), nous_key_names)
+    if key:
+        return key
+
+    # 3. Fallback to GROQ_API_KEY only if no NOUS key was defined anywhere
+    groq_env = os.environ.get("GROQ_API_KEY", "").strip()
+    if groq_env:
+        return groq_env
+
+    for d in search_dirs:
+        for fname in (".env", ".env.local"):
+            key = _parse_key_from_file(os.path.join(d, fname), ("GROQ_API_KEY",))
+            if key:
+                return key
+
+    return _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), ("GROQ_API_KEY",))
+
+
+# Alias for backward compatibility
+load_groq_api_key = load_nous_api_key
+load_api_key = load_nous_api_key
 
 
 def _safe_json_loads(s: str):
@@ -173,15 +216,15 @@ def extract_json(text: str):
     return _safe_json_loads(cleaned)
 
 
-def call_groq_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: int = 2) -> tuple[int, str]:
-    """Send an HTTP request to the Groq Chat Completions API.
+def call_nous_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: int = 2) -> tuple[int, str]:
+    """Send an HTTP request to the Nous Research OpenAI-compatible Chat Completions API.
 
     Retries transient failures (connection errors, 429, 5xx) with a short
     exponential backoff. Returns (status_code, response_text_or_error).
     status_code 0 means the request never got a response.
     """
     if not api_key:
-        return 0, "No GROQ_API_KEY found"
+        return 0, "No NOUS_API_KEY or GROQ_API_KEY found"
 
     last_status, last_body = 0, ""
     for attempt in range(retries + 1):
@@ -195,18 +238,43 @@ def call_groq_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: 
 
 
 def _groq_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[int, str]:
+    """Compatibility bridge for mock patches and direct calls."""
+    return _nous_request_once(api_key, payload_dict, timeout)
+
+
+# Backward compatibility alias
+call_groq_api = call_nous_api
+
+
+def _nous_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[int, str]:
+    base_url = get_base_url().rstrip("/")
+    parsed = urlparse(base_url)
+    scheme = parsed.scheme or "https"
+    host = parsed.netloc or "inference-api.nousresearch.com"
+    base_path = parsed.path or "/v1"
+
+    if base_path.endswith("/chat/completions"):
+        endpoint_path = base_path
+    else:
+        endpoint_path = f"{base_path}/chat/completions"
+
     payload = json.dumps(payload_dict).encode("utf-8")
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Content-Length": str(len(payload))
     }
 
     conn = None
     try:
-        ctx = ssl.create_default_context()
-        conn = http.client.HTTPSConnection("api.groq.com", context=ctx, timeout=timeout)
-        conn.request("POST", "/openai/v1/chat/completions", body=payload, headers=headers)
+        if scheme == "http":
+            conn = http.client.HTTPConnection(host, timeout=timeout)
+        else:
+            ctx = ssl.create_default_context()
+            conn = http.client.HTTPSConnection(host, context=ctx, timeout=timeout)
+            
+        conn.request("POST", endpoint_path, body=payload, headers=headers)
         response = conn.getresponse()
         body = response.read().decode("utf-8", errors="replace")
         return response.status, body
@@ -218,3 +286,7 @@ def _groq_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[
                 conn.close()
             except Exception:
                 pass
+
+
+# Backward compatibility alias
+_groq_request_once = _nous_request_once
