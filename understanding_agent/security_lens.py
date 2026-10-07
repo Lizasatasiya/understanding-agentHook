@@ -89,11 +89,13 @@ _SECURITY_PATTERNS = [
      "tls-verification-disabled", 5, "why TLS verification is disabled"),
 ]
 
-# Paths where example-shaped content legitimately lives: tests, fixtures, and
-# documentation. Exact vendor formats STILL block in these paths (a real key
-# is real anywhere); only the generic/example-shaped tiers are exempt here.
+# Paths where example-shaped content legitimately lives: tests, fixtures,
+# documentation, and *.example/*.sample/*.template config files. Exact vendor
+# formats STILL block in these paths (a real key is real anywhere); only the
+# generic/example-shaped tiers are exempt here.
 _TEST_PATH_HINTS = ("test", "spec", "mock", "fixture", "__tests__")
 _DOC_PATH_HINTS = (".md", ".rst", ".txt", "docs/", "readme")
+_EXAMPLE_FILE_SUFFIXES = (".example", ".sample", ".template", ".tpl")
 
 # Deterministic, catastrophic findings: known live-credential formats.
 # These BLOCK the commit outright (before questions) — no answer the developer
@@ -290,7 +292,14 @@ class SecurityLens:
 
     @staticmethod
     def _is_doc_path(path: str) -> bool:
-        return any(h in path.lower() for h in _DOC_PATH_HINTS)
+        """Doc paths AND example-named config files (config.example.yaml) —
+        where redacted/placeholder-shaped examples legitimately live. Only
+        the example-shaped tiers are exempt here; vendor formats still block.
+        """
+        p = path.lower()
+        if any(h in p for h in _DOC_PATH_HINTS):
+            return True
+        return any(p.endswith(s) for s in _EXAMPLE_FILE_SUFFIXES)
 
     def _staged_file_names(self) -> List[str]:
         """Return the staged file list via git (name-status). Never raises."""
