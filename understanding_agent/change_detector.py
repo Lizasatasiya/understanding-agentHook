@@ -64,14 +64,19 @@ class ChangeDetector:
 
             language = language_for(path)
             if not language:
-                # Non-code files (docs, config, schemas): tracked as module-level changes
-                if ext in _NON_CODE_EXTENSIONS:
-                    files.append({
-                        "path": path,
-                        "status": "modified" if status == 'M' else "added",
-                        "language": _EXTENSION_MAP.get(ext, "unknown"),
-                        "changed_functions": [{"name": "<module>", "change_type": "modified" if status == 'M' else "added", "added_calls": []}]
-                    })
+                # Non-code files (docs, config, schemas) AND any other
+                # unknown-extension file (e.g. server.pem, secrets.sqlite,
+                # extensionless binaries): all tracked as module-level changes.
+                # Unknown extensions must NOT be dropped — the credential gate
+                # and scale metrics need to see every staged file (a force-added
+                # gitignored key file once bypassed the gate because the
+                # detector returned [] and the CLI exited 0 before gating).
+                files.append({
+                    "path": path,
+                    "status": "modified" if status == 'M' else "added",
+                    "language": _EXTENSION_MAP.get(ext, "unknown"),
+                    "changed_functions": [{"name": "<module>", "change_type": "modified" if status == 'M' else "added", "added_calls": []}]
+                })
                 continue
 
             changed_funcs = self._analyze_changes(path, status, language)

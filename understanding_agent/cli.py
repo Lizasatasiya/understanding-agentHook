@@ -40,6 +40,32 @@ def _is_gitignored(repo_root: str, path: str) -> bool:
         return False
 
 
+def _print_gate_block(critical: list, env: dict, project_root: str) -> None:
+    """Print the credential-gate block message and unstage hints."""
+    print(f"\n\033[91mCommit blocked: credential detected in staged code.\033[0m\n")
+    for f in critical:
+        print(f"  \033[91m✗ {f['description']} ({f['redacted']}) in {f['file']}"
+              + (f" :: {f['function']}()" if f["function"] else "") + "\033[0m")
+    # B6: actionable unstage suggestion per finding
+    unstaged_files = sorted({f["file"] for f in critical if f.get("file")})
+    if unstaged_files:
+        print("\n\033[93m  Unstage the offending file(s) to abort this commit path:\033[0m")
+        for path in unstaged_files:
+            print(f"    git restore --staged {path}")
+    # B6: call out staged-but-gitignored files (the exact mistake)
+    ignored = [p for p in unstaged_files if _is_gitignored(project_root, p)]
+    if ignored:
+        print(f"\n\033[93m  Note: {', '.join(ignored)} is listed in .gitignore — it was staged "
+              "explicitly (e.g. `git add -f` or `git add .` after editing).\033[0m")
+    print("""
+\033[93m  Remove the credential before committing:\033[0m
+  1. Move it to an environment variable or your .env (already gitignored)
+  2. If it was ever committed before, rotate it — history keeps it forever
+  3. If this is a false positive, set UNDERSTANDING_AGENT_SECURITY_GATE=off
+     for this commit: git commit  # after unsetting, or use --no-verify
+""")
+
+
 def _write_state(state_file: str, attempt_key: str, head_commit, commit_msg,
                  diff_hash: str, attempts: int, valid_questions: list) -> None:
     """Persist hook state so attempts and answered questions survive retries.
@@ -79,10 +105,21 @@ def main():
     change_detector = ChangeDetector()
     changes = change_detector.detect()
     
+    project_root = env.get("project_root") or os.getcwd()
+
+    # 2b. Credential gate runs even on "no analyzable files" commits: the
+    # gate scans git's staged list directly (key FILES are findings by name
+    # alone), so a lone force-added key/credential file must never slip past
+    # an early exit. Zero LLM cost.
+    if security_gate_enabled():
+        lens = SecurityLens()
+        critical = lens.find_critical_findings({"structured_changes": []})
+        if critical:
+            _print_gate_block(critical, env, project_root)
+            sys.exit(1)
+
     if not changes.get("files"):
         sys.exit(0)
-
-    project_root = env.get("project_root") or os.getcwd()
     head_commit = get_head_commit(project_root)
     commit_msg = get_current_commit_message(project_root)
     diff_hash = hashlib.sha256(json.dumps(changes, sort_keys=True).encode()).hexdigest()
@@ -115,28 +152,7 @@ def main():
     if security_gate_enabled():
         critical = lens.find_critical_findings(context)
         if critical:
-            print(f"\n\033[91mCommit blocked: credential detected in staged code.\033[0m\n")
-            for f in critical:
-                print(f"  \033[91m✗ {f['description']} ({f['redacted']}) in {f['file']}"
-                      + (f" :: {f['function']}()" if f["function"] else "") + "\033[0m")
-            # B6: actionable unstage suggestion per finding
-            unstaged_files = sorted({f["file"] for f in critical if f.get("file")})
-            if unstaged_files:
-                print("\n\033[93m  Unstage the offending file(s) to abort this commit path:\033[0m")
-                for path in unstaged_files:
-                    print(f"    git restore --staged {path}")
-            # B6: call out staged-but-gitignored files (the exact mistake)
-            ignored = [p for p in unstaged_files if _is_gitignored(env.get("project_root") or os.getcwd(), p)]
-            if ignored:
-                print(f"\n\033[93m  Note: {', '.join(ignored)} is listed in .gitignore — it was staged "
-                      "explicitly (e.g. `git add -f` or `git add .` after editing).\033[0m")
-            print("""
-\033[93m  Remove the credential before committing:\033[0m
-  1. Move it to an environment variable or your .env (already gitignored)
-  2. If it was ever committed before, rotate it — history keeps it forever
-  3. If this is a false positive, set UNDERSTANDING_AGENT_SECURITY_GATE=off
-     for this commit: git commit  # after unsetting, or use --no-verify
-""")
+            _print_gate_block(critical, env, project_root)
             sys.exit(1)
 
     # 5d. Coding Standards Audit (deterministic, printed after the gate passes)
