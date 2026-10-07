@@ -11,6 +11,7 @@ This module is deterministic pattern classification — no LLM, no network.
 It produces a security_profile that question_generator weights questions with.
 """
 
+import math
 import os
 import re
 import subprocess
@@ -75,6 +76,10 @@ _SECURITY_PATTERNS = [
     (r"agent.*tool|execute_tool|function_call|run_agent",
      "llm-agency", 4, "the blast radius if the LLM output is adversarial"),
 
+    # --- Transport (moved from coding_standards._check_secure_transport, A0.1) ---
+    (r"['\"]http://(?!localhost|127\.0\.0\.1|www\.w3\.org)[a-zA-Z0-9\-_.]+",
+     "cleartext-transport", 4, "why this endpoint uses cleartext HTTP instead of HTTPS"),
+
     # --- CORS / headers / cookies ---
     (r"Access-Control-Allow-Origin|AllowAnyOrigin|CorsPolicy|cors\(",
      "cors-config", 3, "which origins are allowed and why"),
@@ -93,7 +98,14 @@ _TEST_PATH_HINTS = ("test", "spec", "mock", "fixture", "__tests__")
 # permanent. Test/doc files are exempt (that's where example keys legitimately
 # live). Distinct from _SECURITY_PATTERNS, which are heuristic and stay
 # questions.
+#
+# The blocking line is deliberately narrow and defensible: "stealable as-is in
+# the next 10 minutes" hard-blocks (vendor-pinned token formats, key material,
+# creded connection strings, key FILES, high-entropy secret assignments).
+# Judgment-call findings (weak crypto, CORS, Math.random tokens) stay as
+# severity-weighted questions in _SECURITY_PATTERNS.
 _CRITICAL_PATTERNS = [
+    # --- Cloud / infra providers ---
     (r"AKIA[0-9A-Z]{16}", "aws-access-key", "AWS access key ID"),
     (r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----",
      "private-key", "Private key material"),
@@ -101,9 +113,70 @@ _CRITICAL_PATTERNS = [
     (r"\bsk-nous-[A-Za-z0-9_-]{20,}\b", "nous-api-token", "Nous Research API token"),
     (r"\bghp_[A-Za-z0-9]{30,}\b", "github-token", "GitHub access token"),
     (r"\bgho_[A-Za-z0-9]{30,}\b", "github-token", "GitHub access token"),
-    (r"\bsk-(?:proj-)?[A-Za-z0-9_-]{40,}\b", "openai-api-token", "OpenAI API token"),
+    (r"\bgithub_pat_[A-Za-z0-9_]{60,}\b", "github-token", "GitHub fine-grained access token"),
+    (r"\bsk-(?:proj-)?(?!ant-|or-|nous-)[A-Za-z0-9_-]{40,}\b", "openai-api-token", "OpenAI API token"),
     (r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b", "slack-token", "Slack token"),
+    (r"\bAIza[0-9A-Za-z_-]{35}\b", "google-api-key", "Google API key"),
+    (r"\b0{8}[a-z0-9]{10}\b", "gcp-oauth", "GCP OAuth access token"),
+
+    # --- AI / model providers ---
+    # NOTE: must not swallow sk-ant- / sk-or- (checked before the generic sk- form)
+    (r"\bsk-ant-[A-Za-z0-9_-]{20,}\b", "anthropic-api-token", "Anthropic API token"),
+    (r"\bsk-or-[A-Za-z0-9-]{30,}\b", "openrouter-api-token", "OpenRouter API token"),
+    (r"\bhf_[A-Za-z0-9]{30,}\b", "huggingface-token", "Hugging Face token"),
+
+    # --- SaaS / payments ---
+    (r"\bsk_live_[0-9a-zA-Z]{20,}\b", "stripe-secret-key", "Stripe live secret key"),
+    (r"\brk_live_[0-9a-zA-Z]{20,}\b", "stripe-restricted-key", "Stripe live restricted key"),
+    (r"\bwhsec_[A-Za-z0-9]{20,}\b", "stripe-webhook-secret", "Stripe webhook signing secret"),
+    (r"\bSG\.[\w-]{22}\.[\w-]{43}\b", "sendgrid-api-key", "SendGrid API key"),
+    (r"\bSK[0-9a-f]{32}\b", "twilio-api-key", "Twilio API key"),
+    (r"\b\d{9,10}:[A-Za-z0-9_-]{35}\b", "telegram-bot-token", "Telegram bot token"),
+
+    # --- Package registries ---
+    (r"\bnpm_[A-Za-z0-9]{36}\b", "npm-token", "npm access token"),
+    (r"\bglpat-[A-Za-z0-9_-]{20,}\b", "gitlab-token", "GitLab personal access token"),
+    (r"\bpypi-A[A-Za-z0-9]{60,}vcmc\b", "pypi-upload-token", "PyPI upload token"),
 ]
+
+# Connection strings WITH inline credentials → hard block. Bare
+# scheme://host forms (no user:pass@) stay in the heuristic tier.
+_CONNECTION_STRING_PATTERN = re.compile(
+    r"\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqps?|ftp|mssql|oracle)"
+    r"://[^\s@'\"]{1,64}:[^\s@'\"]{1,64}@", re.IGNORECASE)
+_CONNECTION_LABEL = "creded-connection-string"
+_CONNECTION_DESC = "Connection string with inline credentials"
+
+# Generic scheme://user:pass@ basic-auth URL (any scheme) → hard block.
+_BASIC_AUTH_URL_PATTERN = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]{1,20}://[^\s@'\":/]{1,64}:[^\s@'\"]{1,64}@")
+_BASIC_AUTH_LABEL = "basic-auth-url"
+_BASIC_AUTH_DESC = "URL with inline basic-auth credentials"
+
+# Filenames whose very presence staged is a finding — contents are never read
+# (privacy-cheap; the name alone is the signal). A real private key added as a
+# file is the worst case the content scan can miss today.
+_CRITICAL_FILE_EXTENSIONS = (".pem", ".p12", ".pfx", ".key", ".keystore", ".kdbx",
+                             ".sqlcipher", ".jks", ".pfx")
+_CRITICAL_FILE_NAMES = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_gpg",
+                        ".npmrc", ".netrc", ".kube/config", "credentials")
+# Names that look like examples/keys, not real key material.
+_FILE_EXEMPT_SUFFIXES = (".example", ".sample", ".template", ".tpl")
+
+# Generic secret assignments gated on Shannon entropy (PLAN.md B2). Regex alone
+# cannot block password="..." — fixtures, placeholders and doc examples all
+# die. A high-entropy value bound to a secret-named key is a real credential
+# with near-certainty; a low-entropy one is a placeholder and stays heuristic.
+_GENERIC_SECRET_PATTERN = re.compile(
+    r"""['\"]?\b(?:password|passwd|pwd|secret|secret_?key|api[_-]?key|apikey|"""
+    r"""access_?key|access_?token|auth_?token|private_?key|client_?secret|"""
+    r"""signing_?key|jwt_?secret|session_?key)\b['\"]?\s*[:=]\s*['\"]([^'\"]{20,})['\"]""",
+    re.IGNORECASE)
+_PLACEHOLDER_HINTS = ("example", "sample", "placeholder", "changeme", "change-me",
+                      "xxx", "your", "dummy", "fake", "test", "todo", "fixme")
+_SECRET_ESCAPE_COMMENTS = ("# pragma: allow-secret", "# example", "# allow-secret")
+
+_ENTROPY_BITS_THRESHOLD = 3.5  # per char, over values ≥ 20 chars
+_ENTROPY_CLASSES_MIN = 3       # of [lower, upper, digit, symbol]
 
 
 def security_gate_enabled() -> bool:
@@ -115,15 +188,19 @@ class SecurityLens:
     """Deterministic security-relevance classifier for staged changes."""
 
     def find_critical_findings(self, context: dict) -> List[dict]:
-        """Deterministic, catastrophic findings (live credentials) that must block.
+        """Deterministic, catastrophic findings (stealable credentials) that block.
 
         Scans BOTH the per-function diffs in context AND the raw staged diff —
         credentials typically live at module level, outside any function, so the
         raw scan is the primary source; the function-level context scan adds
-        function attribution where available.
+        function attribution where available. Also scans STAGED FILE NAMES —
+        key material added as a file (id_rsa, *.pem) is a finding by presence,
+        without reading its contents.
 
         Returns [{file, function, label, description, redacted}]. Empty list
-        means the commit may proceed. Test paths are exempt.
+        means the commit may proceed. Test paths are exempt from the generic
+        entropy-gated patterns only (PLAN.md B5); exact vendor formats block
+        everywhere — a real key is real in a test file too.
         """
         findings = []
         seen = set()
@@ -141,30 +218,155 @@ class SecurityLens:
                 "redacted": secret[:8] + "…" if len(secret) > 8 else "***",
             })
 
+        # 0. Staged key FILES — the presence alone is the finding (PLAN.md B4)
+        for path in self._staged_file_names():
+            if self._is_critical_key_file(path):
+                _record(path, "", "staged-key-file",
+                         "Key/credential file staged for commit", "<filename>")
+
         # 1. Raw staged diff scan (module-level code, config files, everything)
         raw = self._raw_staged_added_lines()
         for path, added in raw.items():
-            if any(h in path.lower() for h in _TEST_PATH_HINTS):
-                continue
+            is_test = self._is_test_path(path)
+            # Exact vendor formats block EVERYWHERE, including tests (PLAN.md B5):
+            # a real leaked key is real in a test file — the classic org leak.
             for pattern, label, description in _CRITICAL_PATTERNS:
                 for m in re.finditer(pattern, added):
                     _record(path, "", label, description, m.group(0))
+            # Creded connection strings/basic-auth: exempt placeholder-looking
+            # fixtures in test paths, block real-shaped ones.
+            for m in re.finditer(_CONNECTION_STRING_PATTERN, added):
+                if is_test and self._looks_like_placeholder(m.group(0)):
+                    continue
+                _record(path, "", _CONNECTION_LABEL, _CONNECTION_DESC, m.group(0))
+            for m in re.finditer(_BASIC_AUTH_URL_PATTERN, added):
+                if is_test and self._looks_like_placeholder(m.group(0)):
+                    continue
+                _record(path, "", _BASIC_AUTH_LABEL, _BASIC_AUTH_DESC, m.group(0))
+            # Generic entropy-gated secrets: test paths exempt (fixtures live there)
+            if not is_test:
+                self._scan_generic_secrets(path, added, _record)
 
         # 2. Function-level context scan (adds function attribution)
         for change in context.get("structured_changes", []):
             path = change.get("file", "")
-            if any(h in path.lower() for h in _TEST_PATH_HINTS):
-                continue
+            is_test = self._is_test_path(path)
             diff = change.get("diff", "")
             if not diff:
                 continue
             changed_lines = [l for l in diff.splitlines() if l.startswith("+") and not l.startswith("+++")]
             added = "\n".join(changed_lines)
+            # Vendor formats block everywhere (see raw scan note above).
             for pattern, label, description in _CRITICAL_PATTERNS:
                 for m in re.finditer(pattern, added):
                     _record(path, change.get("function", ""), label, description, m.group(0))
+            for m in re.finditer(_CONNECTION_STRING_PATTERN, added):
+                if is_test and self._looks_like_placeholder(m.group(0)):
+                    continue
+                _record(path, change.get("function", ""), _CONNECTION_LABEL,
+                        _CONNECTION_DESC, m.group(0))
+            for m in re.finditer(_BASIC_AUTH_URL_PATTERN, added):
+                if is_test and self._looks_like_placeholder(m.group(0)):
+                    continue
+                _record(path, change.get("function", ""), _BASIC_AUTH_LABEL,
+                        _BASIC_AUTH_DESC, m.group(0))
+            # Generic entropy-gated secrets: test paths exempt
+            if not is_test:
+                self._scan_generic_secrets(path, added, _record, func=change.get("function", ""))
 
         return findings
+
+    @staticmethod
+    def _is_test_path(path: str) -> bool:
+        return any(h in path.lower() for h in _TEST_PATH_HINTS)
+
+    def _staged_file_names(self) -> List[str]:
+        """Return the staged file list via git (name-status). Never raises."""
+        try:
+            out = subprocess.check_output(
+                ["git", "diff", "--cached", "--name-only"],
+                text=True, stderr=subprocess.DEVNULL
+            )
+            return [l.strip() for l in out.splitlines() if l.strip()]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _is_critical_key_file(path: str) -> bool:
+        """A key/credential file staged for commit is a finding by name alone.
+
+        Example-style names (id_rsa.example, ca.pem.template) are exempt —
+        that's exactly where sample material legitimately lives.
+        """
+        name = os.path.basename(path).lower()
+        if any(name.endswith(s) for s in _FILE_EXEMPT_SUFFIXES):
+            return False
+        if any(name == n or name == n + "_key" for n in _CRITICAL_FILE_NAMES):
+            return True
+        if name in (".kube/config",):
+            return True
+        if any(name.endswith(ext) for ext in _CRITICAL_FILE_EXTENSIONS):
+            return True
+        return False
+
+    @staticmethod
+    def _looks_like_placeholder(value: str) -> bool:
+        v = value.lower()
+        return any(h in v for h in _PLACEHOLDER_HINTS)
+
+    @staticmethod
+    def _shannon_entropy(value: str) -> float:
+        if not value:
+            return 0.0
+        freq = {}
+        for ch in value:
+            freq[ch] = freq.get(ch, 0) + 1
+        length = len(value)
+        return -sum((c / length) * math.log2(c / length) for c in freq.values())
+
+    @staticmethod
+    def _char_classes(value: str) -> int:
+        classes = 0
+        if any(c.islower() for c in value):
+            classes += 1
+        if any(c.isupper() for c in value):
+            classes += 1
+        if any(c.isdigit() for c in value):
+            classes += 1
+        if any(not c.isalnum() for c in value):
+            classes += 1
+        return classes
+
+    def _scan_generic_secrets(self, path: str, added_lines: str, _record, func: str = ""):
+        """Entropy-gated generic secret detection (PLAN.md B2).
+
+        Only blocks values that look like real credentials: ≥20 chars, entropy
+        above threshold, ≥3 character classes, no placeholder hints. Escape
+        hatches: a `# pragma: allow-secret` / `# example` trailing comment, and
+        test-path exemption (handled by the caller for the generic tier).
+        Low-entropy matches are left to the heuristic question tier.
+        """
+        for m in re.finditer(_GENERIC_SECRET_PATTERN, added_lines):
+            value = m.group(1)
+            line_start = added_lines.rfind("\n", 0, m.start()) + 1
+            line_end = added_lines.find("\n", m.start())
+            if line_end == -1:
+                line_end = len(added_lines)
+            line = added_lines[line_start:line_end]
+            # Escape hatch 1: explicit inline suppression comment
+            if any(esc in line for esc in _SECRET_ESCAPE_COMMENTS):
+                continue
+            # Escape hatch 2: clearly placeholder-looking values stay heuristic
+            if self._looks_like_placeholder(value):
+                continue
+            if len(value) < 20:
+                continue
+            if self._shannon_entropy(value) < _ENTROPY_BITS_THRESHOLD:
+                continue
+            if self._char_classes(value) < _ENTROPY_CLASSES_MIN:
+                continue
+            _record(path, func, "high-entropy-secret",
+                    "High-entropy value assigned to a secret-named variable", value)
 
     def _raw_staged_added_lines(self) -> Dict[str, str]:
         """Return {path: added-lines-text} from the raw staged diff.

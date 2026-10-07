@@ -4,6 +4,7 @@ import json
 import os
 import re
 import hashlib
+import subprocess
 from .environment_detector import EnvironmentDetector
 from .change_detector import ChangeDetector
 from .stack_detector import StackDetector
@@ -20,6 +21,18 @@ from .server_client import ServerClient
 from .answer_evaluator import AnswerEvaluator
 from .coding_standards import CodingStandardsChecker
 from .session_store import save_session
+
+def _is_gitignored(repo_root: str, path: str) -> bool:
+    """True when the given path matches a .gitignore rule (uses check-ignore)."""
+    try:
+        code = subprocess.call(
+            ["git", "check-ignore", "-q", path],
+            cwd=repo_root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        return code == 0
+    except Exception:
+        return False
+
 
 def main():
     try:
@@ -149,6 +162,17 @@ def main():
             for f in critical:
                 print(f"  \033[91m✗ {f['description']} ({f['redacted']}) in {f['file']}"
                       + (f" :: {f['function']}()" if f['function'] else "") + "\033[0m")
+            # B6: actionable unstage suggestion per finding
+            unstaged_files = sorted({f["file"] for f in critical if f.get("file")})
+            if unstaged_files:
+                print("\n\033[93m  Unstage the offending file(s) to abort this commit path:\033[0m")
+                for path in unstaged_files:
+                    print(f"    git restore --staged {path}")
+            # B6: call out staged-but-gitignored files (the exact mistake)
+            ignored = [p for p in unstaged_files if _is_gitignored(env.get("project_root") or os.getcwd(), p)]
+            if ignored:
+                print(f"\n\033[93m  Note: {', '.join(ignored)} is listed in .gitignore — it was staged "
+                      "explicitly (e.g. `git add -f` or `git add .` after editing).\033[0m")
             print("""
 \033[93m  Remove the credential before committing:\033[0m
   1. Move it to an environment variable or your .env (already gitignored)

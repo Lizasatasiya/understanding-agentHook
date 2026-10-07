@@ -1,10 +1,18 @@
 """Deterministic Coding Standards Analyzer.
 
-Audits staged changes against established coding standards:
-- React & Frontend Standards (Immutability, Hooks, Cleanups, Virtual DOM, XSS)
+Audits staged changes against established coding standards — scoped to what
+this commit ADDED (added diff lines, changed functions), never whole-file
+history:
+- React & Frontend Standards (Immutability, Hooks, Cleanups, Virtual DOM)
 - Modern JavaScript/TypeScript Standards (Variable Scoping, Strict Equality, Error Handling)
-- Python Standards (Exception specificity, Resource management)
-- Universal Standards (Secret protection, Transport security, Modularity, Input validation)
+- Python Standards (Exception specificity, Resource management, Mutable defaults)
+- Go Standards (Error handling)
+- Complexity (changed-function length, nesting depth)
+- Input Validation (changed functions accepting external input)
+
+Security checks live in security_lens.SecurityLens, not here: the credential
+gate hard-blocks stealable secrets, and the rest become severity-weighted
+security questions. One module owns security.
 
 Produces a clear terminal report displaying which standards PASSED (Good)
 and which standards FAILED (Violations) before questions are presented.
@@ -77,53 +85,44 @@ class CodingStandardsChecker:
             for p in file_diffs
         )
         has_python = any(p.endswith('.py') for p in file_diffs)
+        has_go = any(p.endswith('.go') for p in file_diffs)
+
+        # Security checks (secrets, transport, XSS/eval) are NOT run here —
+        # they moved to security_lens.SecurityLens (one module owns security:
+        # the credential gate hard-blocks, the rest become severity-weighted
+        # questions via security_question_hint). See PLAN.md A0.1.
 
         # 1. State & Prop Immutability (React / Frontend)
         if has_react:
             results.append(self._check_react_immutability(file_diffs, file_contents))
-
-        # 2. React Hooks & Closure Dependencies
-        if has_react:
             results.append(self._check_react_hooks_integrity(file_diffs, file_contents))
-
-        # 3. Resource & Timer Cleanup in Effects
-        if has_react:
             results.append(self._check_resource_cleanup(file_diffs, file_contents))
-
-        # 4. Virtual DOM & Reconciliation Safety
-        if has_react:
             results.append(self._check_virtual_dom_safety(file_diffs, file_contents))
 
-        # 5. XSS & Code Execution Prevention
-        if has_js_ts:
-            results.append(self._check_xss_and_code_injection(file_diffs, file_contents))
-
-        # 6. Secret & Credential Protection (Universal)
-        results.append(self._check_secrets_protection(file_diffs, file_contents))
-
-        # 7. Secure Transport Protocols (Universal)
-        results.append(self._check_secure_transport(file_diffs, file_contents))
-
-        # 8. Modern Variable Scoping (JS/TS)
+        # Modern JavaScript/TypeScript standards
         if has_js_ts:
             results.append(self._check_variable_scoping(file_diffs, file_contents))
-
-        # 9. Strict Equality & Type Safety (JS/TS)
-        if has_js_ts:
             results.append(self._check_strict_equality(file_diffs, file_contents))
 
         # 10. Error Handling & Resilience
         results.append(self._check_error_handling(file_diffs, file_contents))
 
-        # 11. Python Specific Standards (if Python files present)
+        # Python specific standards
         if has_python:
             results.append(self._check_python_exception_handling(file_diffs, file_contents))
             results.append(self._check_python_resource_management(file_diffs, file_contents))
+            # A2.1: mutable default arguments
+            results.append(self._check_python_mutable_defaults(file_diffs, file_contents))
 
-        # 12. Component & Function Modularity (Universal)
-        results.append(self._check_component_modularity(file_diffs, file_contents))
+        # Go specific standards
+        if has_go:
+            results.append(self._check_go_error_handling(file_diffs, file_contents))
 
-        # 13. Input Validation & Defensive Guardrails (Universal)
+        # A3: complexity — scoped to functions this commit touched, never whole-file
+        results.append(self._check_function_length(file_diffs, file_contents))
+        results.append(self._check_nesting_depth(file_diffs, file_contents))
+
+        # 13. Input Validation & Defensive Guardrails — changed-function scoped
         results.append(self._check_input_validation(file_diffs, file_contents))
 
         return results
@@ -298,100 +297,176 @@ class CodingStandardsChecker:
             "details": "Rendering respects React Virtual DOM; uses stable reconciliation keys."
         }
 
-    def _check_xss_and_code_injection(self, diffs: Dict[str, str], contents: Dict[str, str]) -> Dict[str, Any]:
+    def _check_python_mutable_defaults(self, diffs: Dict[str, str], contents: Dict[str, str]) -> Dict[str, Any]:
+        """A2.1: `def f(x=[])` / `def f(x={})` — the classic shared-state foot-gun."""
         violations = []
         for path, diff in diffs.items():
+            if not path.endswith('.py'):
+                continue
             for line_no, raw_code in self._get_diff_additions(diff):
                 code = raw_code.strip()
-                if 'dangerouslySetInnerHTML' in code:
-                    msg = f"{path}:{line_no}: Unescaped HTML injection via `dangerouslySetInnerHTML`"
-                    if msg not in violations:
-                        violations.append(msg)
-                if re.search(r'\beval\s*\(', code):
-                    msg = f"{path}:{line_no}: Insecure dynamic execution using `eval()`"
-                    if msg not in violations:
-                        violations.append(msg)
-                if re.search(r'\bnew\s+Function\s*\(', code):
-                    msg = f"{path}:{line_no}: Arbitrary code execution via `new Function()`"
-                    if msg not in violations:
-                        violations.append(msg)
+                if re.search(r'\bdef\s+\w+\s*\([^)]*=\s*(?:\[\s*\]|\{\s*\})', code):
+                    violations.append(f"{path}:{line_no}: Mutable default argument (`[]`/`{{}}`) is shared across calls; use `None` + create inside")
 
-        if violations:
-            return {
-                "name": "XSS & Script Execution Safety",
-                "status": "FAILED",
-                "is_good": False,
-                "category": "Security / Injection",
-                "violations": violations[:3],
-                "details": "; ".join(violations[:3])
-            }
-        return {
-            "name": "XSS & Script Execution Safety",
-            "status": "PASSED",
-            "is_good": True,
-            "category": "Security / Injection",
-            "details": "Safe string templating; no dangerous innerHTML or dynamic eval."
-        }
+        return self._result("Python Mutable Default Arguments", violations,
+                            "Python / Errors", "Default arguments are immutable; no shared mutable state across calls.")
 
-    def _check_secrets_protection(self, diffs: Dict[str, str], contents: Dict[str, str]) -> Dict[str, Any]:
+    def _check_go_error_handling(self, diffs: Dict[str, str], contents: Dict[str, str]) -> Dict[str, Any]:
+        """A2.2: assignments that drop the error (`_ = err`, or `v, _ := ...`)."""
         violations = []
-        secret_patterns = [
-            (r'sk_live_[a-zA-Z0-9_\-]{16,}', "Stripe/Service live secret key"),
-            (r'AKIA[0-9A-Z]{16}', "AWS Access Key ID"),
-            (r'ghp_[a-zA-Z0-9]{36}', "GitHub Personal Access Token"),
-            (r'HARDCODED_API_KEY\s*=\s*["\'][^"\']+["\']', "Hardcoded API secret token"),
-            (r'(?:password|secret|token)\s*=\s*["\'][a-zA-Z0-9_\-!@#\$%\^&\*]{10,}["\']', "Hardcoded secret string"),
-        ]
-
         for path, diff in diffs.items():
+            if not path.endswith('.go'):
+                continue
             for line_no, raw_code in self._get_diff_additions(diff):
                 code = raw_code.strip()
-                for pattern, desc in secret_patterns:
-                    if re.search(pattern, code, re.IGNORECASE):
-                        violations.append(f"{path}:{line_no}: Exposed {desc}")
+                # `_ = err` / `_, _ = f()` explicit discards of an error variable
+                if re.search(r'^\s*(?:_\s*,\s*)?_\s*(?::?=)\s*\w*(?:[Ee]rr|error)\w*\s*$', code):
+                    violations.append(f"{path}:{line_no}: Explicitly discarded error variable (`_ = err`) — handle or document why safe")
+                # `x, _ := f(...)` where f conventionally returns (T, error)
+                if re.search(r'^\s*[\w\.\[\]]+\s*,\s*_\s*:?=\s*\w+\(', code):
+                    violations.append(f"{path}:{line_no}: Error return value discarded (`{code[:40]}`) — check it or wrap with a comment")
+
+        return self._result("Go Error Handling", violations,
+                            "Go / Errors", "Error values are checked, not discarded.")
+
+    # -------------------------------------------------------------------------
+    # Complexity (A3) — scoped to functions this commit touched
+    # -------------------------------------------------------------------------
+
+    def _changed_functions(self, diffs: Dict[str, str], contents: Dict[str, str]):
+        """Yield (path, name, [body lines]) for each function this commit touched.
+
+        Uses the Python `ast` module for Python (exact spans) and
+        language_support's line-anchored definition matching for the
+        JS/TS-family via each path's detected language. Only functions whose
+        span overlaps an added line are included — a 1-line edit to a legacy
+        file never flags untouched functions.
+        """
+        from .language_support import extract_functions, language_for
+        for path, content in contents.items():
+            if not content.strip():
+                continue
+            diff = diffs.get(path, "")
+            added_set = {line_no for line_no, _ in self._get_diff_additions(diff)}
+            if not added_set:
+                continue
+            language = language_for(path)
+            if language == "python":
+                import ast as _ast
+                try:
+                    tree = _ast.parse(content)
+                except Exception:
+                    continue
+                lines = content.splitlines()
+                for node in _ast.walk(tree):
+                    if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                        end = getattr(node, "end_lineno", node.lineno)
+                        if set(range(node.lineno, end + 1)) & added_set:
+                            yield path, node.name, lines[node.lineno - 1:end]
+            elif language:
+                try:
+                    funcs = extract_functions(content, language)
+                except Exception:
+                    continue
+                lines = content.splitlines()
+                for fn in funcs:
+                    start, end = fn.get("start_line", 0), fn.get("end_line", 0)
+                    if not start or not end:
+                        continue
+                    if set(range(start, end + 1)) & added_set:
+                        yield path, fn.get("name", "?"), lines[start - 1:end]
+
+    def _check_function_length(self, diffs: Dict[str, str], contents: Dict[str, str]) -> Dict[str, Any]:
+        """A3.2: changed functions exceeding ~80 LoC. Never whole-file LOC."""
+        violations = []
+        for path, name, body_lines in self._changed_functions(diffs, contents):
+            if len(body_lines) > 80:
+                violations.append(f"{path}: {name}() grew to {len(body_lines)} lines (>80) — split into focused units")
+
+        return self._result("Function Length (changed)", violations,
+                            "Complexity", "Changed functions stay within a reviewable length (≤80 LoC).")
+
+    def _check_nesting_depth(self, diffs: Dict[str, str], contents: Dict[str, str]) -> Dict[str, Any]:
+        """A3.1: added lines nested deeper than 4 levels inside changed functions."""
+        violations = []
+        for path, name, body_lines in self._changed_functions(diffs, contents):
+            diff = diffs.get(path, "")
+            added_line_nos = {line_no for line_no, _ in self._get_diff_additions(diff)}
+            deepest = 0
+            for raw in body_lines:
+                stripped = raw.lstrip()
+                if not stripped or stripped.startswith(("#", "//", "*", "/*")):
+                    continue
+                # Indentation levels: 4 spaces or 1 tab per level; partial
+                # indents (>=2 spaces) count as one more level.
+                levels = 0
+                for ch in raw:
+                    if ch == ' ':
+                        levels += 1
+                    elif ch == '\t':
+                        levels += 4
+                    else:
                         break
+                level = levels // 4 + (1 if levels % 4 >= 2 else 0)
+                deepest = max(deepest, level)
+            if deepest > 4:
+                violations.append(f"{path}: {name}() nests {deepest} levels deep (>4) — flatten with early returns or extract helpers")
 
-        if violations:
-            return {
-                "name": "Secret & Credential Protection",
-                "status": "FAILED",
-                "is_good": False,
-                "category": "Security / Secrets",
-                "violations": violations[:3],
-                "details": "; ".join(violations[:3])
-            }
-        return {
-            "name": "Secret & Credential Protection",
-            "status": "PASSED",
-            "is_good": True,
-            "category": "Security / Secrets",
-            "details": "No hardcoded credentials, API keys, or private tokens detected."
-        }
+        return self._result("Nesting Depth (changed)", violations,
+                            "Complexity", "Control flow stays flat (≤4 nesting levels) in changed code.")
 
-    def _check_secure_transport(self, diffs: Dict[str, str], contents: Dict[str, str]) -> Dict[str, Any]:
+    # -------------------------------------------------------------------------
+    # Input validation — changed-function scoped (A0.2 fix)
+    # -------------------------------------------------------------------------
+
+    _INPUT_PARAM_PATTERN = re.compile(
+        r'\b(?:user|request|req|params|query|body|payload|input|data|id|username|email)\b')
+    _GUARD_PATTERN = re.compile(
+        r'\b(?:if\s|guard\s|assert\s|zod|schema|validate|sanitize|escape|typeof|isinstance|\?\s*$|'
+        r'if\s+not\s|raise\s|throw\s|return\s+(?:null|undefined|None|false|early))', re.IGNORECASE)
+
+    def _check_input_validation(self, diffs: Dict[str, str], contents: Dict[str, str]) -> Dict[str, Any]:
+        """A0.2: only changed functions that take external-looking input without guards fail.
+
+        The old whole-file version passed on any `if`-statement anywhere and
+        failed every non-trivial file; this one only flags functions this
+        commit touched whose signature exposes a trust-boundary parameter and
+        whose changed lines contain no guard/validation.
+        """
         violations = []
-        for path, diff in diffs.items():
-            for line_no, raw_code in self._get_diff_additions(diff):
-                code = raw_code.strip()
-                # Check for unencrypted HTTP API endpoints (ignore schemas / namespaces)
-                if re.search(r'["\']http:\/\/(?!localhost|127\.0\.0\.1|www\.w3\.org)[a-zA-Z0-9\-_.]+', code):
-                    violations.append(f"{path}:{line_no}: Insecure cleartext HTTP endpoint (`{code[:50]}`)")
+        for path, name, body_lines in self._changed_functions(diffs, contents):
+            signature = body_lines[0] if body_lines else ""
+            if not self._INPUT_PARAM_PATTERN.search(signature):
+                continue  # no trust-boundary parameter: nothing to demand
+            diff = diffs.get(path, "")
+            changed_code = "\n".join(
+                raw for line_no, raw in self._get_diff_additions(diff))
+            if self._GUARD_PATTERN.search(changed_code):
+                continue  # a guard exists in the changed lines
+            violations.append(
+                f"{path}: {name}() takes external input (`{signature.strip()[:60]}`) with no validation/guard in the changed lines")
 
+        return self._result("Input Validation & Boundary Guards", violations,
+                            "Reliability",
+                            "Changed functions that accept external input validate it at the boundary.")
+
+    def _result(self, name: str, violations: List[str], category: str, pass_details: str) -> Dict[str, Any]:
+        """Uniform check result: FAILED with violations, else PASSED with details."""
         if violations:
             return {
-                "name": "Secure Transport Protocols",
+                "name": name,
                 "status": "FAILED",
                 "is_good": False,
-                "category": "Security / Network",
+                "category": category,
                 "violations": violations[:3],
-                "details": "; ".join(violations[:3])
+                "details": "; ".join(violations[:3]),
             }
         return {
-            "name": "Secure Transport Protocols",
+            "name": name,
             "status": "PASSED",
             "is_good": True,
-            "category": "Security / Network",
-            "details": "Uses encrypted HTTPS protocols for network endpoints."
+            "category": category,
+            "details": pass_details,
         }
 
     def _check_variable_scoping(self, diffs: Dict[str, str], contents: Dict[str, str]) -> Dict[str, Any]:
@@ -536,64 +611,9 @@ class CodingStandardsChecker:
             "details": "I/O resources are safely managed via context managers (`with`)."
         }
 
-    def _check_component_modularity(self, diffs: Dict[str, str], contents: Dict[str, str]) -> Dict[str, Any]:
-        # Modularity is good when code is structured into functions/components under reasonable length
-        violations = []
-        for path, content in contents.items():
-            lines = content.splitlines()
-            if len(lines) > 400:
-                violations.append(f"{path}:1: Monolithic file ({len(lines)} LOC) exceeds recommended modular threshold (350 LOC)")
-
-        if violations:
-            return {
-                "name": "Component & Function Modularity",
-                "status": "FAILED",
-                "is_good": False,
-                "category": "Architecture",
-                "violations": violations[:3],
-                "details": "; ".join(violations[:3])
-            }
-        return {
-            "name": "Component & Function Modularity",
-            "status": "PASSED",
-            "is_good": True,
-            "category": "Architecture",
-            "details": "Clean modular boundaries with focused single-responsibility functions."
-        }
-
-    def _check_input_validation(self, diffs: Dict[str, str], contents: Dict[str, str]) -> Dict[str, Any]:
-        # Check if functions incorporate boundary or type validation
-        has_checks = False
-        for content in contents.values():
-            if re.search(r'\b(?:if\s*\(.*?(?:null|undefined|<=|>=|typeof|\.length).*?\)|if not \w+:)', content):
-                has_checks = True
-                break
-
-        if has_checks:
-            return {
-                "name": "Input Validation & Boundary Guards",
-                "status": "PASSED",
-                "is_good": True,
-                "category": "Reliability",
-                "details": "Input guards and boundary checks are implemented for incoming parameters."
-            }
-
-        violations = []
-        code_files = [p for p in contents.keys() if p.endswith(('.js', '.jsx', '.ts', '.tsx', '.py'))]
-        for path in code_files:
-            content = contents.get(path, "")
-            m = re.search(r'(?:export\s+(?:default\s+)?function\s+\w+|function\s+\w+|const\s+\w+\s*=\s*(?:\([^)]*\)|[a-zA-Z0-9_$]+)\s*=>|def\s+\w+)', content)
-            line_no = self._offset_to_line(content, m.start()) if m else 1
-            violations.append(f"{path}:{line_no}: Missing defensive boundary guards and input validation checks")
-
-        return {
-            "name": "Input Validation & Boundary Guards",
-            "status": "FAILED",
-            "is_good": False,
-            "category": "Reliability",
-            "violations": violations[:3] if violations else ["Missing defensive boundary guards and input validation checks."],
-            "details": "; ".join(violations[:3]) if violations else "Missing defensive boundary guards and input validation checks."
-        }
+    # Legacy whole-file checks (_check_component_modularity, whole-file
+    # _check_input_validation) were removed — replaced by changed-function
+    # scoped versions above. See PLAN.md A0.2/A3.2.
 
     # -------------------------------------------------------------------------
     # Terminal Presentation
