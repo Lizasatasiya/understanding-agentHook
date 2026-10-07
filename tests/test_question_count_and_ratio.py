@@ -19,9 +19,15 @@ class TestQuestionCountAndRatio(unittest.TestCase):
         self.assertEqual(scale, "small")
         self.assertIn(count, [2, 3])
 
+        # 88 lines (< 100 LOC): small change (should be 2 or 3 questions)
+        ctx_88 = {"stats": {"total_loc": 88}, "structured_changes": [{"file": "a.js", "function": "foo", "diff": "+ 88 lines"}]}
+        scale, count = self.generator.get_diff_scale(ctx_88)
+        self.assertEqual(scale, "small")
+        self.assertIn(count, [2, 3])
+
     def test_diff_scale_medium_change(self):
-        # Medium diffs: 35, 60, 95 lines -> should be 3 to 5 questions
-        for loc in (35, 60, 95):
+        # Medium diffs: 110, 180, 240 lines -> should be 3 to 5 questions
+        for loc in (110, 180, 240):
             ctx = {"stats": {"total_loc": loc}, "structured_changes": [{"file": "a.js", "function": "bar", "diff": "+ lines"}]}
             scale, count = self.generator.get_diff_scale(ctx)
             self.assertEqual(scale, "medium")
@@ -29,8 +35,8 @@ class TestQuestionCountAndRatio(unittest.TestCase):
             self.assertLessEqual(count, 5)
 
     def test_diff_scale_large_change(self):
-        # Large diffs: 105, 180, 500 lines -> more than 5 and less than 10
-        for loc in (105, 180, 500):
+        # Large diffs: 260, 350, 500 lines -> more than 5 and less than 10
+        for loc in (260, 350, 500):
             ctx = {"stats": {"total_loc": loc}, "structured_changes": [{"file": "a.js", "function": "baz", "diff": "+ lines"}]}
             scale, count = self.generator.get_diff_scale(ctx)
             self.assertEqual(scale, "large")
@@ -56,9 +62,9 @@ class TestQuestionCountAndRatio(unittest.TestCase):
             self.assertGreaterEqual(diff_cnt, std_cnt)
 
     def test_generate_large_commit_with_violations(self):
-        # Simulating UserProfileBadge commit: 106 lines + 8 failed standards
+        # Simulating large commit: 280 lines + 8 failed standards
         ctx = {
-            "stats": {"total_loc": 106, "total_added": 106, "total_deleted": 0, "is_large_change": True},
+            "stats": {"total_loc": 280, "total_added": 280, "total_deleted": 0, "is_large_change": True},
             "file_summary": [{"file": "src/components/UserProfileBadge.jsx", "functions": ["UserProfileBadge"]}],
             "structured_changes": [
                 {
@@ -95,5 +101,36 @@ class TestQuestionCountAndRatio(unittest.TestCase):
         self.assertGreaterEqual(diff_q_count, 4)
 
 
+    def test_standards_violation_question_not_hardcoded_or_robotic(self):
+        ctx = {
+            "stats": {"total_loc": 85},
+            "structured_changes": [{"file": "src/components/ProductCard.jsx", "function": "ProductCard", "diff": "+ if (a) {\n+   if (b) {\n+     if (c) {}\n+   }\n+ }"}]
+        }
+        hints = {
+            "standards": [
+                {
+                    "name": "Nesting Depth (changed)",
+                    "is_good": False,
+                    "details": "src/components/ProductCard.jsx: ProductCard() nests 5 levels deep (>4) — flatten with early returns or extract helpers"
+                }
+            ]
+        }
+        questions = self.generator.generate(ctx, {}, hints)
+        self.assertEqual(len(questions), 3)
+
+        # Check violation question
+        violation_qs = [q for q in questions if "nesting" in q["question"].lower() or "flatten" in q["question"].lower() or "control flow" in q["question"].lower()]
+        self.assertGreaterEqual(len(violation_qs), 1)
+        for vq in violation_qs:
+            text = vq["question"]
+            # Must NOT contain robotic hardcoded template phrases
+            self.assertNotIn("Coding audit flagged", text)
+            self.assertNotIn("(changed)", text)
+            self.assertNotIn("What are the runtime risks of this approach?", text)
+            # Must be a proper question addressing the target function/refactoring
+            self.assertTrue("ProductCard" in text or "control flow" in text or "early return" in text or "nesting" in text)
+
+
 if __name__ == "__main__":
     unittest.main()
+

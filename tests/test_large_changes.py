@@ -72,7 +72,7 @@ class TestLargeChangesPipeline(unittest.TestCase):
         
         context = {
             "is_large_change": True,
-            "stats": {"total_added": 140, "total_deleted": 20, "total_loc": 160},
+            "stats": {"total_added": 260, "total_deleted": 20, "total_loc": 280},
             "file_summary": [{"file": "app/cart.py", "functions": ["checkout"]}],
             "structured_changes": [
                 {"file": "app/cart.py", "function": "checkout", "diff": "+ checkout()"}
@@ -91,7 +91,7 @@ class TestLargeChangesPipeline(unittest.TestCase):
         interaction = Interaction()
         context = {
             "is_large_change": True,
-            "stats": {"total_added": 140, "total_deleted": 20, "total_loc": 160},
+            "stats": {"total_added": 260, "total_deleted": 20, "total_loc": 280},
             "file_summary": [{"file": "app/cart.py", "functions": ["checkout"]}],
             "summary": {"what_changed": "Refactored checkout", "impact": "Faster checkout", "why_it_matters": "Improves UX", "key_risks": "Empty cart error"},
             "structured_changes": []

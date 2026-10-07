@@ -104,7 +104,7 @@ class ChangeDetector:
 
         total_loc = total_added + total_deleted
         total_changed_funcs = sum(len(f.get("changed_functions", [])) for f in files)
-        is_large_change = (total_loc > 80) or (total_changed_funcs > 3) or (len(files) > 2)
+        is_large_change = (total_loc > 100) or (total_changed_funcs > 3) or (len(files) > 2)
 
         return {
             "files": files,
