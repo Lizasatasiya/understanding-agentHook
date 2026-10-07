@@ -324,6 +324,26 @@ def main():
             else:
                 q["answered"] = False
                 q["passed"] = False
+                # Modernize any legacy or robotic cached standards questions
+                raw_q = q.get("question", "")
+                if "coding audit flagged" in raw_q.lower() or "(changed)" in raw_q:
+                    q_gen = QuestionGenerator()
+                    name_m = re.search(r"flagged '([^']+)'", raw_q)
+                    rule_name = name_m.group(1) if name_m else "Nesting Depth"
+                    matching_fs = None
+                    for fs in failed_standards:
+                        if rule_name in fs.get("name", ""):
+                            matching_fs = fs
+                            break
+                    if not matching_fs:
+                        matching_fs = {"name": rule_name, "details": raw_q}
+                    modern_q = q_gen._build_proper_standard_question(matching_fs, context)
+                    q["question"] = modern_q["question"]
+                    q["type"] = modern_q["type"]
+                    q["time_limit"] = modern_q["time_limit"]
+                    q["expected_concepts"] = modern_q["expected_concepts"]
+                    q["evaluation_criteria"] = modern_q["evaluation_criteria"]
+                    q["is_standards_violation"] = True
     else:
         # Generate fresh questions for new diff (use prefetched if ready)
         question_generator = QuestionGenerator()

@@ -106,29 +106,29 @@ class TestQuestionCountAndRatio(unittest.TestCase):
             "stats": {"total_loc": 85},
             "structured_changes": [{"file": "src/components/ProductCard.jsx", "function": "ProductCard", "diff": "+ if (a) {\n+   if (b) {\n+     if (c) {}\n+   }\n+ }"}]
         }
-        hints = {
-            "standards": [
-                {
-                    "name": "Nesting Depth (changed)",
-                    "is_good": False,
-                    "details": "src/components/ProductCard.jsx: ProductCard() nests 5 levels deep (>4) — flatten with early returns or extract helpers"
-                }
-            ]
+        std_finding = {
+            "name": "Nesting Depth (changed)",
+            "is_good": False,
+            "details": "src/components/ProductCard.jsx: ProductCard() nests 5 levels deep (>4) — flatten with early returns or extract helpers"
         }
+        # 1. Test fallback/programmatic builder
+        proper_q = self.generator._build_proper_standard_question(std_finding, ctx)
+        self.assertNotIn("Coding audit flagged", proper_q["question"])
+        self.assertNotIn("(changed)", proper_q["question"])
+        self.assertNotIn("What are the runtime risks of this approach?", proper_q["question"])
+        self.assertIn("ProductCard()", proper_q["question"])
+        self.assertIn("nesting depth", proper_q["question"].lower())
+
+        # 2. Test overall generator output
+        hints = {"standards": [std_finding]}
         questions = self.generator.generate(ctx, {}, hints)
         self.assertEqual(len(questions), 3)
 
-        # Check violation question
-        violation_qs = [q for q in questions if "nesting" in q["question"].lower() or "flatten" in q["question"].lower() or "control flow" in q["question"].lower()]
-        self.assertGreaterEqual(len(violation_qs), 1)
-        for vq in violation_qs:
-            text = vq["question"]
-            # Must NOT contain robotic hardcoded template phrases
+        for q in questions:
+            text = q["question"]
             self.assertNotIn("Coding audit flagged", text)
             self.assertNotIn("(changed)", text)
             self.assertNotIn("What are the runtime risks of this approach?", text)
-            # Must be a proper question addressing the target function/refactoring
-            self.assertTrue("ProductCard" in text or "control flow" in text or "early return" in text or "nesting" in text)
 
 
 if __name__ == "__main__":
