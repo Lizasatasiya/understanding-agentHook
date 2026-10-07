@@ -290,6 +290,7 @@ def main():
                     "evaluation": sq_eval,
                     "response_time_seconds": sq.get("response_time_seconds", 0),
                     "best_score": score,
+                    "answered_in_attempt": sq.get("answered_in_attempt") or best_session.get("attempt_number"),
                 }
                 if score >= 70:
                     cq["answered"] = True
@@ -318,6 +319,7 @@ def main():
                                 q["answer"] = sq.get("answer", q.get("answer", ""))
                                 q["evaluation"] = sq_eval
                                 q["response_time_seconds"] = sq.get("response_time_seconds", q.get("response_time_seconds", 0))
+                                q["answered_in_attempt"] = sq.get("answered_in_attempt") or s.get("attempt_number")
             if q.get("best_score", 0) >= 70 or q.get("answered", False) or q.get("passed", False):
                 q["answered"] = True
                 q["passed"] = True
@@ -398,7 +400,11 @@ def main():
       
             # If answer is already given with passing score, show Already Answered and skip
             if q.get("best_score", 0) >= 70 or q.get("answered", False) or q.get("passed", False):
-                print(f"{GREEN}✓ Already Answered{RESET}\n")
+                origin_att = q.get("answered_in_attempt")
+                if origin_att:
+                    print(f"{GREEN}✓ Already Answered (Attempt #{origin_att}){RESET}\n")
+                else:
+                    print(f"{GREEN}✓ Already Answered{RESET}\n")
                 total_score += q.get('best_score', 0)
                 final_results.append({
                     "question_id": q_id,
@@ -408,10 +414,11 @@ def main():
                     "answer": q.get("answer", ""),
                     "response_time_seconds": q.get("response_time_seconds", 0),
                     "status": "answered",
+                    "answered_in_attempt": origin_att,
                     "evaluation": q.get("evaluation") or {
                         "score": q.get("best_score", 0),
                         "understanding": "good",
-                        "rationale": "Previously answered and verified",
+                        "rationale": f"Previously answered in Attempt #{origin_att}" if origin_att else "Previously answered and verified",
                         "key_points_covered": [],
                         "missing_concepts": [],
                         "follow_up_required": False
@@ -508,6 +515,8 @@ def main():
             if q["best_score"] >= 70:
                 q["answered"] = True
                 q["passed"] = True
+                if not q.get("answered_in_attempt"):
+                    q["answered_in_attempt"] = attempts
             else:
                 q["answered"] = False
                 q["passed"] = False
@@ -522,6 +531,7 @@ def main():
                 "answer": ans_text,
                 "response_time_seconds": response_time,
                 "status": status,
+                "answered_in_attempt": q.get("answered_in_attempt") or (attempts if q["best_score"] >= 70 else None),
                 "evaluation": eval_res.to_dict()
             }
             # Record the follow-up exchange when one occurred

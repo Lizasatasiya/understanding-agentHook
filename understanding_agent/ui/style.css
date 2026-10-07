@@ -889,34 +889,7 @@ body {
   padding-bottom: 14px;
 }
 
-.attempt-stepper {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
 
-.step-btn {
-  background: #ffffff;
-  border: 1px solid var(--border-color);
-  color: var(--text-secondary);
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-size: 11.5px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.step-btn:hover {
-  border-color: var(--accent-blue);
-  color: var(--accent-blue);
-}
-
-.step-btn.active {
-  background: var(--accent-blue);
-  border-color: var(--accent-blue);
-  color: #ffffff;
-}
 
 .attempt-title-row {
   display: flex;
@@ -1077,6 +1050,19 @@ body {
   background: var(--bg-primary);
   color: var(--text-muted);
   border: 1px solid var(--border-color);
+}
+
+.qa-status-attempt-origin {
+  background: var(--badge-blue-bg);
+  color: var(--badge-blue-text);
+  border: 1px solid var(--badge-blue-border);
+}
+
+.qa-origin-hint {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-blue);
+  margin-left: 6px;
 }
 
 .qa-score-badge {

@@ -515,9 +515,43 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
 
         violations = _parse_violations(standards_report)
 
+        # Track origin attempt for each question (e.g. if answered in attempt n, carry origin over)
+        raw_questions = session.get("questions", [])
+        attempt_number = session.get("attempt_number", current_idx + 1 if current_idx >= 0 else 1)
+        enriched_questions = []
+
+        for q in raw_questions:
+            q_copy = dict(q)
+            origin_att = q_copy.get("answered_in_attempt")
+            ans_text = (q_copy.get("answer") or "").strip()
+
+            if not origin_att and ans_text:
+                q_text = (q_copy.get("question") or "").strip().lower()
+                q_id = q_copy.get("question_id")
+                # Search previous commit attempts chronologically up to current_idx
+                for prev_att in commit_attempts[:current_idx + 1]:
+                    prev_num = prev_att.get("attempt_number")
+                    for pq in prev_att.get("questions", []):
+                        pq_text = (pq.get("question") or "").strip().lower()
+                        pq_id = pq.get("question_id")
+                        if (q_id and q_id == pq_id) or (q_text and q_text == pq_text):
+                            pq_ans = (pq.get("answer") or "").strip()
+                            pq_score = (pq.get("evaluation") or {}).get("score", pq.get("score", 0)) if isinstance(pq.get("evaluation"), dict) else pq.get("score", 0)
+                            if pq_ans and (pq_score >= 70 or pq.get("status") == "answered"):
+                                origin_att = pq.get("answered_in_attempt") or prev_num
+                                break
+                    if origin_att:
+                        break
+                if not origin_att and (q_copy.get("status") == "answered" or ((q_copy.get("evaluation") or {}).get("score", 0) >= 70 if isinstance(q_copy.get("evaluation"), dict) else q_copy.get("score", 0) >= 70)):
+                    origin_att = attempt_number
+
+            if origin_att:
+                q_copy["answered_in_attempt"] = origin_att
+            enriched_questions.append(q_copy)
+
         return {
             "attempt_id": session.get("attempt_id") or session.get("session_id"),
-            "attempt_number": session.get("attempt_number", current_idx + 1 if current_idx >= 0 else 1),
+            "attempt_number": attempt_number,
             "commit_id": commit_id,
             "timestamp": session.get("timestamp", time.strftime("%Y-%m-%d %H:%M:%S")),
             "status": session.get("status", "FAILED"),
@@ -525,7 +559,7 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
             "violations_count": len(violations),
             "violations": violations,
             "standards_report": standards_report,
-            "questions": session.get("questions", []),
+            "questions": enriched_questions,
             "change_summary": session.get("change_summary", {}),
             "changed_files": session.get("changed_files", []),
             "navigation": {

@@ -52,7 +52,6 @@
     btnBackToCommit: document.getElementById('btn-back-to-commit'),
     btnPrevAttempt: document.getElementById('btn-prev-attempt'),
     btnNextAttempt: document.getElementById('btn-next-attempt'),
-    attemptStepper: document.getElementById('attempt-stepper'),
     attemptTitle: document.getElementById('attempt-title'),
     attemptStatusBadge: document.getElementById('attempt-status-badge'),
     attemptScoreBadge: document.getElementById('attempt-score-badge'),
@@ -409,44 +408,68 @@
     el.attemptScoreBadge.textContent = `Score: ${Math.round(data.score || 0)}%`;
     el.attemptTimestamp.textContent = formatDate(data.timestamp);
 
-    // Navigation buttons
+    // Navigation buttons (Previous / Next)
+    const commitAttempts = state.selectedCommitData ? (state.selectedCommitData.attempts || []) : [];
     const nav = data.navigation || {};
-    el.btnPrevAttempt.disabled = !nav.previous_attempt_id;
-    el.btnNextAttempt.disabled = !nav.next_attempt_id;
+    let prevId = nav.previous_attempt_id;
+    let nextId = nav.next_attempt_id;
 
-    el.btnPrevAttempt.onclick = () => {
-      if (nav.previous_attempt_id) openAttempt(nav.previous_attempt_id);
-    };
-    el.btnNextAttempt.onclick = () => {
-      if (nav.next_attempt_id) openAttempt(nav.next_attempt_id);
-    };
-
-    // Attempt stepper
-    const commitAttempts = state.selectedCommitData ? state.selectedCommitData.attempts || [] : [];
-    if (commitAttempts.length > 1) {
-      el.attemptStepper.innerHTML = commitAttempts
-        .map((ca, idx) => {
-          const isActive = (ca.attempt_id === attemptId);
-          return `
-            <button class="step-btn ${isActive ? 'active' : ''}" 
-                    onclick="window.understandingAgent.openAttempt('${escapeHtml(ca.attempt_id)}')">
-              Attempt #${ca.attempt_number || idx + 1}
-            </button>
-          `;
-        })
-        .join('');
-    } else {
-      el.attemptStepper.innerHTML = '';
+    if (!prevId || !nextId) {
+      const idx = commitAttempts.findIndex(ca => (ca.attempt_id === attemptId || ca.session_id === attemptId));
+      if (idx !== -1) {
+        if (!prevId && idx > 0) {
+          prevId = commitAttempts[idx - 1].attempt_id || commitAttempts[idx - 1].session_id;
+        }
+        if (!nextId && idx < commitAttempts.length - 1) {
+          nextId = commitAttempts[idx + 1].attempt_id || commitAttempts[idx + 1].session_id;
+        }
+      }
     }
 
+    el.btnPrevAttempt.disabled = !prevId;
+    el.btnNextAttempt.disabled = !nextId;
+
+    el.btnPrevAttempt.onclick = () => {
+      if (prevId) openAttempt(prevId);
+    };
+    el.btnNextAttempt.onclick = () => {
+      if (nextId) openAttempt(nextId);
+    };
+
     // Render ChatGPT Conversation Thread
-    renderConversation(data.questions || []);
+    renderConversation(data.questions || [], attNo);
 
     // Render Violations & Coding Standards
     renderViolations(data.violations || [], data.standards_report || []);
   }
 
-  function renderConversation(questions) {
+  function resolveOriginAttempt(q, currentAttNumber) {
+    if (q.answered_in_attempt) return q.answered_in_attempt;
+    const commitAttempts = state.selectedCommitData ? (state.selectedCommitData.attempts || []) : [];
+    if (!commitAttempts.length) return null;
+
+    const qText = (q.question || '').trim().toLowerCase();
+    const qId = q.question_id;
+    for (const ca of commitAttempts) {
+      const caNum = ca.attempt_number;
+      if (currentAttNumber && caNum > currentAttNumber) continue;
+      const cQs = ca.questions || [];
+      for (const cq of cQs) {
+        const cqText = (cq.question || '').trim().toLowerCase();
+        const cqId = cq.question_id;
+        if ((qId && qId === cqId) || (qText && qText === cqText)) {
+          const ans = (cq.answer || '').trim();
+          const score = (cq.evaluation && cq.evaluation.score !== undefined) ? cq.evaluation.score : cq.score;
+          if (ans && (score >= 70 || cq.status === 'answered')) {
+            return caNum;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  function renderConversation(questions, currentAttemptNumber) {
     if (!questions || questions.length === 0) {
       el.chatThread.innerHTML = `
         <div style="padding: 24px; text-align: center; color: var(--text-secondary); background: var(--bg-card); border-radius: 8px; border: 1px solid var(--border-color);">
@@ -474,11 +497,19 @@
         const isAnswered = Boolean(ansText) || rawStatus === 'answered';
         const isPending = !isAnswered && !isTimedOut;
 
+        // Origin attempt resolution (e.g. if answered in Attempt n, and this attempt is n+1)
+        const originAttempt = q.answered_in_attempt || (evalObj && evalObj.answered_in_attempt) || resolveOriginAttempt(q, currentAttemptNumber);
+        const isFromPreviousAttempt = Boolean(originAttempt && currentAttemptNumber && originAttempt < currentAttemptNumber);
+
         // Status badge & score badge
+        let originBadgeHtml = '';
         let statusBadgeHtml = '';
         let scoreBadgeHtml = '';
 
         if (isAnswered) {
+          if (isFromPreviousAttempt) {
+            originBadgeHtml = `<span class="qa-status-pill qa-status-attempt-origin" title="Answered in Attempt #${originAttempt}">Attempt #${originAttempt}</span>`;
+          }
           statusBadgeHtml = `<span class="qa-status-pill qa-status-answered">Answered</span>`;
           if (score !== null) {
             scoreBadgeHtml = `<span class="qa-score-badge ${passed ? 'qa-score-pass' : 'qa-score-fail'}">Score: ${score}%</span>`;
@@ -497,7 +528,7 @@
           responseContentHtml = `
             <div class="qa-answer-block">
               <div class="qa-answer-meta">
-                <span class="qa-answer-author">Developer Response</span>
+                <span class="qa-answer-author">Developer Response ${isFromPreviousAttempt ? `<span class="qa-origin-hint">(from Attempt #${originAttempt})</span>` : ''}</span>
                 ${responseTime ? `<span class="qa-time-tag">${responseTime}s response</span>` : ''}
               </div>
               <div class="qa-answer-text">${escapeHtml(ansText)}</div>
@@ -556,6 +587,7 @@
                 <span class="qa-limit-badge">${timeLimit}s limit</span>
               </div>
               <div class="qa-header-right">
+                ${originBadgeHtml}
                 ${statusBadgeHtml}
                 ${scoreBadgeHtml}
               </div>
