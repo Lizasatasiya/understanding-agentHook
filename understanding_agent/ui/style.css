@@ -1,33 +1,61 @@
 :root {
-  --bg-primary: #0d1117;
-  --bg-sidebar: #161b22;
-  --bg-card: #1c212c;
-  --bg-card-hover: #222936;
-  --bg-bubble-system: #18202c;
-  --bg-bubble-user: #1d2737;
-  --bg-code: #0b0e14;
+  color-scheme: light !important;
+  --bg-primary: #f8fafc;
+  --bg-sidebar: #ffffff;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f1f5f9;
+  --bg-bubble-system: #f1f5f9;
+  --bg-bubble-user: #e2e8f0;
+  --bg-code: #f8fafc;
+  --bg-subtle: #f8fafc;
   
-  --border-color: #30363d;
-  --border-light: #444c56;
+  --border-color: #e2e8f0;
+  --border-light: #cbd5e1;
+  --border-focus: #3b82f6;
   
-  --text-primary: #f0f6fc;
-  --text-secondary: #8b949e;
-  --text-muted: #6e7681;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
   
-  --accent-blue: #58a6ff;
-  --accent-cyan: #38bdf8;
-  --accent-green: #3fb950;
-  --accent-red: #f85149;
-  --accent-amber: #d29922;
-  --accent-purple: #bc8cff;
+  --accent-blue: #2563eb;
+  --accent-blue-hover: #1d4ed8;
+  --accent-cyan: #0284c7;
+  --accent-green: #16a34a;
+  --accent-red: #dc2626;
+  --accent-amber: #d97706;
+  --accent-purple: #7c3aed;
   
-  --badge-green-bg: rgba(63, 185, 80, 0.15);
-  --badge-red-bg: rgba(248, 81, 73, 0.15);
-  --badge-amber-bg: rgba(210, 153, 34, 0.15);
-  --badge-blue-bg: rgba(88, 166, 255, 0.15);
+  --badge-green-bg: #ecfdf5;
+  --badge-green-text: #15803d;
+  --badge-green-border: #bbf7d0;
   
+  --badge-red-bg: #fef2f2;
+  --badge-red-text: #b91c1c;
+  --badge-red-border: #fecaca;
+  
+  --badge-amber-bg: #fffbeb;
+  --badge-amber-text: #b45309;
+  --badge-amber-border: #fde68a;
+  
+  --badge-blue-bg: #eff6ff;
+  --badge-blue-text: #1d4ed8;
+  --badge-blue-border: #bfdbfe;
+  
+  --card-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.05);
+  --card-shadow-hover: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+  --card-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.06), 0 4px 6px -4px rgba(0, 0, 0, 0.04);
+
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', SFMono-Regular, Consolas, Menlo, monospace;
+}
+
+/* Force light appearance regardless of PC/OS system dark mode setting */
+@media (prefers-color-scheme: dark) {
+  :root, html, body {
+    color-scheme: light !important;
+    background-color: #f8fafc !important;
+    color: #0f172a !important;
+  }
 }
 
 * {
@@ -36,10 +64,16 @@
   padding: 0;
 }
 
+html {
+  color-scheme: light !important;
+  background-color: var(--bg-primary) !important;
+}
+
 body {
   font-family: var(--font-sans);
-  background-color: var(--bg-primary);
-  color: var(--text-primary);
+  background-color: var(--bg-primary) !important;
+  color: var(--text-primary) !important;
+  color-scheme: light !important;
   line-height: 1.5;
   height: 100vh;
   overflow: hidden;
@@ -54,6 +88,48 @@ body {
   height: 100vh;
   width: 100vw;
   overflow: hidden;
+}
+
+/* -------------------------------------------------------------------------
+   SVG Icons
+------------------------------------------------------------------------- */
+.header-svg {
+  width: 20px;
+  height: 20px;
+  color: var(--accent-blue);
+}
+
+.section-svg {
+  width: 18px;
+  height: 18px;
+  color: var(--accent-blue);
+}
+
+.empty-svg {
+  width: 48px;
+  height: 48px;
+  color: var(--border-light);
+}
+
+.copy-svg {
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+  transition: color 0.15s ease;
+}
+
+.copy-svg:hover {
+  color: var(--text-primary);
+}
+
+.inline-svg {
+  width: 14px;
+  height: 14px;
+}
+
+.btn-copy-icon {
+  display: inline-flex;
+  align-items: center;
 }
 
 /* -------------------------------------------------------------------------
@@ -84,15 +160,15 @@ body {
 }
 
 .brand-icon {
-  font-size: 24px;
-  background: rgba(88, 166, 255, 0.12);
+  background: var(--badge-blue-bg);
   width: 38px;
   height: 38px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 8px;
-  border: 1px solid rgba(88, 166, 255, 0.25);
+  border: 1px solid var(--badge-blue-border);
+  flex-shrink: 0;
 }
 
 .brand-title {
@@ -104,7 +180,7 @@ body {
 
 .brand-subtitle {
   font-size: 11px;
-  color: var(--text-secondary);
+  color: var(--text-muted);
   display: block;
 }
 
@@ -116,11 +192,13 @@ body {
   border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 6px 10px;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .search-box:focus-within {
   border-color: var(--accent-blue);
-  box-shadow: 0 0 0 1px var(--accent-blue);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+  background: #ffffff;
 }
 
 .search-icon {
@@ -148,10 +226,10 @@ body {
   background: none;
   border: none;
   cursor: pointer;
-  color: var(--text-secondary);
+  color: var(--text-muted);
   display: flex;
   align-items: center;
-  padding: 2px;
+  padding: 3px;
   border-radius: 4px;
   transition: color 0.15s, background 0.15s;
 }
@@ -218,21 +296,21 @@ body {
   background: transparent;
   border: 1px solid transparent;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
 .commit-card:hover {
-  background: var(--bg-card);
+  background: var(--bg-card-hover);
   border-color: var(--border-color);
 }
 
 .commit-card.active {
-  background: var(--bg-card);
+  background: #ffffff;
   border-color: var(--accent-blue);
-  box-shadow: 0 0 0 1px rgba(88, 166, 255, 0.3);
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.1), 0 0 0 1px var(--accent-blue);
 }
 
 .commit-card.staged-card {
@@ -275,7 +353,7 @@ body {
   font-size: 11px;
   color: var(--text-secondary);
   background: var(--bg-primary);
-  padding: 2px 5px;
+  padding: 2px 6px;
   border-radius: 4px;
   border: 1px solid var(--border-color);
 }
@@ -295,6 +373,10 @@ body {
   align-items: center;
   justify-content: space-between;
   font-size: 11px;
+  color: var(--text-muted);
+}
+
+.commit-card-author {
   color: var(--text-secondary);
 }
 
@@ -302,9 +384,10 @@ body {
   font-size: 10px;
   padding: 1px 6px;
   border-radius: 10px;
-  background: rgba(88, 166, 255, 0.1);
+  background: var(--badge-blue-bg);
   color: var(--accent-blue);
   font-weight: 600;
+  border: 1px solid var(--badge-blue-border);
 }
 
 /* -------------------------------------------------------------------------
@@ -325,7 +408,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background-color: var(--bg-primary);
+  background-color: #ffffff;
   min-height: 54px;
 }
 
@@ -334,7 +417,7 @@ body {
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--text-muted);
 }
 
 .crumb-root {
@@ -342,7 +425,7 @@ body {
 }
 
 .crumb-sep {
-  color: var(--text-muted);
+  color: var(--border-light);
 }
 
 .crumb-current {
@@ -374,6 +457,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  box-shadow: var(--card-shadow);
 }
 
 .card-header {
@@ -389,7 +473,8 @@ body {
 }
 
 .card-icon {
-  font-size: 18px;
+  display: inline-flex;
+  align-items: center;
 }
 
 .card-title {
@@ -401,20 +486,21 @@ body {
 .badge-count {
   font-size: 11px;
   font-weight: 600;
-  padding: 3px 8px;
+  padding: 2px 8px;
   border-radius: 12px;
-  background: var(--border-color);
+  background: var(--bg-primary);
   color: var(--text-secondary);
+  border: 1px solid var(--border-color);
 }
 
 .badge-ai {
   font-size: 11px;
   font-weight: 600;
-  padding: 3px 8px;
+  padding: 2px 8px;
   border-radius: 12px;
   background: var(--badge-blue-bg);
   color: var(--accent-blue);
-  border: 1px solid rgba(88, 166, 255, 0.2);
+  border: 1px solid var(--badge-blue-border);
 }
 
 .badge-tag {
@@ -422,20 +508,21 @@ body {
   font-weight: 500;
   padding: 2px 8px;
   border-radius: 4px;
-  background: var(--border-color);
+  background: var(--bg-primary);
   color: var(--text-secondary);
+  border: 1px solid var(--border-color);
 }
 
 .badge-danger {
   background: var(--badge-red-bg);
-  color: var(--accent-red);
-  border: 1px solid rgba(248, 81, 73, 0.25);
+  color: var(--badge-red-text);
+  border: 1px solid var(--badge-red-border);
 }
 
 .badge-success {
   background: var(--badge-green-bg);
-  color: var(--accent-green);
-  border: 1px solid rgba(63, 185, 80, 0.25);
+  color: var(--badge-green-text);
+  border: 1px solid var(--badge-green-border);
 }
 
 /* Empty State */
@@ -452,19 +539,18 @@ body {
 }
 
 .empty-icon {
-  font-size: 48px;
   margin-bottom: 8px;
 }
 
 .empty-state h2 {
-  font-size: 20px;
+  font-size: 19px;
   font-weight: 600;
   color: var(--text-primary);
 }
 
 .empty-state p {
-  font-size: 14px;
-  color: var(--text-secondary);
+  font-size: 13.5px;
+  color: var(--text-muted);
   line-height: 1.6;
 }
 
@@ -478,38 +564,39 @@ body {
 }
 
 .commit-status-badge {
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 700;
-  padding: 3px 10px;
+  padding: 3px 9px;
   border-radius: 4px;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
 }
 
 .commit-status-badge.status-passed {
   background: var(--badge-green-bg);
-  color: var(--accent-green);
-  border: 1px solid rgba(63, 185, 80, 0.3);
+  color: var(--badge-green-text);
+  border: 1px solid var(--badge-green-border);
 }
 
 .commit-status-badge.status-failed {
   background: var(--badge-red-bg);
-  color: var(--accent-red);
-  border: 1px solid rgba(248, 81, 73, 0.3);
+  color: var(--badge-red-text);
+  border: 1px solid var(--badge-red-border);
 }
 
 .commit-status-badge.status-pending {
   background: var(--badge-amber-bg);
-  color: var(--accent-amber);
-  border: 1px solid rgba(210, 153, 34, 0.3);
+  color: var(--badge-amber-text);
+  border: 1px solid var(--badge-amber-border);
 }
 
 .commit-branch-badge {
   font-family: var(--font-mono);
   font-size: 12px;
-  background: var(--border-color);
+  background: var(--bg-primary);
   color: var(--text-secondary);
   padding: 3px 8px;
   border-radius: 4px;
+  border: 1px solid var(--border-color);
 }
 
 .commit-full-title {
@@ -534,7 +621,7 @@ body {
   flex-wrap: wrap;
   align-items: center;
   gap: 20px;
-  padding-top: 8px;
+  padding-top: 10px;
   border-top: 1px solid var(--border-color);
   font-size: 13px;
 }
@@ -558,23 +645,27 @@ body {
   font-family: var(--font-mono);
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
-  padding: 2px 6px;
+  padding: 2px 7px;
   border-radius: 4px;
   font-size: 12px;
-  color: var(--accent-cyan);
+  color: var(--accent-blue);
+  font-weight: 600;
 }
 
 .btn-copy {
   background: none;
   border: none;
   cursor: pointer;
-  font-size: 12px;
-  opacity: 0.7;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border-radius: 4px;
   transition: opacity 0.15s;
 }
 
 .btn-copy:hover {
-  opacity: 1;
+  opacity: 0.8;
 }
 
 /* -------------------------------------------------------------------------
@@ -607,24 +698,27 @@ body {
 .file-chip {
   font-size: 10px;
   font-weight: 700;
-  padding: 1px 5px;
+  padding: 2px 6px;
   border-radius: 3px;
   text-transform: uppercase;
 }
 
 .file-chip.added {
   background: var(--badge-green-bg);
-  color: var(--accent-green);
+  color: var(--badge-green-text);
+  border: 1px solid var(--badge-green-border);
 }
 
 .file-chip.modified {
   background: var(--badge-blue-bg);
-  color: var(--accent-blue);
+  color: var(--badge-blue-text);
+  border: 1px solid var(--badge-blue-border);
 }
 
 .file-chip.deleted {
   background: var(--badge-red-bg);
-  color: var(--accent-red);
+  color: var(--badge-red-text);
+  border: 1px solid var(--badge-red-border);
 }
 
 .file-path {
@@ -666,7 +760,7 @@ body {
 }
 
 .summary-box-title {
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 600;
   text-transform: uppercase;
   color: var(--text-muted);
@@ -680,70 +774,12 @@ body {
 }
 
 .summary-box-risks {
-  border-color: rgba(210, 153, 34, 0.4);
-  background: rgba(210, 153, 34, 0.04);
+  border-color: var(--badge-amber-border);
+  background: var(--badge-amber-bg);
 }
 
 .summary-box-risks .summary-box-title {
-  color: var(--accent-amber);
-}
-
-/* -------------------------------------------------------------------------
-   Standards List
-------------------------------------------------------------------------- */
-.standards-stats {
-  display: flex;
-  gap: 8px;
-}
-
-.standards-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.standard-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 10px 14px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-}
-
-.standard-item.failed {
-  border-color: rgba(248, 81, 73, 0.35);
-  background: rgba(248, 81, 73, 0.04);
-}
-
-.standard-item-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.standard-item-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.standard-item-cat {
-  font-size: 11px;
-  color: var(--text-muted);
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: var(--bg-card);
-}
-
-.standard-item-details {
-  font-size: 12px;
-  color: var(--text-secondary);
-  padding-left: 22px;
+  color: var(--badge-amber-text);
 }
 
 /* -------------------------------------------------------------------------
@@ -757,25 +793,27 @@ body {
 
 .attempt-card {
   padding: 14px 18px;
-  background: var(--bg-primary);
+  background: #ffffff;
   border: 1px solid var(--border-color);
   border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
+  box-shadow: var(--card-shadow);
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
 }
 
 .attempt-card:hover {
   border-color: var(--accent-blue);
-  background: var(--bg-card);
+  box-shadow: var(--card-shadow-hover);
 }
 
 .attempt-card-info {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
+  flex-wrap: wrap;
 }
 
 .attempt-num {
@@ -810,22 +848,29 @@ body {
 }
 
 .btn-secondary {
-  background: var(--border-color);
+  background: #ffffff;
   color: var(--text-primary);
-  border-color: var(--border-light);
+  border-color: var(--border-color);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
 }
 
 .btn-secondary:hover {
-  background: var(--border-light);
+  background: var(--bg-card-hover);
+  border-color: var(--border-light);
+}
+
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .btn-primary {
   background: var(--accent-blue);
-  color: #0d1117;
+  color: #ffffff;
 }
 
 .btn-primary:hover {
-  filter: brightness(1.1);
+  background: var(--accent-blue-hover);
 }
 
 .btn-svg {
@@ -834,7 +879,7 @@ body {
 }
 
 /* -------------------------------------------------------------------------
-   Attempt Detail View (ChatGPT Conversation + Violations)
+   Attempt Detail View (Conversation + Violations)
 ------------------------------------------------------------------------- */
 .attempt-nav-bar {
   display: flex;
@@ -851,12 +896,12 @@ body {
 }
 
 .step-btn {
-  background: var(--bg-primary);
+  background: #ffffff;
   border: 1px solid var(--border-color);
   color: var(--text-secondary);
   padding: 4px 10px;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s;
@@ -864,13 +909,13 @@ body {
 
 .step-btn:hover {
   border-color: var(--accent-blue);
-  color: var(--text-primary);
+  color: var(--accent-blue);
 }
 
 .step-btn.active {
   background: var(--accent-blue);
   border-color: var(--accent-blue);
-  color: #0d1117;
+  color: #ffffff;
 }
 
 .attempt-title-row {
@@ -897,7 +942,12 @@ body {
   border-radius: 4px;
   background: var(--badge-blue-bg);
   color: var(--accent-blue);
-  border: 1px solid rgba(88, 166, 255, 0.3);
+  border: 1px solid var(--badge-blue-border);
+}
+
+.attempt-meta-info {
+  font-size: 12.5px;
+  color: var(--text-muted);
 }
 
 .section-title-bar {
@@ -919,7 +969,7 @@ body {
 }
 
 /* -------------------------------------------------------------------------
-   Clean Question & Answer Cards (Code Understanding Defense)
+   Q&A Defense Conversation Cards
 ------------------------------------------------------------------------- */
 .chat-thread {
   display: flex;
@@ -929,13 +979,14 @@ body {
 }
 
 .qa-card {
-  background: var(--bg-card);
+  background: #ffffff;
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 16px 18px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  box-shadow: var(--card-shadow);
   transition: border-color 0.15s ease;
 }
 
@@ -944,15 +995,15 @@ body {
 }
 
 .qa-card-answered {
-  border-left: 3px solid var(--accent-green);
+  border-left: 4px solid var(--accent-green);
 }
 
 .qa-card-timeout {
-  border-left: 3px solid var(--accent-amber);
+  border-left: 4px solid var(--accent-amber);
 }
 
 .qa-card-pending {
-  border-left: 3px solid var(--text-muted);
+  border-left: 4px solid var(--border-light);
 }
 
 .qa-card-header {
@@ -975,9 +1026,9 @@ body {
   font-weight: 700;
   padding: 2px 7px;
   border-radius: 4px;
-  background: rgba(88, 166, 255, 0.15);
+  background: var(--badge-blue-bg);
   color: var(--accent-blue);
-  border: 1px solid rgba(88, 166, 255, 0.3);
+  border: 1px solid var(--badge-blue-border);
 }
 
 .qa-type-badge {
@@ -985,7 +1036,7 @@ body {
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-primary);
   color: var(--text-secondary);
   border: 1px solid var(--border-color);
 }
@@ -1011,20 +1062,20 @@ body {
 }
 
 .qa-status-answered {
-  background: rgba(63, 185, 80, 0.15);
-  color: #3fb950;
-  border: 1px solid rgba(63, 185, 80, 0.3);
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
+  border: 1px solid var(--badge-green-border);
 }
 
 .qa-status-timeout {
-  background: rgba(210, 153, 34, 0.15);
-  color: #d29922;
-  border: 1px solid rgba(210, 153, 34, 0.3);
+  background: var(--badge-amber-bg);
+  color: var(--badge-amber-text);
+  border: 1px solid var(--badge-amber-border);
 }
 
 .qa-status-pending {
-  background: rgba(139, 148, 158, 0.12);
-  color: var(--text-secondary);
+  background: var(--bg-primary);
+  color: var(--text-muted);
   border: 1px solid var(--border-color);
 }
 
@@ -1037,20 +1088,20 @@ body {
 }
 
 .qa-score-pass {
-  background: rgba(63, 185, 80, 0.2);
-  color: #7ee787;
-  border: 1px solid rgba(63, 185, 80, 0.4);
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
+  border: 1px solid var(--badge-green-border);
 }
 
 .qa-score-fail {
-  background: rgba(248, 81, 73, 0.2);
-  color: #ff7b72;
-  border: 1px solid rgba(248, 81, 73, 0.4);
+  background: var(--badge-red-bg);
+  color: var(--badge-red-text);
+  border: 1px solid var(--badge-red-border);
 }
 
 .qa-score-zero {
-  background: rgba(110, 118, 129, 0.2);
-  color: var(--text-secondary);
+  background: var(--bg-primary);
+  color: var(--text-muted);
   border: 1px solid var(--border-color);
 }
 
@@ -1063,7 +1114,7 @@ body {
 
 /* Answer Block */
 .qa-answer-block {
-  background: rgba(13, 17, 23, 0.5);
+  background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 12px 14px;
@@ -1081,7 +1132,7 @@ body {
 
 .qa-answer-author {
   font-weight: 600;
-  color: var(--accent-cyan);
+  color: var(--accent-blue);
 }
 
 .qa-time-tag {
@@ -1092,7 +1143,7 @@ body {
 
 .qa-answer-text {
   font-size: 13.5px;
-  color: #e6edf3;
+  color: var(--text-primary);
   line-height: 1.55;
   white-space: pre-wrap;
 }
@@ -1105,17 +1156,17 @@ body {
   padding-top: 8px;
   border-top: 1px dashed var(--border-color);
   font-size: 12px;
-  color: var(--text-secondary);
 }
 
-.qa-verdict-icon {
-  font-size: 13px;
-  flex-shrink: 0;
+.qa-verdict-label {
+  font-weight: 600;
+  font-size: 11.5px;
+  color: var(--text-muted);
 }
 
 .qa-verdict-text {
   font-style: italic;
-  color: #8b949e;
+  color: var(--text-secondary);
 }
 
 /* Timeout & Pending Notices */
@@ -1129,20 +1180,15 @@ body {
 }
 
 .qa-notice-timeout {
-  background: rgba(210, 153, 34, 0.08);
-  border: 1px solid rgba(210, 153, 34, 0.25);
-  color: #e3b341;
+  background: var(--badge-amber-bg);
+  border: 1px solid var(--badge-amber-border);
+  color: var(--badge-amber-text);
 }
 
 .qa-notice-pending {
-  background: rgba(110, 118, 129, 0.08);
-  border: 1px solid rgba(110, 118, 129, 0.2);
-  color: var(--text-secondary);
-}
-
-.qa-notice-icon {
-  font-size: 18px;
-  flex-shrink: 0;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
 }
 
 .qa-notice-body {
@@ -1153,8 +1199,8 @@ body {
 
 .qa-notice-title {
   font-weight: 600;
-  color: var(--text-primary);
   font-size: 12.5px;
+  color: var(--text-primary);
 }
 
 .qa-notice-desc {
@@ -1166,8 +1212,8 @@ body {
 .qa-followup-block {
   margin-top: 4px;
   padding: 10px 14px;
-  background: rgba(88, 166, 255, 0.04);
-  border-left: 2px solid var(--accent-blue);
+  background: var(--badge-blue-bg);
+  border-left: 3px solid var(--accent-blue);
   border-radius: 4px;
   display: flex;
   flex-direction: column;
@@ -1181,127 +1227,23 @@ body {
   color: var(--accent-blue);
 }
 
-.qa-followup-q {
+.qa-followup-question {
   font-weight: 600;
   color: var(--text-primary);
 }
 
-.qa-followup-a {
+.qa-followup-answer {
   color: var(--text-secondary);
   font-size: 12px;
 }
 
-/* -------------------------------------------------------------------------
-   Violations Cards
-------------------------------------------------------------------------- */
-.violations-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.violation-card {
-  background: var(--bg-card);
-  border: 1px solid rgba(248, 81, 73, 0.4);
-  border-left: 4px solid var(--accent-red);
-  border-radius: 8px;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.violation-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.violation-title-group {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.violation-name {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.severity-badge {
-  font-size: 10px;
-  font-weight: 800;
-  padding: 2px 6px;
-  border-radius: 4px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.severity-critical {
-  background: rgba(248, 81, 73, 0.25);
-  color: #ff7b72;
-  border: 1px solid rgba(248, 81, 73, 0.5);
-}
-
-.severity-high {
-  background: rgba(210, 153, 34, 0.25);
-  color: #e3b341;
-  border: 1px solid rgba(210, 153, 34, 0.5);
-}
-
-.severity-medium {
-  background: rgba(88, 166, 255, 0.15);
-  color: var(--accent-blue);
-  border: 1px solid rgba(88, 166, 255, 0.3);
-}
-
-.violation-location {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--accent-cyan);
-  background: var(--bg-primary);
-  padding: 2px 8px;
-  border-radius: 4px;
-  border: 1px solid var(--border-color);
-  display: inline-block;
-  width: fit-content;
-}
-
-.violation-desc {
-  font-size: 13px;
-  color: var(--text-primary);
-  line-height: 1.45;
-}
-
-.violation-code-box {
-  background: var(--bg-code);
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  padding: 10px 14px;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: #ff7b72;
-  overflow-x: auto;
-  white-space: pre-wrap;
-}
-
-.violation-recommendation {
-  background: rgba(88, 166, 255, 0.05);
-  border: 1px solid rgba(88, 166, 255, 0.2);
-  border-radius: 6px;
-  padding: 10px 12px;
-  font-size: 12px;
+.qa-followup-label {
+  font-weight: 600;
   color: var(--text-secondary);
-  line-height: 1.45;
-}
-
-.violation-recommendation strong {
-  color: var(--accent-blue);
 }
 
 /* -------------------------------------------------------------------------
-   Sleek macOS-Style Terminal Coding Standards Audit Console
+   Sleek Light-Theme Terminal / Coding Standards Console
 ------------------------------------------------------------------------- */
 .audit-actions-group {
   display: flex;
@@ -1311,7 +1253,7 @@ body {
 
 .audit-filter-pills {
   display: flex;
-  background: rgba(13, 17, 23, 0.7);
+  background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 2px;
@@ -1321,7 +1263,7 @@ body {
 .audit-filter-btn {
   background: transparent;
   border: none;
-  color: var(--text-secondary);
+  color: var(--text-muted);
   font-family: var(--font-sans);
   font-size: 11.5px;
   font-weight: 500;
@@ -1333,14 +1275,14 @@ body {
 
 .audit-filter-btn:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.03);
 }
 
 .audit-filter-btn.active {
-  background: var(--bg-card);
+  background: #ffffff;
   color: var(--accent-blue);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
 .btn-sm {
@@ -1353,10 +1295,10 @@ body {
 }
 
 .terminal-card {
-  background: #090d16;
-  border: 1px solid #263040;
-  border-radius: 10px;
-  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.4);
+  background: #ffffff;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: var(--card-shadow-lg);
   overflow: hidden;
   margin-top: 10px;
   display: flex;
@@ -1364,8 +1306,8 @@ body {
 }
 
 .terminal-bar {
-  background: #121824;
-  border-bottom: 1px solid #202938;
+  background: #f8fafc;
+  border-bottom: 1px solid var(--border-color);
   padding: 10px 16px;
   display: flex;
   align-items: center;
@@ -1392,30 +1334,27 @@ body {
 }
 
 .dot-close {
-  background-color: #ff5f56;
-  box-shadow: 0 0 6px rgba(255, 95, 86, 0.4);
+  background-color: #ef4444;
 }
 
 .dot-min {
-  background-color: #ffbd2e;
-  box-shadow: 0 0 6px rgba(255, 189, 46, 0.4);
+  background-color: #f59e0b;
 }
 
 .dot-max {
-  background-color: #27c93f;
-  box-shadow: 0 0 6px rgba(39, 201, 63, 0.4);
+  background-color: #10b981;
 }
 
 .terminal-title {
   font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 500;
-  color: #94a3b8;
+  color: var(--text-secondary);
   letter-spacing: -0.2px;
 }
 
 .terminal-prompt-sym {
-  color: #38bdf8;
+  color: var(--accent-blue);
   font-weight: 700;
   margin-right: 2px;
 }
@@ -1436,15 +1375,15 @@ body {
 }
 
 .badge-fail-mini {
-  background: rgba(248, 81, 73, 0.18);
-  color: #ff7b72;
-  border: 1px solid rgba(248, 81, 73, 0.35);
+  background: var(--badge-red-bg);
+  color: var(--badge-red-text);
+  border: 1px solid var(--badge-red-border);
 }
 
 .badge-pass-mini {
-  background: rgba(63, 185, 80, 0.18);
-  color: #7ee787;
-  border: 1px solid rgba(63, 185, 80, 0.35);
+  background: var(--badge-green-bg);
+  color: var(--badge-green-text);
+  border: 1px solid var(--badge-green-border);
 }
 
 .terminal-body {
@@ -1452,7 +1391,8 @@ body {
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.55;
-  color: #e6edf3;
+  color: var(--text-primary);
+  background: #ffffff;
   max-height: 520px;
   overflow-y: auto;
   overflow-x: auto;
@@ -1463,8 +1403,8 @@ body {
   margin-bottom: 12px;
   padding: 10px 14px;
   border-radius: 6px;
-  background: rgba(18, 24, 36, 0.6);
-  border: 1px solid rgba(48, 54, 61, 0.4);
+  background: #ffffff;
+  border: 1px solid var(--border-color);
   transition: all 0.15s ease;
 }
 
@@ -1474,12 +1414,14 @@ body {
 
 .audit-group-failed {
   border-left: 3px solid var(--accent-red);
-  background: rgba(248, 81, 73, 0.035);
+  background: var(--badge-red-bg);
+  border-color: var(--badge-red-border);
 }
 
 .audit-group-passed {
   border-left: 3px solid var(--accent-green);
-  background: rgba(63, 185, 80, 0.035);
+  background: var(--badge-green-bg);
+  border-color: var(--badge-green-border);
 }
 
 .audit-header-line {
@@ -1487,12 +1429,12 @@ body {
   align-items: center;
   gap: 12px;
   font-weight: 700;
-  font-size: 13.5px;
+  font-size: 13px;
   padding-bottom: 4px;
 }
 
 .audit-fail-badge {
-  color: #f85149;
+  color: var(--badge-red-text);
   font-weight: 800;
   letter-spacing: 0.5px;
   display: inline-flex;
@@ -1501,7 +1443,7 @@ body {
 }
 
 .audit-pass-badge {
-  color: #3fb950;
+  color: var(--badge-green-text);
   font-weight: 800;
   letter-spacing: 0.5px;
   display: inline-flex;
@@ -1510,7 +1452,7 @@ body {
 }
 
 .audit-std-name {
-  color: #f0f6fc;
+  color: var(--text-primary);
   font-weight: 700;
   letter-spacing: -0.1px;
 }
@@ -1522,9 +1464,9 @@ body {
   font-weight: 500;
   padding: 2px 8px;
   border-radius: 12px;
-  background: rgba(139, 148, 158, 0.15);
-  color: #8b949e;
-  border: 1px solid rgba(139, 148, 158, 0.2);
+  background: #ffffff;
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
 }
 
 .audit-item-line {
@@ -1537,7 +1479,7 @@ body {
 }
 
 .audit-item-arrow {
-  color: #58a6ff;
+  color: var(--accent-blue);
   font-weight: 600;
   flex-shrink: 0;
   user-select: none;
@@ -1547,11 +1489,11 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  background: rgba(56, 189, 248, 0.08);
-  border: 1px solid rgba(56, 189, 248, 0.25);
+  background: var(--badge-blue-bg);
+  border: 1px solid var(--badge-blue-border);
   border-radius: 4px;
   padding: 1px 7px;
-  color: #38bdf8;
+  color: var(--badge-blue-text);
   font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 500;
@@ -1560,19 +1502,19 @@ body {
 }
 
 .audit-file-line {
-  color: #fbbf24;
+  color: var(--accent-amber);
   font-weight: 700;
 }
 
 .audit-item-msg {
-  color: #c9d1d9;
+  color: var(--text-secondary);
   word-break: break-word;
 }
 
 .audit-inline-code {
-  background: rgba(110, 118, 129, 0.25);
-  border: 1px solid rgba(240, 246, 252, 0.14);
-  color: #ff7b72;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  color: var(--accent-red);
   font-family: var(--font-mono);
   font-size: 12px;
   padding: 1px 6px;
@@ -1581,15 +1523,15 @@ body {
 }
 
 .audit-passed-msg {
-  color: #7ee787;
+  color: var(--badge-green-text);
   font-style: normal;
   font-weight: 400;
 }
 
 /* Terminal Footer */
 .terminal-footer {
-  background: #111722;
-  border-top: 1px solid #1f2735;
+  background: #f8fafc;
+  border-top: 1px solid var(--border-color);
   padding: 12px 20px 14px;
   display: flex;
   flex-direction: column;
@@ -1598,15 +1540,15 @@ body {
 
 .compliance-track {
   width: 100%;
-  height: 5px;
-  background: rgba(248, 81, 73, 0.35);
+  height: 6px;
+  background: var(--badge-red-border);
   border-radius: 3px;
   overflow: hidden;
 }
 
 .compliance-bar {
   height: 100%;
-  background: linear-gradient(90deg, #2ea043, #3fb950);
+  background: linear-gradient(90deg, #16a34a, #22c55e);
   border-radius: 3px;
   transition: width 0.4s ease;
 }
@@ -1622,7 +1564,7 @@ body {
 .compliance-label {
   font-size: 12px;
   font-weight: 600;
-  color: #8b949e;
+  color: var(--text-muted);
 }
 
 .terminal-summary-counts {
@@ -1633,15 +1575,15 @@ body {
 }
 
 .summary-pass-text {
-  color: #3fb950;
+  color: var(--accent-green);
 }
 
 .summary-fail-text {
-  color: #f85149;
+  color: var(--accent-red);
 }
 
 .summary-sep {
-  color: #484f58;
+  color: var(--border-light);
 }
 
 /* -------------------------------------------------------------------------

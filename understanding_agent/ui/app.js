@@ -116,10 +116,17 @@
       const res = await fetch('/api/commits');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      state.commits = Array.isArray(data) ? data : [];
+      const rawCommits = Array.isArray(data) ? data : [];
+      // Only passed committed commits on the left side (no current staged, no failed)
+      state.commits = rawCommits.filter((c) => {
+        if (c.is_staged || c.id === 'staged') return false;
+        const st = (c.status || '').toUpperCase();
+        return st === 'PASSED';
+      });
+
       renderSidebar();
 
-      if (!state.selectedCommitId) {
+      if (!state.selectedCommitId || !state.commits.some((c) => c.id === state.selectedCommitId)) {
         if (state.commits.length > 0) {
           selectCommit(state.commits[0].id);
         }
@@ -188,7 +195,14 @@
 
   function renderSidebar() {
     const q = state.searchQuery.toLowerCase().trim();
-    const filtered = state.commits.filter((c) => {
+    // Guarantee only passed committed commits are shown on the left side
+    const passedCommits = state.commits.filter((c) => {
+      if (c.is_staged || c.id === 'staged') return false;
+      const st = (c.status || '').toUpperCase();
+      return st === 'PASSED';
+    });
+
+    const filtered = passedCommits.filter((c) => {
       if (!q) return true;
       return (
         (c.message && c.message.toLowerCase().includes(q)) ||
@@ -203,7 +217,7 @@
     if (filtered.length === 0) {
       el.commitList.innerHTML = `
         <div class="sidebar-empty">
-          <span>No matching commits found.</span>
+          <span>No passed commits found.</span>
         </div>
       `;
       return;
@@ -212,7 +226,6 @@
     el.commitList.innerHTML = filtered
       .map((c) => {
         const isActive = c.id === state.selectedCommitId;
-        const isStaged = c.is_staged || c.id === 'staged';
         const attemptsText =
           c.attempts_count === 1
             ? '1 attempt'
@@ -220,29 +233,15 @@
               ? `${c.attempts_count} attempts`
               : '0 attempts';
 
-        let statusClass = 'status-unverified';
-        let statusIcon = '●';
-        const st = (c.status || '').toUpperCase();
-        if (isStaged) {
-          statusClass = 'status-staged';
-          statusIcon = '●';
-        } else if (st === 'PASSED') {
-          statusClass = 'status-passed';
-          statusIcon = '✓';
-        } else if (st === 'FAILED') {
-          statusClass = 'status-failed';
-          statusIcon = '✗';
-        }
-
         return `
-          <div class="commit-card ${isActive ? 'active' : ''} ${isStaged ? 'staged-card' : ''}" 
+          <div class="commit-card ${isActive ? 'active' : ''}" 
                data-id="${escapeHtml(c.id)}"
                onclick="window.understandingAgent.selectCommit('${escapeHtml(c.id)}')">
             <div class="commit-card-top">
-              <span class="commit-card-status ${statusClass}">
-                ${statusIcon} ${isStaged ? 'STAGED' : st || 'COMMITTED'}
+              <span class="commit-card-status status-passed">
+                ✓ PASSED
               </span>
-              <span class="commit-card-hash">${escapeHtml(c.short_hash || 'staged')}</span>
+              <span class="commit-card-hash">${escapeHtml(c.short_hash || 'commit')}</span>
             </div>
             <div class="commit-card-msg" title="${escapeHtml(c.message)}">
               ${escapeHtml(c.message || 'No commit message')}
@@ -451,7 +450,6 @@
     if (!questions || questions.length === 0) {
       el.chatThread.innerHTML = `
         <div style="padding: 24px; text-align: center; color: var(--text-secondary); background: var(--bg-card); border-radius: 8px; border: 1px solid var(--border-color);">
-          <span style="font-size: 24px; display: block; margin-bottom: 6px;">💬</span>
           <span>No question/answer defenses recorded for this attempt.</span>
         </div>
       `;
@@ -481,15 +479,15 @@
         let scoreBadgeHtml = '';
 
         if (isAnswered) {
-          statusBadgeHtml = `<span class="qa-status-pill qa-status-answered">✓ Answered</span>`;
+          statusBadgeHtml = `<span class="qa-status-pill qa-status-answered">Answered</span>`;
           if (score !== null) {
             scoreBadgeHtml = `<span class="qa-score-badge ${passed ? 'qa-score-pass' : 'qa-score-fail'}">Score: ${score}%</span>`;
           }
         } else if (isTimedOut) {
-          statusBadgeHtml = `<span class="qa-status-pill qa-status-timeout">⏱ Not in time limit</span>`;
+          statusBadgeHtml = `<span class="qa-status-pill qa-status-timeout">Timed Out</span>`;
           scoreBadgeHtml = `<span class="qa-score-badge qa-score-zero">0%</span>`;
         } else {
-          statusBadgeHtml = `<span class="qa-status-pill qa-status-pending">⏳ Pending Defense</span>`;
+          statusBadgeHtml = `<span class="qa-status-pill qa-status-pending">Pending Defense</span>`;
         }
 
         // Answer / Response section
@@ -499,13 +497,13 @@
           responseContentHtml = `
             <div class="qa-answer-block">
               <div class="qa-answer-meta">
-                <span class="qa-answer-author">🧑‍💻 Developer Answer</span>
-                ${responseTime ? `<span class="qa-time-tag">⏱ Answered in ${responseTime}s</span>` : ''}
+                <span class="qa-answer-author">Developer Response</span>
+                ${responseTime ? `<span class="qa-time-tag">${responseTime}s response</span>` : ''}
               </div>
               <div class="qa-answer-text">${escapeHtml(ansText)}</div>
               ${feedback ? `
                 <div class="qa-verdict-line">
-                  <span class="qa-verdict-icon">💡</span>
+                  <span class="qa-verdict-label">Evaluation:</span>
                   <span class="qa-verdict-text">${escapeHtml(feedback)}</span>
                 </div>
               ` : ''}
@@ -514,9 +512,8 @@
         } else if (isTimedOut) {
           responseContentHtml = `
             <div class="qa-notice-block qa-notice-timeout">
-              <span class="qa-notice-icon">⏱</span>
               <div class="qa-notice-body">
-                <span class="qa-notice-title">Not in time limit</span>
+                <span class="qa-notice-title">Timed Out</span>
                 <span class="qa-notice-desc">Response window expired (${timeLimit}s limit) without an answer being received.</span>
               </div>
             </div>
@@ -524,7 +521,6 @@
         } else {
           responseContentHtml = `
             <div class="qa-notice-block qa-notice-pending">
-              <span class="qa-notice-icon">⏳</span>
               <div class="qa-notice-body">
                 <span class="qa-notice-title">Pending Defense</span>
                 <span class="qa-notice-desc">Awaiting developer defense during git pre-commit verification.</span>
@@ -557,7 +553,7 @@
               <div class="qa-header-left">
                 <span class="qa-num-badge">Q${idx + 1}</span>
                 <span class="qa-type-badge">${escapeHtml(qType)}</span>
-                <span class="qa-limit-badge">⏱ ${timeLimit}s limit</span>
+                <span class="qa-limit-badge">${timeLimit}s limit</span>
               </div>
               <div class="qa-header-right">
                 ${statusBadgeHtml}
@@ -660,7 +656,6 @@
     if (report.length === 0) {
       el.attemptViolationsList.innerHTML = `
         <div style="padding: 20px; text-align: center; color: var(--text-secondary);">
-          <span style="font-size: 24px; display: block; margin-bottom: 8px;">✅</span>
           <span style="font-size: 14px; font-weight: 600; color: var(--accent-green);">No coding standards evaluated or detected for this attempt.</span>
         </div>
       `;
@@ -676,7 +671,7 @@
       html += `
         <div class="audit-group audit-group-failed" data-status="failed">
           <div class="audit-header-line">
-            <span class="audit-fail-badge">❌ FAILED</span>
+            <span class="audit-fail-badge">FAILED</span>
             <span class="audit-std-name">${escapeHtml(s.name)}</span>
             ${cat}
           </div>
@@ -692,7 +687,7 @@
       html += `
         <div class="audit-group audit-group-passed" data-status="passed">
           <div class="audit-header-line">
-            <span class="audit-pass-badge">✅ PASSED</span>
+            <span class="audit-pass-badge">PASSED</span>
             <span class="audit-std-name">${escapeHtml(s.name)}</span>
             ${cat}
           </div>
@@ -742,7 +737,7 @@
     const lines = [];
 
     for (const s of failed) {
-      lines.push(`❌ FAILED  ${s.name}`);
+      lines.push(`FAILED  ${s.name}`);
       const viols = s.violations && s.violations.length > 0 ? s.violations : [s.details || 'Violation detected'];
       for (const v of viols) {
         lines.push(`         ↳ ${v}`);
@@ -750,7 +745,7 @@
     }
 
     for (const s of passed) {
-      lines.push(`✅ PASSED  ${s.name}`);
+      lines.push(`PASSED  ${s.name}`);
       lines.push(`         ↳ ${s.details || 'Standard compliant; no violations detected.'}`);
     }
 
@@ -759,11 +754,11 @@
 
     const fullText = lines.join('\n');
     navigator.clipboard.writeText(fullText).then(() => {
-      if (el.btnCopyTerminal) {
-        const origHtml = el.btnCopyTerminal.innerHTML;
-        el.btnCopyTerminal.innerHTML = `<span>✅</span> Copied!`;
+      const textEl = document.getElementById('btn-copy-terminal-text');
+      if (textEl) {
+        textEl.textContent = 'Copied!';
         setTimeout(() => {
-          el.btnCopyTerminal.innerHTML = origHtml;
+          textEl.textContent = 'Copy Output';
         }, 2000);
       }
     });
@@ -790,9 +785,10 @@
     const hash = el.overviewHash.textContent;
     if (hash && hash !== '--------') {
       navigator.clipboard.writeText(hash).then(() => {
-        el.btnCopyHash.textContent = '✅';
+        const orig = el.btnCopyHash.innerHTML;
+        el.btnCopyHash.innerHTML = `<svg class="copy-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--accent-green);"><polyline points="20 6 9 17 4 12"/></svg>`;
         setTimeout(() => {
-          el.btnCopyHash.textContent = '📋';
+          el.btnCopyHash.innerHTML = orig;
         }, 1500);
       });
     }

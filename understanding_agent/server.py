@@ -250,6 +250,15 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
 
     ui_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
 
+    @app.middleware("http")
+    async def add_no_cache_headers(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/static") or request.url.path in ("/ui", "/"):
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
     # Serve static assets (CSS, JS)
     if os.path.isdir(ui_dir):
         app.mount("/static", StaticFiles(directory=ui_dir), name="static")
@@ -266,7 +275,14 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
     def serve_ui():
         index_file = os.path.join(ui_dir, "index.html")
         if os.path.exists(index_file):
-            return FileResponse(index_file)
+            return FileResponse(
+                index_file,
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                }
+            )
         return HTMLResponse("<h2>UI index.html not found</h2>", status_code=404)
 
     # -------------------------------------------------------------------------
@@ -275,37 +291,37 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
 
     @app.get("/api/commits")
     @app.get("/commits")
-    def list_commits(limit: int = 50):
-        """List real commits from git history, plus uncommitted staged changes if any."""
+    def list_commits(limit: int = 50, include_staged: bool = False):
+        """List passed commits from git history with their pre-commit attempts count."""
         all_sessions = load_sessions(effective_repo_root)
-
         commits_list = []
 
-        # 1. Check for uncommitted staged changes
-        staged_info = _get_staged_changes(effective_repo_root)
-        if staged_info["files"]:
-            staged_sessions = get_sessions_for_commit(effective_repo_root, "staged")
-            latest_status = "PENDING"
-            if staged_sessions:
-                latest_status = staged_sessions[-1].get("status", "FAILED")
+        if include_staged:
+            # Check for uncommitted staged changes only when explicitly requested
+            staged_info = _get_staged_changes(effective_repo_root)
+            if staged_info["files"]:
+                staged_sessions = get_sessions_for_commit(effective_repo_root, "staged")
+                latest_status = "PENDING"
+                if staged_sessions:
+                    latest_status = staged_sessions[-1].get("status", "FAILED")
 
-            current_branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], effective_repo_root) or "main"
-            commits_list.append({
-                "id": "staged",
-                "hash": "staged",
-                "short_hash": "staged",
-                "author": "Current Working Tree",
-                "author_email": "",
-                "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "message": "Pending Staged Changes (Uncommitted)",
-                "branch": current_branch,
-                "is_staged": True,
-                "status": latest_status,
-                "attempts_count": len(staged_sessions),
-                "files_count": len(staged_info["files"])
-            })
+                current_branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], effective_repo_root) or "main"
+                commits_list.append({
+                    "id": "staged",
+                    "hash": "staged",
+                    "short_hash": "staged",
+                    "author": "Current Working Tree",
+                    "author_email": "",
+                    "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "message": "Pending Staged Changes (Uncommitted)",
+                    "branch": current_branch,
+                    "is_staged": True,
+                    "status": latest_status,
+                    "attempts_count": len(staged_sessions),
+                    "files_count": len(staged_info["files"])
+                })
 
-        # 2. Real git log commits
+        # Real git log commits (only passed committed ones)
         log_out = _run_git(
             ["log", f"-n{limit}", "--pretty=format:%H|%h|%an|%ae|%aI|%s"],
             effective_repo_root
@@ -317,10 +333,8 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
                 full_h, short_h, author, email, date_str, subject = parts
                 commit_sessions = get_sessions_for_commit(effective_repo_root, full_h)
                 
-                # Default status is PASSED if committed, or inspect recorded sessions
+                # Real commits in history are committed and passed
                 status = "PASSED"
-                if commit_sessions:
-                    status = commit_sessions[-1].get("status", "PASSED")
 
                 commits_list.append({
                     "id": full_h,
@@ -410,7 +424,7 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
         failed_standards = [s for s in standards_report if not s.get("is_good", True)]
 
         attempts = get_sessions_for_commit(effective_repo_root, commit_id)
-        status = attempts[-1].get("status", "PASSED") if attempts else "PASSED"
+        status = "PASSED"
 
         return {
             "commit_id": full_h,
@@ -430,8 +444,8 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
                 {
                     "attempt_id": att.get("attempt_id") or att.get("session_id"),
                     "attempt_number": att.get("attempt_number", idx + 1),
-                    "status": att.get("status", "PASSED"),
-                    "score": att.get("score", 100),
+                    "status": att.get("status", "FAILED"),
+                    "score": att.get("score", 0),
                     "violations_count": att.get("violations_count", 0),
                     "timestamp": att.get("timestamp", date_str),
                     "questions_count": len(att.get("questions", []))

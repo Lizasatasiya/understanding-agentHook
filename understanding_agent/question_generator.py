@@ -90,7 +90,7 @@ class QuestionGenerator:
 
         api_key = load_nous_api_key()
         if not api_key:
-            print("\n  \033[93m⚠️  [LLM] Warning: NOUS_API_KEY is not set.\033[0m")
+            print("\n  \033[93m[LLM] Warning: NOUS_API_KEY is not set.\033[0m")
             print("  \033[2mSet NOUS_API_KEY in your .env or shell (export NOUS_API_KEY=\"...\") to generate custom questions.\033[0m\n", flush=True)
             questions = self._fallback(context, hints)
             return self._ensure_standards_questions(questions, failed_std)
@@ -289,7 +289,7 @@ class QuestionGenerator:
         status, body = call_nous_api(api_key, payload, timeout=30)
         if status != 200:
             if status != 0:
-                print(f"\n  \033[93m[⚠️  Nous API returned HTTP {status}: {body[:200]}]\033[0m\n", flush=True)
+                print(f"\n  \033[93m[Nous API returned HTTP {status}: {body[:200]}]\033[0m\n", flush=True)
             return []
 
         try:

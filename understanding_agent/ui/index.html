@@ -3,11 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light">
   <title>Understanding Agent — Pre-Commit & Coding Standards Dashboard</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=light_mode_force_v2">
 </head>
 <body>
   <div class="app-layout">
@@ -15,7 +16,11 @@
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <div class="brand">
-          <div class="brand-icon">🛡️</div>
+          <div class="brand-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="header-svg">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+          </div>
           <div class="brand-info">
             <h1 class="brand-title">Understanding Agent</h1>
             <span class="brand-subtitle">Pre-Commit Defense & Standards</span>
@@ -62,9 +67,17 @@
       <div class="content-scroll" id="content-scroll">
         <!-- Empty Placeholder State -->
         <div class="empty-state" id="empty-state">
-          <div class="empty-icon">💬</div>
+          <div class="empty-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="empty-svg">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+              <polyline points="10 9 9 9 8 9"/>
+            </svg>
+          </div>
           <h2>Select a commit to view details</h2>
-          <p>Choose any real commit from the left sidebar to review changed files, architectural summary, coding standards violations, and pre-commit interactive attempts.</p>
+          <p>Choose any commit from the left sidebar to review changed files, architectural summary, coding standards violations, and pre-commit interactive attempts.</p>
         </div>
 
         <!-- VIEW 1: COMMIT OVERVIEW -->
@@ -82,7 +95,12 @@
               <div class="meta-item">
                 <span class="meta-label">Hash:</span>
                 <code class="meta-code" id="overview-hash">--------</code>
-                <button class="btn-copy" id="btn-copy-hash" title="Copy full hash">📋</button>
+                <button class="btn-copy" id="btn-copy-hash" title="Copy full hash">
+                  <svg class="copy-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                  </svg>
+                </button>
               </div>
               <div class="meta-item">
                 <span class="meta-label">Author:</span>
@@ -99,7 +117,11 @@
           <section class="card changed-files-card">
             <div class="card-header">
               <div class="card-title-group">
-                <span class="card-icon">📁</span>
+                <span class="card-icon">
+                  <svg class="section-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                  </svg>
+                </span>
                 <h3 class="card-title">Changed Files</h3>
               </div>
               <span class="badge-count" id="files-count-badge">0 files</span>
@@ -113,7 +135,13 @@
           <section class="card change-summary-card">
             <div class="card-header">
               <div class="card-title-group">
-                <span class="card-icon">🧠</span>
+                <span class="card-icon">
+                  <svg class="section-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="16" x2="12" y2="12"/>
+                    <line x1="12" y1="8" x2="12.01" y2="8"/>
+                  </svg>
+                </span>
                 <h3 class="card-title">Change Summary</h3>
               </div>
               <span class="badge-ai">AI Analysis</span>
@@ -142,7 +170,12 @@
           <section class="card attempts-section-card">
             <div class="card-header">
               <div class="card-title-group">
-                <span class="card-icon">⚡</span>
+                <span class="card-icon">
+                  <svg class="section-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/>
+                    <polyline points="12 6 12 12 16 14"/>
+                  </svg>
+                </span>
                 <h3 class="card-title">Pre-Commit Attempts</h3>
               </div>
               <span class="badge-count" id="attempts-count-badge">0 attempts</span>
@@ -153,7 +186,7 @@
           </section>
         </div>
 
-        <!-- VIEW 2: ATTEMPT DETAIL (CHATGPT CONVERSATION + VIOLATIONS) -->
+        <!-- VIEW 2: ATTEMPT DETAIL (CONVERSATION + VIOLATIONS) -->
         <div class="attempt-detail-view hidden" id="attempt-detail-view">
           <!-- Attempt Header & Stepper -->
           <section class="card attempt-header-card">
@@ -179,22 +212,26 @@
                 <span class="commit-status-badge" id="attempt-status-badge">FAILED</span>
                 <span class="score-badge" id="attempt-score-badge">Score: 0%</span>
               </div>
-              <div class="attempt-meta-info" id="attempt-timestamp">2026-10-07 11:32 AM</div>
+              <div class="attempt-meta-info" id="attempt-timestamp">--</div>
             </div>
           </section>
 
-          <!-- ChatGPT Conversation View -->
+          <!-- Interactive Q&A Defense Conversation View -->
           <section class="conversation-section">
             <div class="section-title-bar">
               <div class="title-with-icon">
-                <span class="title-icon">💬</span>
+                <span class="title-icon">
+                  <svg class="section-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                  </svg>
+                </span>
                 <h3>Code Understanding Defense</h3>
               </div>
               <span class="badge-tag">Interactive Q&amp;A</span>
             </div>
 
             <div class="chat-thread" id="chat-thread">
-              <!-- Rendered questions and answers in ChatGPT style -->
+              <!-- Rendered questions and answers -->
             </div>
           </section>
 
@@ -202,7 +239,11 @@
           <section class="violations-section">
             <div class="section-title-bar">
               <div class="title-with-icon">
-                <span class="title-icon">🛡️</span>
+                <span class="title-icon">
+                  <svg class="section-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                  </svg>
+                </span>
                 <h3>Coding Standards Audit Engine</h3>
                 <span class="badge-tag">AST Static Analysis</span>
               </div>
@@ -219,12 +260,18 @@
                   </button>
                 </div>
                 <button class="btn btn-secondary btn-sm" id="btn-copy-terminal" title="Copy ASCII Terminal Report">
-                  <span id="btn-copy-terminal-icon">📋</span> Copy Output
+                  <span id="btn-copy-terminal-icon">
+                    <svg class="inline-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                    </svg>
+                  </span>
+                  <span id="btn-copy-terminal-text">Copy Output</span>
                 </button>
               </div>
             </div>
 
-            <!-- Sleek macOS-Style Terminal Audit Console Card -->
+            <!-- Modern Clean Light-Theme Terminal / Audit Console Card -->
             <div class="terminal-card">
               <div class="terminal-bar">
                 <div class="terminal-left-group">
@@ -256,7 +303,7 @@
                 <div class="terminal-summary-row" id="attempt-violations-footer">
                   <div class="compliance-label" id="term-compliance-label">0% Compliance</div>
                   <div class="terminal-summary-counts" id="term-summary-counts">
-                    <!-- Summary: 3 Passed (Good) │ 9 Failed (Violations) -->
+                    <!-- Summary counts -->
                   </div>
                 </div>
               </div>
@@ -267,6 +314,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=light_mode_force_v2"></script>
 </body>
 </html>

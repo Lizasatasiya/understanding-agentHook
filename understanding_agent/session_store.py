@@ -3,6 +3,11 @@ import json
 import time
 import subprocess
 from typing import List, Dict, Any, Optional
+from .commit_context import (
+    get_head_commit,
+    get_current_commit_message,
+    compute_attempt_key
+)
 
 
 def get_sessions_file(repo_root: str) -> str:
@@ -13,8 +18,82 @@ def get_sessions_file(repo_root: str) -> str:
     return os.path.join(repo_root, "understanding_sessions.json")
 
 
+def reconcile_sessions(repo_root: str, sessions: List[Dict[str, Any]]) -> bool:
+    """
+    Reconcile sessions against git log history.
+    If a session was recorded as 'staged', but its base head or diff was committed,
+    re-associate it with that commit hash and set is_staged=False.
+    Returns True if any session was modified.
+    """
+    try:
+        out = subprocess.check_output(
+            ["git", "log", "-n", "30", "--pretty=format:%H|%P|%s|%aI"],
+            text=True, cwd=repo_root, stderr=subprocess.DEVNULL
+        ).strip()
+    except Exception:
+        return False
+
+    if not out:
+        return False
+
+    commits = []
+    for line in out.splitlines():
+        parts = line.split("|", 3)
+        if len(parts) >= 3:
+            commits.append({
+                "hash": parts[0],
+                "parents": parts[1].split(),
+                "subject": parts[2],
+                "date": parts[3] if len(parts) > 3 else ""
+            })
+
+    if not commits:
+        return False
+
+    head_commit = commits[0]["hash"]
+    modified = False
+
+    for s in sessions:
+        if s.get("commit_id") != "staged":
+            continue
+
+        s_head = s.get("head_commit")
+        s_ts = s.get("timestamp", "")
+
+        # Case 1: Session has head_commit, and HEAD has moved past it
+        if s_head and s_head != head_commit:
+            # Find the commit whose parent is s_head
+            found_child = None
+            for c in commits:
+                if s_head in c["parents"]:
+                    found_child = c["hash"]
+                    break
+            if found_child:
+                s["commit_id"] = found_child
+                s["is_staged"] = False
+                modified = True
+            else:
+                # Associated commit not in immediate parents, link to HEAD or mark archived
+                s["commit_id"] = head_commit
+                s["is_staged"] = False
+                modified = True
+
+        # Case 2: Older session without head_commit
+        elif not s_head and s_ts:
+            # Check if timestamp is earlier than recent commits
+            for c in reversed(commits):
+                c_date = c.get("date", "")
+                if c_date and s_ts <= c_date[:19]:
+                    s["commit_id"] = c["hash"]
+                    s["is_staged"] = False
+                    modified = True
+                    break
+
+    return modified
+
+
 def load_sessions(repo_root: str) -> List[Dict[str, Any]]:
-    """Load all persisted sessions for the given repository."""
+    """Load all persisted sessions for the given repository and reconcile completed commits."""
     path = get_sessions_file(repo_root)
     sessions = []
     if os.path.exists(path):
@@ -42,23 +121,11 @@ def load_sessions(repo_root: str) -> List[Dict[str, Any]]:
         except Exception:
             pass
 
-    # Discover and sync new attempts from .git/understanding_agent_state.json if present
-    state_file = os.path.join(repo_root, ".git", "understanding_agent_state.json")
-    if os.path.exists(state_file):
+    # Reconcile completed commits so old staged sessions do not linger as active staged attempts
+    if reconcile_sessions(repo_root, sessions):
         try:
-            with open(state_file, "r", encoding="utf-8") as f:
-                state_data = json.load(f)
-            diff_hash = state_data.get("diff_hash", "")
-            raw_questions = state_data.get("questions", [])
-            if raw_questions and diff_hash:
-                staged_sessions = [s for s in sessions if (s.get("commit_id") == "staged" or s.get("is_staged"))]
-                diff_exists = any(s.get("diff_hash") == diff_hash for s in staged_sessions)
-                if not diff_exists or not sessions:
-                    next_attempt_no = len(staged_sessions) + 1
-                    seeded = _seed_from_state(repo_root, state_data, attempt_number=next_attempt_no)
-                    if seeded:
-                        sessions.append(seeded)
-                        save_session(repo_root, seeded)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(sessions, f, indent=2)
         except Exception:
             pass
 
@@ -68,10 +135,14 @@ def load_sessions(repo_root: str) -> List[Dict[str, Any]]:
 def _seed_from_state(repo_root: str, state_data: dict, attempt_number: Optional[int] = None) -> Optional[dict]:
     """Build an initial real session from an existing understanding_agent_state.json."""
     diff_hash = state_data.get("diff_hash", "")
-    attempts = state_data.get("attempts", 1)
+    attempts = attempt_number or state_data.get("attempts", 1)
     raw_questions = state_data.get("questions", [])
     if not raw_questions:
         return None
+
+    head_commit = state_data.get("head_commit") or get_head_commit(repo_root)
+    commit_msg = state_data.get("commit_message") or get_current_commit_message(repo_root)
+    attempt_key = state_data.get("attempt_key") or compute_attempt_key(head_commit, diff_hash, commit_msg)
 
     # Get branch
     branch = "main"
@@ -115,18 +186,10 @@ def _seed_from_state(repo_root: str, state_data: dict, attempt_number: Optional[
     for q in raw_questions:
         q_id = q.get("question_id", "q1")
         ans = q.get("answer", "")
-        # If Q1 was answered during interactive pre-commit hook defense
-        if not ans and diff_hash.startswith("1ebe09c6") and q_id == "q1":
-            ans = "I don't know"
-            q_status = "answered"
-            score = 0
-            feedback = "Understanding not demonstrated. Props in React are read-only; mutating them breaks reconciliation and causes state desynchronization."
-            resp_time = 15
-        else:
-            q_status = "answered" if q.get("answered") or ans else "pending"
-            score = q.get("best_score", 0)
-            feedback = "Awaiting developer defense in pre-commit hook." if not q.get("answered") and not ans else "Answer evaluated."
-            resp_time = q.get("response_time_seconds")
+        q_status = "answered" if q.get("answered") or ans else "pending"
+        score = q.get("best_score", 0)
+        feedback = "Awaiting developer defense in pre-commit hook." if not q.get("answered") and not ans else "Answer evaluated."
+        resp_time = q.get("response_time_seconds")
 
         formatted_questions.append({
             "question_id": q_id,
@@ -151,6 +214,9 @@ def _seed_from_state(repo_root: str, state_data: dict, attempt_number: Optional[
         "attempt_id": session_id,
         "attempt_number": attempts,
         "commit_id": "staged",
+        "head_commit": head_commit,
+        "commit_message": commit_msg,
+        "attempt_key": attempt_key,
         "diff_hash": diff_hash,
         "branch": branch,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -184,24 +250,38 @@ def save_session(repo_root: str, session_data: Dict[str, Any]) -> Dict[str, Any]
         except Exception:
             sessions = []
 
+    # Ensure head_commit, commit_message, and attempt_key are present
+    head_commit = session_data.get("head_commit") or get_head_commit(repo_root)
+    commit_msg = session_data.get("commit_message") or get_current_commit_message(repo_root)
+    diff_h = session_data.get("diff_hash", "")
+    attempt_key = session_data.get("attempt_key") or compute_attempt_key(head_commit, diff_h, commit_msg)
+
+    session_data["head_commit"] = head_commit
+    session_data["commit_message"] = commit_msg
+    session_data["attempt_key"] = attempt_key
+
     # Assign session_id if missing
+    import uuid
     if not session_data.get("session_id"):
         attempt_no = session_data.get("attempt_number", 1)
-        session_data["session_id"] = f"sess_{int(time.time()*1000)}_{attempt_no}"
+        session_data["session_id"] = f"sess_{int(time.time()*1000)}_{uuid.uuid4().hex[:6]}_{attempt_no}"
     if not session_data.get("attempt_id"):
         session_data["attempt_id"] = session_data["session_id"]
 
     sid = session_data.get("session_id")
 
-    # If staged attempt, ensure unique sequential attempt_number
+    # If staged attempt, ensure unique sequential attempt_number scoped strictly to:
+    # the current HEAD commit (attempts made towards the next commit).
     if session_data.get("commit_id") == "staged":
-        other_attempt_numbers = {
+        other_matching_attempts = {
             s.get("attempt_number") for s in sessions
-            if (s.get("commit_id") == "staged" or s.get("is_staged")) and s.get("session_id") != sid
+            if (s.get("commit_id") == "staged" or s.get("is_staged") or not s.get("commit_id"))
+            and s.get("session_id") != sid
+            and (s.get("head_commit") or "").strip() == (head_commit or "").strip()
         }
         curr_no = session_data.get("attempt_number", 1)
-        if curr_no in other_attempt_numbers:
-            session_data["attempt_number"] = max(other_attempt_numbers) + 1
+        if curr_no in other_matching_attempts:
+            session_data["attempt_number"] = max(other_matching_attempts) + 1
 
     # Deduplicate / update by session_id
     updated = False
@@ -216,8 +296,7 @@ def save_session(repo_root: str, session_data: Dict[str, Any]) -> Dict[str, Any]
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(sessions, f, indent=2)
-    except Exception as e:
-        # Fallback to local root
+    except Exception:
         alt_path = os.path.join(repo_root, "understanding_sessions.json")
         with open(alt_path, "w", encoding="utf-8") as f:
             json.dump(sessions, f, indent=2)
@@ -226,24 +305,31 @@ def save_session(repo_root: str, session_data: Dict[str, Any]) -> Dict[str, Any]
 
 
 def get_sessions_for_commit(repo_root: str, commit_id: str, diff_hash: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Return all attempts/sessions recorded for a specific commit or diff hash."""
+    """Return all attempts/sessions recorded for a specific commit or staged attempt."""
     all_sessions = load_sessions(repo_root)
+    current_head = get_head_commit(repo_root)
     matches = []
+
     for s in all_sessions:
         s_commit = str(s.get("commit_id") or s.get("commit_hash") or "")
         s_diff = str(s.get("diff_hash") or "")
+        s_head = s.get("head_commit")
+
         if commit_id == "staged":
-            if s_commit == "staged" or s.get("is_staged"):
-                matches.append(s)
-            elif diff_hash and s_diff == diff_hash:
-                matches.append(s)
+            # Match only current staged sessions belonging to active HEAD
+            if (s_commit == "staged" or s.get("is_staged")) and (not s_head or s_head == current_head):
+                if diff_hash:
+                    if s_diff == diff_hash:
+                        matches.append(s)
+                else:
+                    matches.append(s)
         else:
-            # Check commit hash match (full or prefix)
+            # Match specific historical commit
             if s_commit and (commit_id.startswith(s_commit) or s_commit.startswith(commit_id)):
                 matches.append(s)
             elif diff_hash and s_diff == diff_hash:
                 matches.append(s)
-    # Sort chronologically by attempt_number or timestamp
+
     matches.sort(key=lambda x: (x.get("attempt_number", 1), x.get("timestamp", "")))
     return matches
 

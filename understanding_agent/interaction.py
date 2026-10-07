@@ -264,10 +264,10 @@ class Interaction:
             DIM = "\033[2m"
             RESET = "\033[0m"
             if AUDIO_BACKEND == "mac_dictation":
-                print(f"🎙️  {CYAN}{BOLD}[🎙 / Tab]{RESET} {DIM}Dictate answer  │  ⌨️  Type directly{RESET}")
+                print(f"{CYAN}{BOLD}[Tab]{RESET} {DIM}Dictate answer  │  Type directly{RESET}")
                 hint_shown = True
             else:
-                print(f"🎙️  {CYAN}{BOLD}[Tab]{RESET} {DIM}Speak with Mic  │  ⌨️  Type directly{RESET}")
+                print(f"{CYAN}{BOLD}[Tab]{RESET} {DIM}Speak with Mic  │  Type directly{RESET}")
                 hint_shown = True
 
         if not UNIX_TTY:
@@ -285,7 +285,7 @@ class Interaction:
                 _sp.run(["say", question_text], check=False,
                         stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
             except Exception as e:
-                print(f"  [🔇 speak failed: {e}]", flush=True)
+                print(f"  [Speak failed: {e}]", flush=True)
             if UNIX_TTY:
                 try:
                     termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
@@ -312,8 +312,8 @@ class Interaction:
             CHUNK = 1024
             record_secs = min(timeout, 30)
 
-            print(f"\n🎙️  Listening... (Press Enter when done)\n", flush=True)
-            sys.stdout.write(" 🗣️  ")
+            print(f"\nListening... (Press Enter when done)\n", flush=True)
+            sys.stdout.write(" > ")
             sys.stdout.flush()
 
             if self._whisper_model is None:
@@ -463,11 +463,11 @@ class Interaction:
         while True:
             remaining = int(timeout - (time.time() - start_time))
             if remaining <= 0:
-                sys.stdout.write(f"\r\033[2K⏰ Time's up! ({timeout}s limit reached)\n")
+                sys.stdout.write(f"\r\033[2KTime's up! ({timeout}s limit reached)\n")
                 sys.stdout.flush()
                 return None
                 
-            timer_str = f"⏱ {remaining:2d}s"
+            timer_str = f"[{remaining:2d}s]"
             cols = _get_terminal_cols()
             clean_prompt = prompt.lstrip()
             prefix_str = f"{timer_str} │ {clean_prompt}"
@@ -516,9 +516,9 @@ class Interaction:
                         if user_input and not user_input[-1].isspace():
                             user_input.append(' ')
                         user_input.extend(list(voice_ans))
-                        print("\n✏️   Review and edit your answer below (Press Enter to submit):\n", flush=True)
+                        print("\nReview and edit your answer below (Press Enter to submit):\n", flush=True)
                     else:
-                        print("\n⌨️   Type your answer below (Press Enter to submit):\n", flush=True)
+                        print("\nType your answer below (Press Enter to submit):\n", flush=True)
                     spent = int(time.time() - start_time)
                     if timeout - spent < 20:
                         start_time = time.time() - (timeout - 20)
@@ -547,11 +547,11 @@ class Interaction:
             while True:
                 remaining = int(timeout - (time.time() - start_time))
                 if remaining <= 0:
-                    sys.stdout.write(f"\r\033[2K⏰ Time's up! ({timeout}s limit reached)\n")
+                    sys.stdout.write(f"\r\033[2KTime's up! ({timeout}s limit reached)\n")
                     sys.stdout.flush()
                     return None
                     
-                timer_str = f"⏱ {remaining:2d}s"
+                timer_str = f"[{remaining:2d}s]"
                 cols = _get_terminal_cols(fd)
                 clean_prompt = prompt.lstrip()
                 prefix_str = f"{timer_str} │ {clean_prompt}"
@@ -638,8 +638,8 @@ class Interaction:
                         user_input.clear()
                         cursor_pos = 0
                         chunk = '\t'  # route to mic trigger below
-                    elif dictation_active or (user_input and not review_mode and AUDIO_BACKEND == "mac_dictation"):
-                        # User pressed Enter while dictating or finished speaking -> Stop mic & show review/edit prompt
+                    elif dictation_active:
+                        # User pressed Enter while dictating -> Stop mic & show review/edit prompt
                         if AUDIO_BACKEND == "mac_dictation":
                             _stop_mac_dictation()
 
@@ -684,7 +684,7 @@ class Interaction:
                         sys.stdout.write("\r")
                         sys.stdout.flush()
 
-                        print(f"🎙️  \033[93mMic OFF.\033[0m\n✏️   \033[1mReview and edit your answer below\033[0m (Press \033[1m[Enter]\033[0m to submit):\n", flush=True)
+                        print(f"\033[93mMic OFF.\033[0m\n\033[1mReview and edit your answer below\033[0m (Press \033[1m[Enter]\033[0m to submit):\n", flush=True)
                         temp_lines = 3
 
                         # Guarantee at least 60 seconds in review mode
@@ -714,7 +714,7 @@ class Interaction:
                             sys.stdout.write("\033[1A\033[2K")
                         sys.stdout.write("\r")
                         sys.stdout.flush()
-                        print(f"🎙️  \033[92mDictation started!\033[0m Speak your answer now. Press \033[1m[Enter]\033[0m when done speaking.\n", flush=True)
+                        print(f"\033[92mDictation started!\033[0m Speak your answer now. Press \033[1m[Enter]\033[0m when done speaking.\n", flush=True)
                         temp_lines = 2
                         spent = int(time.time() - start_time)
                         if timeout - spent < 30:
@@ -742,10 +742,10 @@ class Interaction:
                             user_input.extend(list(voice_ans))
                             cursor_pos = len(user_input)
                             review_mode = True
-                            print("\n✏️   Review and edit your answer below (Press Enter to submit):\n", flush=True)
+                            print("\nReview and edit your answer below (Press Enter to submit):\n", flush=True)
                             temp_lines = 3
                         else:
-                            print("\n⌨️   Type your answer below (Press Enter to submit):\n", flush=True)
+                            print("\nType your answer below (Press Enter to submit):\n", flush=True)
                             temp_lines = 3
                             
                         spent = int(time.time() - start_time)

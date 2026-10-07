@@ -21,6 +21,12 @@ from .server_client import ServerClient
 from .answer_evaluator import AnswerEvaluator
 from .coding_standards import CodingStandardsChecker
 from .session_store import save_session
+from .commit_context import (
+    get_head_commit,
+    get_current_commit_message,
+    compute_attempt_key,
+    get_next_attempt_number
+)
 
 def _is_gitignored(repo_root: str, path: str) -> bool:
     """True when the given path matches a .gitignore rule (uses check-ignore)."""
@@ -55,9 +61,15 @@ def main():
     
     if not changes.get("files"):
         sys.exit(0)
+
+    project_root = env.get("project_root") or os.getcwd()
+    head_commit = get_head_commit(project_root)
+    commit_msg = get_current_commit_message(project_root)
+    diff_hash = hashlib.sha256(json.dumps(changes, sort_keys=True).encode()).hexdigest()
+    attempt_key = compute_attempt_key(head_commit, diff_hash, commit_msg)
         
     # 3. Stack Detection (languages, frameworks, domains — keys all downstream hints)
-    stack = StackDetector().detect(env.get("project_root") or os.getcwd())
+    stack = StackDetector().detect(project_root)
 
     # 4. Code Graph
     graph = CodeGraph()
@@ -71,12 +83,12 @@ def main():
     lens = SecurityLens()
     security_profile = lens.profile_change(context)
     security_hint = security_question_hint(security_profile)
-    evidence = collect_evidence(changes.get("files", []), env.get("project_root") or os.getcwd())
+    evidence = collect_evidence(changes.get("files", []), project_root)
     evidence_hint = evidence_question_hint(evidence)
     practice_hint = practice_pack_hint(stack, context, security_hint)
 
     # 5c. Coding Standards Audit (deterministic, printed first before questions)
-    standards_checker = CodingStandardsChecker(env.get("project_root") or os.getcwd())
+    standards_checker = CodingStandardsChecker(project_root)
     standards_report = standards_checker.check(changes, context)
     standards_checker.print_report(standards_report)
 
@@ -89,7 +101,7 @@ def main():
         BOLD = "\033[1m"
         RESET = "\033[0m"
 
-        print(f"{BOLD}{YELLOW}⚠️  Coding standards violations detected ({len(failed_standards)} failed).{RESET}")
+        print(f"{BOLD}{YELLOW}Coding standards violations detected ({len(failed_standards)} failed).{RESET}")
         print(f"{BOLD}Do you want to fix these violations or proceed further?{RESET}\n")
         print(f"  {BOLD}[1]{RESET} {RED}Fix violations{RESET}")
         print(f"  {BOLD}[2]{RESET} {GREEN}Proceed further{RESET}\n")
@@ -110,20 +122,23 @@ def main():
 
         if choice in ("1", "fix", "f"):
             print(f"\n{RED}Please resolve the violations listed above before committing.{RESET}\n")
-            project_root = env.get("project_root") or os.getcwd()
             try:
                 from .session_store import load_sessions
                 _existing = load_sessions(project_root)
-                _staged = [s for s in _existing if s.get("commit_id") == "staged"]
-                fix_attempt_num = max([s.get("attempt_number", 0) for s in _staged], default=0) + 1
+                fix_attempt_num = get_next_attempt_number(
+                    _existing, head_commit, diff_hash, commit_msg, state_attempts=0
+                )
             except Exception:
                 fix_attempt_num = 1
             session_data = {
-                "session_id": f"sess_{int(time.time()*1000)}_1",
-                "attempt_id": f"sess_{int(time.time()*1000)}_1",
+                "session_id": f"sess_{int(time.time()*1000)}_{fix_attempt_num}",
+                "attempt_id": f"sess_{int(time.time()*1000)}_{fix_attempt_num}",
                 "attempt_number": fix_attempt_num,
                 "commit_id": "staged",
-                "diff_hash": hashlib.sha256(json.dumps(changes, sort_keys=True).encode()).hexdigest(),
+                "head_commit": head_commit,
+                "commit_message": commit_msg,
+                "attempt_key": attempt_key,
+                "diff_hash": diff_hash,
                 "repository": env.get("repository", "unknown"),
                 "branch": env.get("branch", "unknown"),
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -136,7 +151,7 @@ def main():
                 "questions": []
             }
             try:
-                save_session(env.get("project_root") or os.getcwd(), session_data)
+                save_session(project_root, session_data)
                 ServerClient().send(session_data)
             except Exception:
                 pass
@@ -158,7 +173,7 @@ def main():
     if security_gate_enabled():
         critical = lens.find_critical_findings(context)
         if critical:
-            print(f"\n\033[91m⛔ Commit blocked: credential detected in staged code.\033[0m\n")
+            print(f"\n\033[91mCommit blocked: credential detected in staged code.\033[0m\n")
             for f in critical:
                 print(f"  \033[91m✗ {f['description']} ({f['redacted']}) in {f['file']}"
                       + (f" :: {f['function']}()" if f['function'] else "") + "\033[0m")
@@ -187,9 +202,8 @@ def main():
     summary = summary_generator.generate(context)
     
     # 6. Question Generator & State Management
-    # Hash only the detected changes: a retry with an edited commit message
-    # must reuse cached questions rather than regenerate everything.
-    diff_hash = hashlib.sha256(json.dumps(changes, sort_keys=True).encode()).hexdigest()
+    # Attempt count depends solely on attempts made towards the next commit (under head_commit).
+    # Commit message is NOT checked.
     state_file = ".git/understanding_agent_state.json"
     
     state = {}
@@ -200,7 +214,33 @@ def main():
         except Exception:
             pass
 
-    cached_questions = state.get("questions", [])
+    existing_sessions = []
+    try:
+        from .session_store import load_sessions
+        existing_sessions = load_sessions(project_root)
+    except Exception:
+        pass
+
+    norm_head = (head_commit or "").strip()
+    matching_sessions = [
+        s for s in existing_sessions
+        if (s.get("commit_id") == "staged" or s.get("is_staged") or not s.get("commit_id")) and
+        (s.get("head_commit") or "").strip() == norm_head
+    ]
+    recorded_attempts = [s.get("attempt_number", 0) for s in matching_sessions]
+    max_recorded_attempt = max(recorded_attempts + [len(matching_sessions)], default=0)
+
+    # State belongs to current commit cycle if head matches
+    state_head = (state.get("head_commit") or "").strip()
+    state_matches_head = (state_head == norm_head) if (state_head or norm_head) else True
+    state_attempts = state.get("attempts", 0) if state_matches_head else 0
+
+    # Attempts only depend on how many attempts made to next commit
+    attempts = max(max_recorded_attempt + 1, state_attempts + 1, 1)
+
+    # Cached questions can be reused if the diff hasn't changed
+    state_matches_diff = state_matches_head and (state.get("diff_hash") == diff_hash)
+    cached_questions = state.get("questions", []) if state_matches_diff else []
     has_fallback = any(q.get("is_fallback") for q in cached_questions)
 
     has_std_in_cache = not failed_standards or any(
@@ -209,17 +249,7 @@ def main():
         for q in cached_questions
     )
 
-    project_root = env.get("project_root") or os.getcwd()
-    existing_sessions = []
-    try:
-        from .session_store import load_sessions
-        existing_sessions = load_sessions(project_root)
-    except Exception:
-        pass
-    staged_sessions = [s for s in existing_sessions if s.get("commit_id") == "staged"]
-    max_recorded_attempt = max([s.get("attempt_number", 0) for s in staged_sessions], default=0)
-
-    if state.get("diff_hash") == diff_hash and cached_questions and not has_fallback and has_std_in_cache:
+    if state_matches_diff and cached_questions and not has_fallback and has_std_in_cache:
         valid_questions = cached_questions
         for q in valid_questions:
             # Only scores in GREEN (>= 70%) are considered passed and skipped
@@ -227,15 +257,15 @@ def main():
                 q["passed"] = True
             else:
                 q["passed"] = False
-        attempts = max(state.get("attempts", 0) + 1, max_recorded_attempt + 1)
     else:
+        # Generate fresh questions for new diff
         question_generator = QuestionGenerator()
         questions = question_generator.generate(context, summary, hints, env=env)
         valid_questions = question_generator.validate(questions)
         for q in valid_questions:
             q["passed"] = False
             q["best_score"] = 0
-        attempts = max(max_recorded_attempt + 1, 1)
+
     interaction = Interaction()
     evaluator = AnswerEvaluator()
     followup_generator = FollowUpGenerator()
@@ -249,6 +279,20 @@ def main():
     RESET = "\033[0m"
 
     while True:
+        # Persist state so attempt number is tracked even if interrupted
+        try:
+            with open(state_file, "w") as f:
+                json.dump({
+                    "attempt_key": attempt_key,
+                    "head_commit": head_commit,
+                    "commit_message": commit_msg,
+                    "diff_hash": diff_hash,
+                    "attempts": attempts,
+                    "questions": valid_questions if not any(quest.get("is_fallback") for quest in valid_questions) else []
+                }, f)
+        except Exception:
+            pass
+
         print(f"\n\n{BOLD}{CYAN}Questions [Attempt {attempts}]{RESET}\n")
         final_results = []
         total_score = 0
@@ -267,7 +311,7 @@ def main():
                 total_score += q.get('best_score', 0)
                 continue
                 
-            print(f"{YELLOW}⏳ Time Limit: {time_limit} seconds{RESET}\n")
+            print(f"{YELLOW}Time Limit: {time_limit} seconds{RESET}\n")
             print(f"{BOLD}{q_text}{RESET}\n")
 
             # Follow-up state for this question (set only if a partial answer triggers one)
@@ -302,7 +346,7 @@ def main():
             if 25 <= final_score < 70 and eval_res.follow_up_required and (ans_text or "").strip():
                 missing = ", ".join(eval_res.missing_concepts) or "the missing concept"
                 followup_q = followup_generator.generate(q, ans_obj, eval_res.to_dict())
-                print(f"\n{YELLOW}⚠️ Partial understanding. Follow-up on: {missing}{RESET}\n")
+                print(f"\n{YELLOW}Partial understanding. Follow-up on: {missing}{RESET}\n")
                 print(f"{BOLD}{followup_q}{RESET}\n")
 
                 fu_start = time.time()
@@ -333,13 +377,13 @@ def main():
                 if final_score >= 70:
                     print(f"{GREEN}✓ Good understanding demonstrated on follow-up{RESET}")
                 elif final_score >= 25:
-                    print(f"{YELLOW}⚠️ Partial understanding demonstrated on follow-up{RESET}")
+                    print(f"{YELLOW}Partial understanding demonstrated on follow-up{RESET}")
                 else:
                     print(f"{RED}✗ Understanding not demonstrated on follow-up{RESET}")
             elif final_score >= 70:
                 print(f"{GREEN}✓ Good understanding demonstrated{RESET}")
             elif final_score >= 25:
-                print(f"{YELLOW}⚠️ Partial understanding demonstrated{RESET}")
+                print(f"{YELLOW}Partial understanding demonstrated{RESET}")
             else:
                 print(f"{RED}✗ Understanding not demonstrated{RESET}")
             
@@ -379,6 +423,9 @@ def main():
                 try:
                     with open(state_file, "w") as f:
                         json.dump({
+                            "attempt_key": attempt_key,
+                            "head_commit": head_commit,
+                            "commit_message": commit_msg,
                             "diff_hash": diff_hash,
                             "attempts": attempts,
                             "questions": valid_questions
@@ -388,7 +435,7 @@ def main():
 
             # If user gives wrong answer (< 25%), ask no next questions and abort
             if final_score < 25:
-                print(f"\n{BOLD}{RED}⛔ Commit aborted. Please review the code and then try again.{RESET}\n")
+                print(f"\n{BOLD}{RED}Commit aborted. Please review the code and then try again.{RESET}\n")
                 
                 try:
                     session_data = {
@@ -396,6 +443,9 @@ def main():
                         "attempt_id": f"sess_{int(time.time()*1000)}_{attempts}",
                         "attempt_number": attempts,
                         "commit_id": "staged",
+                        "head_commit": head_commit,
+                        "commit_message": commit_msg,
+                        "attempt_key": attempt_key,
                         "diff_hash": diff_hash,
                         "repository": env.get("repository", "unknown"),
                         "branch": env.get("branch", "unknown"),
@@ -408,7 +458,7 @@ def main():
                         "violations_count": len(failed_standards),
                         "questions": final_results
                     }
-                    save_session(env.get("project_root") or os.getcwd(), session_data)
+                    save_session(project_root, session_data)
                     ServerClient().send(session_data)
                 except Exception:
                     pass
@@ -417,9 +467,9 @@ def main():
         avg_score = total_score / len(valid_questions) if valid_questions else 100
         attempt_status = "PASSED" if avg_score > 75 else "FAILED"
         if avg_score > 75:
-            print(f"\n{BOLD}{GREEN}✅ Overall Understanding: Verified{RESET}")
+            print(f"\n{BOLD}{GREEN}Overall Understanding: Verified{RESET}")
         else:
-            print(f"\n{BOLD}{RED}⛔ Overall Understanding: Insufficient{RESET}")
+            print(f"\n{BOLD}{RED}Overall Understanding: Insufficient{RESET}")
 
         # 9. Server Client & Session Storage
         session_data = {
@@ -427,6 +477,9 @@ def main():
             "attempt_id": f"sess_{int(time.time()*1000)}_{attempts}",
             "attempt_number": attempts,
             "commit_id": "staged",
+            "head_commit": head_commit,
+            "commit_message": commit_msg,
+            "attempt_key": attempt_key,
             "diff_hash": diff_hash,
             "repository": env.get("repository", "unknown"),
             "branch": env.get("branch", "unknown"),
@@ -440,7 +493,7 @@ def main():
             "questions": final_results
         }
         try:
-            save_session(env.get("project_root") or os.getcwd(), session_data)
+            save_session(project_root, session_data)
             ServerClient().send(session_data)
         except Exception:
             pass
@@ -448,6 +501,9 @@ def main():
         # Save state: keep attempts tracked, but don't cache fallback questions so AI questions can retry
         is_fallback_run = any(q.get("is_fallback") for q in valid_questions)
         new_state = {
+            "attempt_key": attempt_key,
+            "head_commit": head_commit,
+            "commit_message": commit_msg,
             "diff_hash": diff_hash,
             "attempts": attempts,
             "questions": valid_questions if not is_fallback_run else []
@@ -459,16 +515,16 @@ def main():
             pass
         
         if avg_score <= 75:
-            print(f"\n{RED}⛔ Attempt {attempts} failed. Understanding criteria not met.{RESET}")
+            print(f"\n{RED}Attempt {attempts} failed. Understanding criteria not met.{RESET}")
             retry = interaction.timed_input(f"{YELLOW}Would you like to try Attempt {attempts + 1}? (y/n) {RESET}", 60)
             if retry and retry.strip().lower() == 'y':
                 attempts += 1
                 continue
             else:
-                print(f"\n\033[91m⛔ Commit aborted.\033[0m")
+                print(f"\n\033[91mCommit aborted.\033[0m")
                 sys.exit(1)
         else:
-            print(f"\n\033[92m✅ Commit allowed: Understanding demonstrated.\033[0m")
+            print(f"\n\033[92mCommit allowed: Understanding demonstrated.\033[0m")
             # Cleanup state on success
             if os.path.exists(state_file):
                 os.remove(state_file)
