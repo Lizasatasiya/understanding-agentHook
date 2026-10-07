@@ -10,21 +10,39 @@ from urllib.parse import urlparse
 
 # Default Nous Research Subscription API base URL and model (override with NOUS_BASE_URL / NOUS_MODEL / UNDERSTANDING_AGENT_MODEL)
 _DEFAULT_BASE_URL = "https://inference-api.nousresearch.com/v1"
-_DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash"
+_DEFAULT_MODEL = "qwen/qwen3-coder-30b-a3b-instruct"
 
 
 def get_base_url() -> str:
-    """Return the OpenAI-compatible base URL for Nous Research Subscription API."""
-    return os.environ.get("NOUS_BASE_URL", "").strip() or \
-           os.environ.get("UNDERSTANDING_AGENT_BASE_URL", "").strip() or \
-           _DEFAULT_BASE_URL
+    """Return the OpenAI-compatible base URL for Nous Research or Groq API."""
+    explicit = os.environ.get("NOUS_BASE_URL", "").strip() or \
+               os.environ.get("UNDERSTANDING_AGENT_BASE_URL", "").strip() or \
+               os.environ.get("GROQ_BASE_URL", "").strip()
+    if explicit:
+        return explicit
+    provider = os.environ.get("UNDERSTANDING_AGENT_PROVIDER", "").strip().lower()
+    if provider == "groq":
+        return "https://api.groq.com/openai/v1"
+    key = load_nous_api_key()
+    if key.startswith("gsk_"):
+        return "https://api.groq.com/openai/v1"
+    return _DEFAULT_BASE_URL
 
 
 def get_model() -> str:
-    """Return the LLM model name, allowing override via NOUS_MODEL or UNDERSTANDING_AGENT_MODEL."""
-    return os.environ.get("NOUS_MODEL", "").strip() or \
-           os.environ.get("UNDERSTANDING_AGENT_MODEL", "").strip() or \
-           _DEFAULT_MODEL
+    """Return the LLM model name, allowing override via NOUS_MODEL, GROQ_MODEL, or UNDERSTANDING_AGENT_MODEL."""
+    explicit = os.environ.get("NOUS_MODEL", "").strip() or \
+               os.environ.get("UNDERSTANDING_AGENT_MODEL", "").strip() or \
+               os.environ.get("GROQ_MODEL", "").strip()
+    if explicit:
+        return explicit
+    provider = os.environ.get("UNDERSTANDING_AGENT_PROVIDER", "").strip().lower()
+    if provider == "groq":
+        return "qwen/qwen3.8-27b"
+    key = load_nous_api_key()
+    if key.startswith("gsk_"):
+        return "qwen/qwen3.8-27b"
+    return _DEFAULT_MODEL
 
 
 def fail_open_enabled() -> bool:
@@ -75,6 +93,25 @@ def load_nous_api_key() -> str:
       3. Fallback GROQ_API_KEY from environment or .env files only if no NOUS key was found
     """
     nous_key_names = ("NOUS_API_KEY", "NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY")
+    provider = os.environ.get("UNDERSTANDING_AGENT_PROVIDER", "").strip().lower()
+
+    if provider == "groq":
+        groq_env = os.environ.get("GROQ_API_KEY", "").strip()
+        if groq_env:
+            return groq_env
+        search_dirs_early = []
+        cur_e = os.path.abspath(os.getcwd())
+        for _ in range(4):
+            search_dirs_early.append(cur_e)
+            parent_e = os.path.dirname(cur_e)
+            if parent_e == cur_e:
+                break
+            cur_e = parent_e
+        for d in search_dirs_early:
+            for fname in (".env", ".env.local"):
+                key = _parse_key_from_file(os.path.join(d, fname), ("GROQ_API_KEY",))
+                if key:
+                    return key
 
     # 1. Direct environment variables (process environment takes precedence over disk files)
     for env_var in nous_key_names:

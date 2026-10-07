@@ -231,6 +231,8 @@ def _get_display_window(text: str, cursor_pos: int, avail_width: int):
 class Interaction:
     def __init__(self):
         self._whisper_model = None
+        self.last_response_time = 0
+        self._speech_proc = None
 
     def timed_input(self, prompt: str, timeout: int, speak_text: str = "", seed_text: str = "") -> str:
         """Read a line from stdin with a live countdown timer.
@@ -240,8 +242,9 @@ class Interaction:
         2. Displays the typing space immediately with [Tab] Mic option if voice is available.
         3. User can type answer directly, or press [Tab] to trigger listening flow.
         4. If [Tab] is pressed, transcribed speech is placed into the typing space
-           so the developer can review and edit before submitting with Enter.
+        so the developer can review and edit before submitting with Enter.
         """
+        self.last_response_time = 0
         if not sys.stdin.isatty():
             try:
                 con = 'CON' if sys.platform == 'win32' else '/dev/tty'
@@ -249,9 +252,10 @@ class Interaction:
             except Exception:
                 ans = "Non-interactive mock answer"
                 print(f"{prompt}{ans}")
+                self.last_response_time = 1
                 return ans
 
-        # Step 1: Speak the question aloud first
+        # Step 1: Speak the question aloud first (non-blocking)
         if speak_text:
             self._speak_question(speak_text)
 
@@ -270,27 +274,42 @@ class Interaction:
                 print(f"{CYAN}{BOLD}[Tab]{RESET} {DIM}Speak with Mic  │  Type directly{RESET}")
                 hint_shown = True
 
-        if not UNIX_TTY:
-            return self._timed_input_windows(prompt, timeout, seed_text=seed_text, allow_mic=allow_mic)
-        else:
-            return self._timed_input_unix(prompt, timeout, seed_text=seed_text, allow_mic=allow_mic, hint_shown=hint_shown)
+        try:
+            if not UNIX_TTY:
+                return self._timed_input_windows(prompt, timeout, seed_text=seed_text, allow_mic=allow_mic)
+            else:
+                return self._timed_input_unix(prompt, timeout, seed_text=seed_text, allow_mic=allow_mic, hint_shown=hint_shown)
+        finally:
+            self._stop_speech()
 
     def _speak_question(self, question_text: str):
-        """Speak the question aloud using macOS say, blocking until finished."""
+        """Speak the question aloud using macOS say in background without blocking UI."""
         if not question_text:
             return
+        if os.environ.get("UNDERSTANDING_AGENT_VOICE", "").strip().lower() in ("off", "false", "0", "no", "disable", "disabled"):
+            return
+        self._stop_speech()
         if sys.platform == 'darwin':
             try:
                 import subprocess as _sp
-                _sp.run(["say", question_text], check=False,
-                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
-            except Exception as e:
-                print(f"  [Speak failed: {e}]", flush=True)
-            if UNIX_TTY:
-                try:
-                    termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
-                except Exception:
-                    pass
+                self._speech_proc = _sp.Popen(
+                    ["say", question_text],
+                    stdout=_sp.DEVNULL,
+                    stderr=_sp.DEVNULL
+                )
+            except Exception:
+                pass
+
+    def _stop_speech(self):
+        """Terminate any ongoing background speech synthesis."""
+        proc = getattr(self, "_speech_proc", None)
+        if proc:
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+            except Exception:
+                pass
+            self._speech_proc = None
 
     def _record_and_transcribe(self, timeout: int) -> str | None:
         """Record mic input in short chunks and stream words to screen as spoken.
@@ -458,11 +477,13 @@ class Interaction:
     def _timed_input_windows(self, prompt: str, timeout: int, seed_text: str = "", allow_mic: bool = False) -> str:
         import msvcrt
         start_time = time.time()
+        input_start_time = start_time
         user_input = list(seed_text) if seed_text else []
         
         while True:
             remaining = int(timeout - (time.time() - start_time))
             if remaining <= 0:
+                self.last_response_time = timeout
                 sys.stdout.write(f"\r\033[2KTime's up! ({timeout}s limit reached)\n")
                 sys.stdout.flush()
                 return None
@@ -502,6 +523,7 @@ class Interaction:
                         ch = '\t'
                     else:
                         final_ans = "".join(user_input)
+                        self.last_response_time = max(1, min(timeout, int(time.time() - input_start_time)))
                         sys.stdout.write(f"\r\033[2K{prompt}{final_ans}\n")
                         sys.stdout.flush()
                         return final_ans
@@ -536,17 +558,20 @@ class Interaction:
         old_settings = termios.tcgetattr(fd)
         
         start_time = time.time()
+        input_start_time = start_time
         user_input = list(seed_text) if seed_text else []
         cursor_pos = len(user_input)
         review_mode = False
         dictation_active = False
         temp_lines = 0
+        submitted = False
         
         try:
             tty.setcbreak(fd)
             while True:
                 remaining = int(timeout - (time.time() - start_time))
                 if remaining <= 0:
+                    self.last_response_time = timeout
                     sys.stdout.write(f"\r\033[2KTime's up! ({timeout}s limit reached)\n")
                     sys.stdout.flush()
                     return None
@@ -790,6 +815,7 @@ class Interaction:
                     _stop_mac_dictation()
                     _release_mac_dictation()
                 final_ans = "".join(user_input).strip()
+                self.last_response_time = max(1, min(timeout, int(time.time() - input_start_time)))
                 sys.stdout.write("\r\033[2K")
                 if hint_shown:
                     sys.stdout.write("\033[1A\033[2K")

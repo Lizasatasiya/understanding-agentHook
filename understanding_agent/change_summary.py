@@ -99,7 +99,13 @@ class ChangeSummary:
 
         try:
             result = json.loads(body)
-            text = result["choices"][0]["message"]["content"].strip()
+            choices = result.get("choices") or []
+            if not choices:
+                return {}
+            msg = choices[0].get("message") or {}
+            text = (msg.get("content") or "").strip()
+            if not text and msg.get("reasoning"):
+                text = (msg.get("reasoning") or "").strip()
             parsed = extract_json(text)
             if isinstance(parsed, dict) and "what_changed" in parsed:
                 return parsed

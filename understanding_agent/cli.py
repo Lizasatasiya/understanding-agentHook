@@ -92,6 +92,17 @@ def main():
     standards_report = standards_checker.check(changes, context)
     standards_checker.print_report(standards_report)
 
+    hints = {
+        "stack": stack,
+        "security": security_hint,
+        "evidence": evidence_hint,
+        "practices": practice_hint,
+        "standards": standards_report,
+    }
+
+    prefetch_holder = {"summary": None, "questions": None}
+    prefetch_thread = None
+
     failed_standards = [s for s in standards_report if not s.get("is_good", True)]
     if failed_standards:
         YELLOW = "\033[93m"
@@ -105,6 +116,19 @@ def main():
         print(f"{BOLD}Do you want to fix these violations or proceed further?{RESET}\n")
         print(f"  {BOLD}[1]{RESET} {RED}Fix violations{RESET}")
         print(f"  {BOLD}[2]{RESET} {GREEN}Proceed further{RESET}\n")
+
+        # Start pre-fetching summary & questions in background while user reads the report
+        import threading
+        def _bg_prefetch():
+            try:
+                s = ChangeSummary().generate(context)
+                prefetch_holder["summary"] = s
+                prefetch_holder["questions"] = QuestionGenerator().generate(context, s, hints, env=env)
+            except Exception:
+                pass
+
+        prefetch_thread = threading.Thread(target=_bg_prefetch, daemon=True)
+        prefetch_thread.start()
 
         choice = ""
         while choice not in ("1", "2", "fix", "proceed", "f", "p"):
@@ -159,14 +183,6 @@ def main():
         else:
             print(f"\n{BOLD}{GREEN}✓ Proceeding with questions...{RESET}\n")
 
-    hints = {
-        "stack": stack,
-        "security": security_hint,
-        "evidence": evidence_hint,
-        "practices": practice_hint,
-        "standards": standards_report,
-    }
-
     # 5c. Security gate: deterministic critical findings (live credentials) block
     # before any questions are generated. Unlike the oral defense, no answer can
     # make committing a real credential safe, and git history is permanent.
@@ -198,8 +214,14 @@ def main():
             sys.exit(1)
 
     # 6. Change Summary
-    summary_generator = ChangeSummary()
-    summary = summary_generator.generate(context)
+    if prefetch_thread and prefetch_holder.get("summary") is None:
+        prefetch_thread.join(timeout=8)
+
+    if prefetch_holder.get("summary") is not None:
+        summary = prefetch_holder["summary"]
+    else:
+        summary_generator = ChangeSummary()
+        summary = summary_generator.generate(context)
     
     # 6. Question Generator & State Management
     # Attempt count depends solely on attempts made towards the next commit (under head_commit).
@@ -258,9 +280,12 @@ def main():
             else:
                 q["passed"] = False
     else:
-        # Generate fresh questions for new diff
+        # Generate fresh questions for new diff (use prefetched if ready)
         question_generator = QuestionGenerator()
-        questions = question_generator.generate(context, summary, hints, env=env)
+        if prefetch_holder.get("questions"):
+            questions = prefetch_holder["questions"]
+        else:
+            questions = question_generator.generate(context, summary, hints, env=env)
         valid_questions = question_generator.validate(questions)
         for q in valid_questions:
             q["passed"] = False
@@ -320,7 +345,6 @@ def main():
             fu_ans_obj = {}
             followup_q = ""
 
-            start_time = time.time()
             ans_text = interaction.timed_input(f"{CYAN}❯ {RESET}", time_limit, speak_text=q_text)
             
             if ans_text is None:
@@ -330,7 +354,11 @@ def main():
                 print(f"\n{RED}✗ Timeout reached{RESET}")
             else:
                 status = "answered"
-                response_time = int(time.time() - start_time)
+                resp_val = getattr(interaction, "last_response_time", None)
+                if resp_val is not None and resp_val > 0:
+                    response_time = min(time_limit, resp_val)
+                else:
+                    response_time = min(time_limit, 1)
                 print(f"\n{GREEN}✓ Answer received in {response_time} seconds{RESET}")
             ans_obj = {
                 "answer": ans_text,
@@ -349,20 +377,25 @@ def main():
                 print(f"\n{YELLOW}Partial understanding. Follow-up on: {missing}{RESET}\n")
                 print(f"{BOLD}{followup_q}{RESET}\n")
 
-                fu_start = time.time()
+                fu_limit = min(time_limit, 45)
                 fu_ans = interaction.timed_input(
-                    f"{CYAN}❯ {RESET}", min(time_limit, 45), speak_text=followup_q
+                    f"{CYAN}❯ {RESET}", fu_limit, speak_text=followup_q
                 )
                 if fu_ans is None:
                     fu_ans = ""
+                    fu_secs = fu_limit
                     print(f"{RED}✗ Timeout reached on follow-up{RESET}")
                 else:
-                    fu_secs = int(time.time() - fu_start)
+                    fu_val = getattr(interaction, "last_response_time", None)
+                    if fu_val is not None and fu_val > 0:
+                        fu_secs = min(fu_limit, fu_val)
+                    else:
+                        fu_secs = min(fu_limit, 1)
                     print(f"{GREEN}✓ Follow-up answer received in {fu_secs} seconds{RESET}")
 
                 fu_ans_obj = {
                     "answer": fu_ans,
-                    "response_time_seconds": max(0, int(time.time() - fu_start)),
+                    "response_time_seconds": fu_secs,
                     "status": "answered" if (fu_ans or "").strip() else "timeout"
                 }
                 fu_eval = evaluator.evaluate(

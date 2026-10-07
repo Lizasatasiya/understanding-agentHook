@@ -163,6 +163,33 @@ class TestAnswerEvaluator(unittest.TestCase):
         self.assertTrue(res.follow_up_required)
         self.assertEqual(res.missing_concepts, ["locking"])
 
+    def test_fallback_evaluates_correct_answer_above_76(self):
+        question = {
+            "question": "What are the runtime risks of growing function length?",
+            "expected_concepts": ["modular", "dependency injection", "cascading failure", "testability"],
+            "evaluation_criteria": ["Mentions modularity", "Mentions cascading failure"]
+        }
+        good_answer = {
+            "answer": "risk is that it is not modular and dependency injectable, causing cascading failure at runtime"
+        }
+        with patch("understanding_agent.answer_evaluator.load_groq_api_key", return_value="k"), \
+             patch.object(AnswerEvaluator, "_call_groq", return_value={}):
+            res = self.evaluator.evaluate(question, good_answer, self.context, {})
+        self.assertGreaterEqual(res.score, 85)
+        self.assertIn("modular", res.covered_concepts)
+        self.assertIn("cascading failure", res.covered_concepts)
+
+    def test_fallback_evaluates_dismissive_answer_low(self):
+        question = {
+            "question": "Why?",
+            "expected_concepts": ["modular", "coupling"]
+        }
+        with patch("understanding_agent.answer_evaluator.load_groq_api_key", return_value="k"), \
+             patch.object(AnswerEvaluator, "_call_groq", return_value={}):
+            res = self.evaluator.evaluate(question, {"answer": "idk"}, self.context, {})
+        self.assertLessEqual(res.score, 15)
+        self.assertTrue(res.follow_up_required)
+
 
 class TestServerClient(unittest.TestCase):
     def test_sends_nothing_when_url_unset(self):

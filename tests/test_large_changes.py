@@ -82,8 +82,8 @@ class TestLargeChangesPipeline(unittest.TestCase):
         
         # Fallback questions when GROQ_API_KEY is not set or offline
         questions = q_gen.generate(context, summary)
-        self.assertLessEqual(len(questions), 3)
-        self.assertGreaterEqual(len(questions), 2)
+        self.assertGreater(len(questions), 5)
+        self.assertLess(len(questions), 10)
         for q in questions:
             self.assertIn(q["type"], ["System Architecture", "Invariants", "Reasoning", "Change Impact", "Edge Cases", "Code Logic", "Data Flow", "Dependencies", "What-if"])
 

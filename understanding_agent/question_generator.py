@@ -84,34 +84,108 @@ class QuestionGenerator:
     }
     _VALID_TYPES = set(TIME_LIMITS.keys())
 
+    def get_diff_scale(self, context: dict | None) -> tuple[str, int]:
+        """
+        Classify diff length and return (scale, target_question_count):
+        - small change: 2-3 questions (<= 30 lines)
+        - medium change: 3-5 questions (31-100 lines)
+        - large change: more than 5 and less than 10 questions (> 100 lines)
+        """
+        context = context or {}
+        stats = context.get("stats") or {}
+        total_loc = stats.get("total_loc")
+
+        if total_loc is None:
+            total_loc = 0
+            for sc in context.get("structured_changes", []):
+                diff = sc.get("diff", "")
+                for line in diff.splitlines():
+                    if line.startswith("+") or line.startswith("-"):
+                        total_loc += 1
+
+        is_large = context.get("is_large_change", False) or stats.get("is_large_change", False)
+
+        if total_loc <= 30 and not is_large:
+            scale = "small"
+            target_count = 2 if total_loc <= 15 else 3
+        elif total_loc <= 100 and not (is_large and total_loc > 80):
+            scale = "medium"
+            if total_loc <= 50:
+                target_count = 3
+            elif total_loc <= 80:
+                target_count = 4
+            else:
+                target_count = 5
+        else:
+            scale = "large"
+            # strictly more than 5 and less than 10 (e.g. 6, 7, 8)
+            if total_loc <= 200:
+                target_count = 6
+            elif total_loc <= 400:
+                target_count = 7
+            else:
+                target_count = 8
+
+        return scale, target_count
+
+    def get_standards_and_diff_counts(self, target_count: int, failed_std: list) -> tuple[int, int]:
+        """
+        Ensure 80% of questions are based on current diff, and at most 20% on coding standards violations.
+        """
+        if not failed_std:
+            return 0, target_count
+
+        max_standards = max(0, int(round(target_count * 0.20)))
+        if max_standards == 0 and len(failed_std) > 0 and target_count >= 3:
+            max_standards = 1
+
+        standards_count = min(len(failed_std), max_standards)
+        diff_count = target_count - standards_count
+        return standards_count, diff_count
+
     def generate(self, context: dict, summary: dict, hints: dict | None = None, env: dict | None = None) -> list:
         std = (hints or {}).get("standards") or []
         failed_std = [s for s in std if not s.get("is_good")]
+        scale, target_count = self.get_diff_scale(context)
 
         api_key = load_nous_api_key()
         if not api_key:
             print("\n  \033[93m[LLM] Warning: NOUS_API_KEY is not set.\033[0m")
             print("  \033[2mSet NOUS_API_KEY in your .env or shell (export NOUS_API_KEY=\"...\") to generate custom questions.\033[0m\n", flush=True)
             questions = self._fallback(context, hints)
-            return self._ensure_standards_questions(questions, failed_std)
+            return self._ensure_standards_questions(questions, failed_std, context)
 
         prompt = self._build_prompt(context, summary, hints, env=env)
-        is_large = context.get("is_large_change", False)
-        questions = self._call_groq(api_key, prompt, is_large=is_large)
+        is_large = (scale == "large")
+        questions = self._call_groq(api_key, prompt, target_count=target_count, is_large=is_large)
         if not questions:
             questions = self._fallback(context, hints)
-        return self._ensure_standards_questions(questions, failed_std)
+        return self._ensure_standards_questions(questions, failed_std, context)
 
     def _build_prompt(self, context: dict, summary: dict, hints: dict | None = None, env: dict | None = None) -> str:
-        if context.get("is_large_change", False):
+        scale, _ = self.get_diff_scale(context)
+        if scale == "large":
             return self._build_macro_prompt(context, summary, hints, env=env)
         return self._build_micro_prompt(context, summary, hints, env=env)
 
     def _build_micro_prompt(self, context: dict, summary: dict, hints: dict | None = None, env: dict | None = None) -> str:
         valid_types = ", ".join(f'"{t}"' for t in self.TIME_LIMITS)
+        scale, target_count = self.get_diff_scale(context)
+        std = (hints or {}).get("standards") or []
+        failed_std = [s for s in std if not s.get("is_good")]
+        standards_count, diff_count = self.get_standards_and_diff_counts(target_count, failed_std)
+
         lines = [
             "You are a senior developer reviewing a code change.",
-            "Generate between 2 and 3 specific questions to test if the author understands their own change.",
+            f"Generate EXACTLY {target_count} specific questions to test if the author understands their own change.",
+            "CRITICAL RATIO RULES:",
+            f"- At least {diff_count} question(s) (~80%) MUST be based directly on the CURRENT CODE DIFF: logic, data flow, function interactions, state mutations, and edge cases.",
+        ]
+        if standards_count > 0:
+            lines.append(f"- At most {standards_count} question(s) (~20%) should address the flagged coding standards violations.")
+        else:
+            lines.append("- 100% of questions MUST be based on the current code diff.")
+        lines += [
             "CRITICAL: Keep the questions short and simple (under 25 words). Ask one basic thing per question.",
             "Keep it simple but focus on logic and data flow. No generic questions.",
             "",
@@ -130,7 +204,7 @@ class QuestionGenerator:
         ]
 
         changes = context.get("structured_changes", [])
-        if len(changes) > 4:
+        if len(changes) > 6:
             changes = sorted(
                 changes,
                 key=lambda c: (
@@ -138,7 +212,7 @@ class QuestionGenerator:
                     len(c.get('diff', ''))
                 ),
                 reverse=True
-            )[:4]
+            )[:6]
 
         for f in changes:
             f_sum = f.get('summary', {})
@@ -150,14 +224,13 @@ class QuestionGenerator:
             lines.append(f"{f.get('dependency_summary', '')}")
             lines.append("")
 
-        # Domain / security / evidence hints (multi-language & stack-aware)
         if hints:
-            lines += self._hint_lines(hints)
+            lines += self._hint_lines(hints, target_count=target_count)
 
         lines += [
             "",
             "## Output Format",
-            "Return ONLY a JSON array with 2 or 3 items. Each item must be an object with:",
+            f"Return ONLY a JSON array with EXACTLY {target_count} items. Each item must be an object with:",
             '  "question_id": <a unique string like "q1", "q2">,',
             '  "question": <the question string>,',
             f'  "type": one of {valid_types},',
@@ -169,22 +242,29 @@ class QuestionGenerator:
         return "\n".join(lines)
 
     def _build_macro_prompt(self, context: dict, summary: dict, hints: dict | None = None, env: dict | None = None) -> str:
-        """
-        Build an architectural prompt for substantial commits (>80-100 lines or multi-file).
-        Focuses on data flow, component interactions, failure modes, and system invariants.
-        Strictly limits to 2 or 3 high-impact questions.
-        """
         stats = context.get("stats", {})
+        scale, target_count = self.get_diff_scale(context)
+        std = (hints or {}).get("standards") or []
+        failed_std = [s for s in std if not s.get("is_good")]
+        standards_count, diff_count = self.get_standards_and_diff_counts(target_count, failed_std)
+
         lines = [
             "You are a principal engineer conducting an architectural code understanding check on a substantial commit.",
-            f"Commit Scale: +{stats.get('total_added', 0)} / -{stats.get('total_deleted', 0)} lines across {len(context.get('file_summary', []))} file(s).",
+            f"Commit Scale: {scale.upper()} (+{stats.get('total_added', 0)} / -{stats.get('total_deleted', 0)} lines across {len(context.get('file_summary', []))} file(s)).",
             "",
-            "CRITICAL RULES FOR LARGE COMMITS:",
-            "1. Generate EXACTLY 2 or 3 questions. NEVER more than 3.",
-            "2. Do NOT ask trivia about single lines of code, variable renames, or syntax minutiae.",
-            "3. Focus on core engineering logic: data flow, failure modes, or persistence.",
-            "4. CRITICAL: Keep questions VERY SHORT, DIRECT, and SIMPLE (under 20 - 25 words).",
-            "5. The question MUST be easily answerable in 30-45 seconds. Do NOT ask compound or essay questions.",
+            "CRITICAL RULES FOR COMMITS:",
+            f"1. Generate EXACTLY {target_count} questions.",
+            f"2. RATIO RULE: At least {diff_count} questions (~80%) MUST be based directly on the actual DIFF (data flow, failure modes, component interactions).",
+        ]
+        if standards_count > 0:
+            lines.append(f"3. At most {standards_count} question(s) (~20%) should address flagged coding standards violations.")
+        else:
+            lines.append("3. 100% of questions must focus on the actual diff.")
+        lines += [
+            "4. Do NOT ask trivia about single lines of code, variable renames, or syntax minutiae.",
+            "5. Focus on core engineering logic: data flow, failure modes, or persistence.",
+            "6. CRITICAL: Keep questions VERY SHORT, DIRECT, and SIMPLE (under 20 - 25 words).",
+            "7. The question MUST be easily answerable in 30-45 seconds. Do NOT ask compound or essay questions.",
             "",
         ]
 
@@ -210,7 +290,7 @@ class QuestionGenerator:
             lines.append(f"- {file_info['file']}: {funcs}")
 
         lines.append("\n## Key Diffs (Skeleton/Highlights):")
-        for f in context.get("structured_changes", [])[:4]:
+        for f in context.get("structured_changes", [])[:6]:
             lines.append(f"File: {f.get('file')} | Function: {f.get('function')}()")
             lines.append(f"```diff\n{f.get('diff', '')}\n```")
             dep_summary = f.get('dependency_summary', '')
@@ -218,15 +298,14 @@ class QuestionGenerator:
                 lines.append(f"Dependencies: {dep_summary}")
             lines.append("")
 
-        # Domain / security / evidence hints (multi-language & stack-aware)
         if hints:
-            lines += self._hint_lines(hints)
+            lines += self._hint_lines(hints, target_count=target_count)
 
         valid_types = ", ".join(f'"{t}"' for t in self.TIME_LIMITS)
         lines += [
             "## Output Format",
-            "Return ONLY a JSON array with EXACTLY 2 or 3 items. Each item must have:",
-            '  "question_id": "q1", "q2", or "q3",',
+            f"Return ONLY a JSON array with EXACTLY {target_count} items. Each item must have:",
+            '  "question_id": <unique string like "q1", "q2">,',
             '  "question": <very short, punchy question under 25 words>,',
             f'  "type": one of {valid_types},',
             '  "expected_concepts": [<list of key technical concept strings>],',
@@ -236,7 +315,7 @@ class QuestionGenerator:
         ]
         return "\n".join(lines)
 
-    def _hint_lines(self, hints: dict) -> list:
+    def _hint_lines(self, hints: dict, target_count: int = 3) -> list:
         """Render stack/security/evidence/practice hints into prompt lines."""
         out = ["\n## Question Guidance (detected stack & findings)"]
 
@@ -267,23 +346,26 @@ class QuestionGenerator:
         std = (hints or {}).get("standards") or []
         failed_std = [s for s in std if not s.get("is_good")]
         if failed_std:
-            out.append("CRITICAL REQUIREMENT - CODING STANDARDS VIOLATIONS:")
+            standards_count, diff_count = self.get_standards_and_diff_counts(target_count, failed_std)
+            out.append(f"CODING STANDARDS VIOLATIONS (LIMIT: AT MOST {standards_count} QUESTION(S), ~20%):")
             out.append("The author elected to proceed despite failing coding standards audits.")
-            out.append("You MUST generate between 1 and 2 questions specifically targeting these flagged violations, asking about their runtime risks, side-effects, or alternatives:")
             for fs in failed_std[:3]:
                 out.append(f"  - Violation [{fs['name']}]: {fs['details']}")
-            out.append("At least 1 (and up to 2) of your output questions MUST directly address these violation(s).")
+            if standards_count > 0:
+                out.append(f"You may include at most {standards_count} question (approx 20%) targeting these violations. The remaining {diff_count} questions (~80%) MUST directly address the diff.")
+            else:
+                out.append("Do not generate standards questions; focus 100% on the diff.")
 
         out.append("")
         return out
 
-    def _call_nous(self, api_key: str, prompt: str, is_large: bool = False) -> list:
+    def _call_nous(self, api_key: str, prompt: str, target_count: int = 3, is_large: bool = False) -> list:
         """Call Nous Research API and robustly parse question array from response."""
         payload = {
             "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.4,
-            "max_tokens": 800
+            "max_tokens": 1200
         }
 
         status, body = call_nous_api(api_key, payload, timeout=30)
@@ -294,7 +376,13 @@ class QuestionGenerator:
 
         try:
             result = json.loads(body)
-            text = result["choices"][0]["message"]["content"].strip()
+            choices = result.get("choices") or []
+            if not choices:
+                return []
+            msg = choices[0].get("message") or {}
+            text = (msg.get("content") or "").strip()
+            if not text and msg.get("reasoning"):
+                text = (msg.get("reasoning") or "").strip()
             raw = extract_json(text)
 
             # Handle dicts: {"questions": [...]}, {"items": [...]}, or dict-of-dicts
@@ -328,8 +416,7 @@ class QuestionGenerator:
             if not isinstance(raw, list) or not raw:
                 return []
 
-            max_q = 3 if is_large else 3
-            raw = raw[:max_q]
+            raw = raw[:target_count]
 
             result_list = []
             for i, item in enumerate(raw, 1):
@@ -354,27 +441,45 @@ class QuestionGenerator:
         except Exception:
             return []
 
-    def _call_groq(self, api_key: str, prompt: str, is_large: bool = False) -> list:
-        return self._call_nous(api_key, prompt, is_large=is_large)
+    def _call_groq(self, api_key: str, prompt: str, target_count: int = 3, is_large: bool = False) -> list:
+        return self._call_nous(api_key, prompt, target_count=target_count, is_large=is_large)
 
-    def _ensure_standards_questions(self, questions: list, failed_std: list) -> list:
-        """Ensure 1-2 questions directly address failed coding standards violations."""
-        if not failed_std:
-            return questions
+    def _ensure_standards_questions(self, questions: list, failed_std: list, context: dict | None = None) -> list:
+        """Enforce target question count and the 80% diff / 20% standards ratio."""
+        scale, target_count = self.get_diff_scale(context)
+        allowed_standards, required_diff = self.get_standards_and_diff_counts(target_count, failed_std)
 
-        std_keywords = set()
-        for fs in failed_std:
-            std_keywords.update(re.findall(r'\b[a-zA-Z]{4,}\b', fs.get("name", "").lower()))
+        def is_std(q: dict) -> bool:
+            if q.get("is_standards_violation"):
+                return True
+            q_text = q.get("question", "").lower()
+            if "coding audit flagged" in q_text or "coding standard" in q_text:
+                return True
+            for fs in failed_std:
+                name = fs.get("name", "").lower()
+                if name and name in q_text:
+                    return True
+            for phrase in (
+                "mutating props", "mutate props", "in-place array mutation",
+                "stale closure", "empty dependency array", "clearinterval",
+                "virtual dom reconciliation", "random list keys", "loose equality",
+                "empty catch block", "swallowing exceptions", "grew to >80 lines",
+                "legacy var keyword", "dangerouslysetinnerhtml"
+            ):
+                if phrase in q_text:
+                    return True
+            return False
 
-        matched_existing = [
-            q for q in questions
-            if any(kw in q.get("question", "").lower() for kw in std_keywords)
-        ]
+        matched_std = [q for q in questions if is_std(q)]
+        matched_diff = [q for q in questions if not is_std(q)]
 
-        needed = max(0, min(2, len(failed_std)) - len(matched_existing))
-        if needed > 0:
-            injected = []
-            for i, fs in enumerate(failed_std[:needed], len(matched_existing) + 1):
+        # Enforce at most allowed_standards
+        final_std = matched_std[:allowed_standards]
+
+        # If we need standards questions to reach allowed_standards
+        needed_std = allowed_standards - len(final_std)
+        if needed_std > 0:
+            for i, fs in enumerate(failed_std[:needed_std], len(final_std) + 1):
                 name = fs.get("name", "")
                 template = STANDARDS_QUESTIONS.get(name)
                 if template:
@@ -387,153 +492,218 @@ class QuestionGenerator:
                     concepts = ["understands violation risk", "knows safer alternative"]
                     criteria = ["can explain coding standard trade-off"]
 
-                injected.append({
+                final_std.append({
                     "question_id": f"q_std_{i}",
                     "question": q_text,
                     "type": "Invariants",
                     "time_limit": 60,
                     "expected_concepts": concepts,
                     "evaluation_criteria": criteria,
-                    "is_fallback": False
+                    "is_fallback": False,
+                    "is_standards_violation": True
                 })
 
-            remaining_slots = max(1, 3 - len(injected))
-            other_questions = [q for q in questions if q not in matched_existing][:remaining_slots]
-            questions = matched_existing + injected + other_questions
-            questions = questions[:3]
+        # Fill diff questions to reach required_diff
+        final_diff = matched_diff[:required_diff]
+        if len(final_diff) < required_diff:
+            fb_diff = self._fallback_diff_questions(context, count=target_count)
+            for fb in fb_diff:
+                if len(final_diff) >= required_diff:
+                    break
+                if not any(fb["question"] == q["question"] for q in final_diff):
+                    final_diff.append(fb)
+                if not any(fb["question"] == q["question"] for q in final_diff):
+                    final_diff.append(fb)
 
-        for idx, q in enumerate(questions, 1):
+        # Combine: diff questions first (80%), then standards questions (20%)
+        combined = final_diff + final_std
+        combined = combined[:target_count]
+
+        for idx, q in enumerate(combined, 1):
             q["question_id"] = f"q{idx}"
-        return questions
+        return combined
 
-    def _fallback(self, context: dict | None = None, hints: dict | None = None) -> list:
+    def _fallback_diff_questions(self, context: dict | None = None, hints: dict | None = None, count: int = 5) -> list:
+        """Generate high-quality fallback questions purely based on the diff and context."""
         context = context or {}
-        sec = (hints or {}).get("security") or {}
-        ev = (hints or {}).get("evidence") or {}
+        hints = hints or {}
+        sec = hints.get("security") or {}
+        ev = hints.get("evidence") or {}
 
-        # Security-aware fallback: if the lens flagged risk, ask about it directly
+        pool = []
+
         if sec.get("include_security_question"):
             focus = ", ".join(sec.get("focus_areas", [])[:2]) or "the security implications"
             target = sec.get("top_file") or "this change"
-            base = [
-                {
-                    "question_id": "q1",
-                    "question": f"Your change touches {focus} in {target}. What are the security risks and how does your code handle them?",
-                    "type": "Invariants",
-                    "time_limit": 60,
-                    "expected_concepts": sec.get("focus_areas", []),
-                    "evaluation_criteria": ["understands security implications of the change"],
-                    "is_fallback": True
-                },
-            ]
-            # Evidence finding as a second question when present
-            findings = ev.get("evidence_findings") or []
-            if findings:
-                f0 = findings[0]
-                base.append({
-                    "question_id": "q2",
-                    "question": f"A scan flagged: {f0['detail']}. Can you explain and address this finding?",
-                    "type": "Edge Cases",
-                    "time_limit": 60,
-                    "expected_concepts": ["understands the flagged finding", "knows the mitigation"],
-                    "evaluation_criteria": ["can address tool findings"],
-                    "is_fallback": True
-                })
-            else:
-                base.append({
-                    "question_id": "q2",
-                    "question": "What input or failure case could make this code behave incorrectly, and what happens then?",
-                    "type": "Edge Cases",
-                    "time_limit": 60,
-                    "expected_concepts": ["handles error states", "validates input"],
-                    "evaluation_criteria": ["understands edge cases"],
-                    "is_fallback": True
-                })
-            return base
-
-        if context.get("is_large_change", False):
-            files = [f.get("file") for f in (context or {}).get("file_summary", [])]
-            scope = f"across {len(files)} files" if files else "in this commit"
-            return [
-                {
-                    "question_id": "q1",
-                    "question": f"How do the modified components {scope} coordinate to ensure data consistency?",
-                    "type": "System Architecture",
-                    "time_limit": 60,
-                    "expected_concepts": ["component coordination", "data flow consistency", "state integrity"],
-                    "evaluation_criteria": ["understands cross-component coordination"],
-                    "is_fallback": True
-                },
-                {
-                    "question_id": "q2",
-                    "question": "What error states or edge cases could cause failures across this multi-part change?",
-                    "type": "Invariants",
-                    "time_limit": 60,
-                    "expected_concepts": ["handles failure states", "avoids inconsistent state", "error recovery"],
-                    "evaluation_criteria": ["understands system invariants and failure handling"],
-                    "is_fallback": True
-                }
-            ]
-
-        # If we have structured changes, tailor questions to actual functions/files
-        changes = (context or {}).get("structured_changes", [])
-        if changes:
-            target = changes[0]
-            func = target.get("function")
-            file = target.get("file", "changed file")
-            target_desc = f"{func}() in {file}" if func else file
-            
-            return [
-                {
-                    "question_id": "q1",
-                    "question": f"What behavior does the change in {target_desc} introduce?",
-                    "type": "Change Impact",
-                    "time_limit": 60,
-                    "expected_concepts": ["modifies behavior", "implements requirements"],
-                    "evaluation_criteria": ["understands impact"],
-                    "is_fallback": True
-                },
-                {
-                    "question_id": "q2",
-                    "question": f"What edge cases did you consider while updating {target_desc}?",
-                    "type": "Edge Cases",
-                    "time_limit": 60,
-                    "expected_concepts": ["handles error states", "validates input"],
-                    "evaluation_criteria": ["understands edge cases"],
-                    "is_fallback": True
-                }
-            ]
-
-        return [
-            {
-                "question_id": "q1",
-                "question": "What behavior did your change introduce?",
-                "type": "Change Impact",
+            pool.append({
+                "question": f"Your change touches {focus} in {target}. What are the security risks and how does your code handle them?",
+                "type": "Invariants",
                 "time_limit": 60,
-                "expected_concepts": ["change introduces new behavior"],
-                "evaluation_criteria": ["understands impact"],
+                "expected_concepts": sec.get("focus_areas", []),
+                "evaluation_criteria": ["understands security implications of the change"],
                 "is_fallback": True
-            },
-            {
-                "question_id": "q2",
-                "question": "Why is the new function called before the main logic executes?",
-                "type": "Code Logic",
-                "time_limit": 30,
-                "expected_concepts": ["validation happens before execution"],
-                "evaluation_criteria": ["understands logic flow"],
-                "is_fallback": True
-            },
-            {
-                "question_id": "q3",
-                "question": "What should happen when the new check fails?",
+            })
+
+        findings = ev.get("evidence_findings") or []
+        for f in findings:
+            pool.append({
+                "question": f"A scan flagged: {f['detail']}. Can you explain and address this finding?",
                 "type": "Edge Cases",
                 "time_limit": 60,
-                "expected_concepts": ["system should gracefully handle failure"],
-                "evaluation_criteria": ["understands failure cases"],
+                "expected_concepts": ["understands the flagged finding", "knows the mitigation"],
+                "evaluation_criteria": ["can address tool findings"],
+                "is_fallback": True
+            })
+
+        changes = context.get("structured_changes", [])
+        files = [f.get("file") for f in context.get("file_summary", [])] or [c.get("file") for c in changes if c.get("file")]
+        scope = f"across {len(files)} files" if files else "in this commit"
+
+        candidates = []
+        if changes:
+            for sc in changes:
+                fn = sc.get("function")
+                fl = sc.get("file", "the file")
+                fn_desc = f"{fn}() in {fl}" if fn else fl
+                candidates.extend([
+                    {
+                        "question": f"What behavior does the change in {fn_desc} introduce?",
+                        "type": "Change Impact",
+                        "time_limit": 60,
+                        "expected_concepts": ["modifies behavior", "implements requirements"],
+                        "evaluation_criteria": ["understands impact"],
+                        "is_fallback": True
+                    },
+                    {
+                        "question": f"How does data or state flow through {fn_desc} during execution?",
+                        "type": "Data Flow",
+                        "time_limit": 45,
+                        "expected_concepts": ["data flow", "state flow", "inputs and outputs"],
+                        "evaluation_criteria": ["understands data flow"],
+                        "is_fallback": True
+                    },
+                    {
+                        "question": f"What edge cases did you consider while updating {fn_desc}?",
+                        "type": "Edge Cases",
+                        "time_limit": 60,
+                        "expected_concepts": ["handles error states", "validates input"],
+                        "evaluation_criteria": ["understands edge cases"],
+                        "is_fallback": True
+                    },
+                    {
+                        "question": f"Why is logic structured in this sequence within {fn_desc}?",
+                        "type": "Code Logic",
+                        "time_limit": 30,
+                        "expected_concepts": ["execution sequence", "logic order"],
+                        "evaluation_criteria": ["understands execution sequence"],
+                        "is_fallback": True
+                    },
+                ])
+
+        candidates.extend([
+            {
+                "question": f"How do the modified components {scope} coordinate to ensure data consistency?",
+                "type": "System Architecture",
+                "time_limit": 60,
+                "expected_concepts": ["component coordination", "data flow consistency", "state integrity"],
+                "evaluation_criteria": ["understands cross-component coordination"],
                 "is_fallback": True
             },
-        ]
+            {
+                "question": "What error states or edge cases could cause failures across this change?",
+                "type": "Invariants",
+                "time_limit": 60,
+                "expected_concepts": ["handles failure states", "avoids inconsistent state", "error recovery"],
+                "evaluation_criteria": ["understands system invariants and failure handling"],
+                "is_fallback": True
+            },
+            {
+                "question": "What happens if downstream dependencies or network calls fail during execution?",
+                "type": "Dependencies",
+                "time_limit": 45,
+                "expected_concepts": ["dependency handling", "graceful failure", "error propagation"],
+                "evaluation_criteria": ["understands downstream failure modes"],
+                "is_fallback": True
+            },
+            {
+                "question": "What invariants must hold true for state consistency after this change?",
+                "type": "Invariants",
+                "time_limit": 60,
+                "expected_concepts": ["state invariants", "consistency guarantees"],
+                "evaluation_criteria": ["understands state invariants"],
+                "is_fallback": True
+            },
+            {
+                "question": "What input boundary values could cause this logic to behave unexpectedly?",
+                "type": "Edge Cases",
+                "time_limit": 60,
+                "expected_concepts": ["boundary guards", "input validation"],
+                "evaluation_criteria": ["understands input boundaries"],
+                "is_fallback": True
+            },
+            {
+                "question": "How does this change impact callers and consuming modules across the application?",
+                "type": "Change Impact",
+                "time_limit": 60,
+                "expected_concepts": ["caller impact", "contract stability"],
+                "evaluation_criteria": ["understands contract stability"],
+                "is_fallback": True
+            },
+            {
+                "question": "What should happen if the primary condition or check in this update fails?",
+                "type": "Code Logic",
+                "time_limit": 30,
+                "expected_concepts": ["fallback logic", "error branch"],
+                "evaluation_criteria": ["understands failure path"],
+                "is_fallback": True
+            },
+        ])
 
+        for c in candidates:
+            if len(pool) >= count:
+                break
+            if not any(c["question"] == p["question"] for p in pool):
+                pool.append(c)
+
+        return pool[:count]
+
+    def _fallback(self, context: dict | None = None, hints: dict | None = None) -> list:
+        context = context or {}
+        hints = hints or {}
+        scale, target_count = self.get_diff_scale(context)
+        std = (hints or {}).get("standards") or []
+        failed_std = [s for s in std if not s.get("is_good")]
+        standards_count, diff_count = self.get_standards_and_diff_counts(target_count, failed_std)
+
+        diff_questions = self._fallback_diff_questions(context, hints, count=diff_count)
+
+        std_questions = []
+        for i, fs in enumerate(failed_std[:standards_count], 1):
+            name = fs.get("name", "")
+            template = STANDARDS_QUESTIONS.get(name)
+            if template:
+                q_text = template["question"]
+                concepts = template["concepts"]
+                criteria = template["criteria"]
+            else:
+                details = fs.get("details", "")
+                q_text = f"Coding audit flagged '{name}' ({details[:60]}). What are the runtime risks of this approach?"
+                concepts = ["understands violation risk", "knows safer alternative"]
+                criteria = ["can explain coding standard trade-off"]
+            std_questions.append({
+                "question_id": f"q_std_{i}",
+                "question": q_text,
+                "type": "Invariants",
+                "time_limit": 60,
+                "expected_concepts": concepts,
+                "evaluation_criteria": criteria,
+                "is_fallback": True
+            })
+
+        questions = diff_questions + std_questions
+        for idx, q in enumerate(questions[:target_count], 1):
+            q["question_id"] = f"q{idx}"
+        return questions[:target_count]
 
     def validate(self, questions: list) -> list:
         """Accept question dicts; skip malformed entries."""

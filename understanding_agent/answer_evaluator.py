@@ -23,15 +23,8 @@ class AnswerEvaluator:
             api_key = load_nous_api_key()
         if not api_key:
             # No key configured: fail open rather than fail the whole commit pipeline.
-            # 76 (not 75): the overall pass check is avg > 75, so a fail-open score
-            # must land strictly above it or offline commits could never pass.
             if fail_open_enabled():
-                return EvaluationResult({
-                    "score": 76,
-                    "evaluation": "Offline evaluation (no NOUS_API_KEY configured).",
-                    "follow_up_required": False,
-                    "missing_concepts": []
-                })
+                return self._evaluate_fallback(question, answer, is_offline=True)
             return EvaluationResult({
                 "score": 0,
                 "evaluation": "Cannot verify understanding: NOUS_API_KEY is not configured and UNDERSTANDING_AGENT_FAIL_MODE=closed.",
@@ -45,16 +38,87 @@ class AnswerEvaluator:
             return EvaluationResult(result_dict)
 
         # LLM evaluation failed (API error, unparseable response, or timeout).
-        # Fail open with a warning so a third-party outage never blocks commits,
+        # Fail open with fallback evaluation so a third-party outage never blocks commits,
         # unless UNDERSTANDING_AGENT_FAIL_MODE=closed is explicitly set.
         if fail_open_enabled():
-            return EvaluationResult({
-                "score": 76,
-                "evaluation": "LLM evaluation unavailable (API error or timeout); failing open.",
-                "follow_up_required": False,
-                "missing_concepts": []
-            })
+            return self._evaluate_fallback(question, answer, is_offline=False)
         return EvaluationResult({"score": 50, "evaluation": "Failed to evaluate answer", "follow_up_required": False})
+
+    def _evaluate_fallback(self, question: dict, answer: dict, is_offline: bool = False) -> EvaluationResult:
+        """Intelligent semantic concept-matching fallback when LLM is unavailable."""
+        import re
+        text = (answer.get("answer") or "").strip().lower()
+        expected = question.get("expected_concepts") or []
+
+        dismissive = {"idk", "dont know", "don't know", "dunno", "ok", "no", "none", "na", "n/a", "pass", "skip", "whatever", "nothing"}
+        cleaned_words = re.findall(r"\b[a-z]{2,}\b", text)
+
+        # Non-answer or dismissive
+        if not cleaned_words or text in dismissive or all(w in dismissive for w in cleaned_words):
+            status_prefix = "Offline evaluation (no NOUS_API_KEY configured)." if is_offline else "LLM evaluation unavailable (API error or timeout); failing open."
+            return EvaluationResult({
+                "score": 10,
+                "technical_correctness": 2,
+                "code_understanding": 2,
+                "reasoning": 2,
+                "specificity": 2,
+                "covered_concepts": [],
+                "missing_concepts": expected,
+                "incorrect_claims": [],
+                "evaluation": f"{status_prefix} Answer is dismissive or lacks technical substance.",
+                "confidence": 0.8,
+                "follow_up_required": True
+            })
+
+        covered = []
+        missing = []
+        for concept in expected:
+            c_lower = concept.lower()
+            tokens = re.findall(r"\b[a-z]{3,}\b", c_lower)
+            matched = False
+            for t in tokens:
+                root = t[:4] if len(t) >= 5 else t
+                if root in text:
+                    matched = True
+                    break
+            if matched:
+                covered.append(concept)
+            else:
+                missing.append(concept)
+
+        coverage_ratio = len(covered) / max(1, len(expected)) if expected else 0.5
+
+        if coverage_ratio >= 0.70:
+            score = 85 + int(min(10, (coverage_ratio - 0.70) * 33))
+            follow_up = False
+        elif coverage_ratio >= 0.40:
+            score = 70 + int((coverage_ratio - 0.40) * 20)
+            follow_up = True
+        else:
+            # Baseline fail-open score (76) for minimal concept match to pass commit gate
+            score = 76
+            follow_up = False
+
+        status_prefix = "Offline evaluation (no NOUS_API_KEY configured)." if is_offline else "LLM evaluation unavailable (API error or timeout); failing open."
+        eval_text = f"{status_prefix} Semantic fallback: covered {len(covered)}/{len(expected)} expected concepts."
+        if covered:
+            eval_text += f" Recognized: {', '.join(covered)}."
+        if missing:
+            eval_text += f" Missing: {', '.join(missing)}."
+
+        return EvaluationResult({
+            "score": score,
+            "technical_correctness": int(score * 0.4),
+            "code_understanding": int(score * 0.3),
+            "reasoning": int(score * 0.2),
+            "specificity": int(score * 0.1),
+            "covered_concepts": covered,
+            "missing_concepts": missing,
+            "incorrect_claims": [],
+            "evaluation": eval_text,
+            "confidence": 0.8,
+            "follow_up_required": follow_up
+        })
 
     def _build_prompt(self, question: dict, answer: dict, context: dict, summary: dict, env: dict | None = None) -> str:
         is_large = context.get("is_large_change", False)
@@ -102,7 +166,11 @@ class AnswerEvaluator:
         for f in changes[:4]:
             lines.append(f"File: {f.get('file', '?')} | Function: {f.get('function', '?')}()")
             lines.append("Diff:")
-            lines.append(f"```diff\n{f.get('diff', '')}\n```")
+            diff_text = f.get('diff', '')
+            diff_lines = diff_text.splitlines()
+            if len(diff_lines) > 25:
+                diff_text = "\n".join(diff_lines[:25]) + "\n... (truncated for brevity)"
+            lines.append(f"```diff\n{diff_text}\n```")
             dep = f.get('dependency_summary', '')
             if dep and dep != "No external dependencies called.":
                 lines.append(f"Dependencies: {dep}\n")
@@ -118,17 +186,19 @@ class AnswerEvaluator:
             f"Answer: {answer.get('answer')}",
             "",
             "## Task",
-            "Output a JSON object with:",
-            " - 'score' (0-100 integer)",
-            " - 'technical_correctness' (0-40 integer)",
-            " - 'code_understanding' (0-30 integer)",
-            " - 'reasoning' (0-20 integer)",
-            " - 'specificity' (0-10 integer)",
-            " - 'covered_concepts' (list of strings)",
-            " - 'missing_concepts' (list of strings)",
-            " - 'incorrect_claims' (list of strings)",
-            " - 'evaluation' (string)",
-            " - 'confidence' (0.0 - 1.0 float)",
+            "Output ONLY a valid JSON object. Keep 'evaluation' concise (1-2 sentences). Do NOT output markdown code fences or conversational text outside JSON.",
+            "{",
+            '  "score": <0-100 integer>,',
+            '  "technical_correctness": <0-40 integer>,',
+            '  "code_understanding": <0-30 integer>,',
+            '  "reasoning": <0-20 integer>,',
+            '  "specificity": <0-10 integer>,',
+            '  "covered_concepts": [<matched expected concepts>],',
+            '  "missing_concepts": [<unmatched expected concepts>],',
+            '  "incorrect_claims": [<any false statements>],',
+            '  "evaluation": "<brief 1-2 sentence assessment>",',
+            '  "confidence": <0.0-1.0 float>',
+            "}",
             "",
             "If there are any 'incorrect_claims', drastically lower the score."
         ]
@@ -138,17 +208,27 @@ class AnswerEvaluator:
         payload = {
             "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.3,
-            "max_tokens": 1024
+            "temperature": 0.2,
+            "max_tokens": 450
         }
 
-        status, body = call_nous_api(api_key, payload, timeout=30)
+        status, body = call_nous_api(api_key, payload, timeout=35)
         if status != 200:
             return {}
 
         try:
             result = json.loads(body)
-            text = result["choices"][0]["message"]["content"].strip()
+            choices = result.get("choices") or []
+            if not choices:
+                return {}
+            msg = choices[0].get("message") or {}
+            text = (msg.get("content") or "").strip()
+            if not text and msg.get("reasoning_content"):
+                text = (msg.get("reasoning_content") or "").strip()
+            if not text and msg.get("reasoning"):
+                text = (msg.get("reasoning") or "").strip()
+            if not text and choices[0].get("text"):
+                text = (choices[0].get("text") or "").strip()
             parsed = extract_json(text)
             if isinstance(parsed, dict) and "score" in parsed:
                 return parsed
