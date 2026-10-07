@@ -263,21 +263,66 @@ def main():
     # Cached questions can be reused if the diff hasn't changed
     state_matches_diff = state_matches_head and (state.get("diff_hash") == diff_hash)
     cached_questions = state.get("questions", []) if state_matches_diff else []
-    has_fallback = any(q.get("is_fallback") for q in cached_questions)
 
-    has_std_in_cache = not failed_standards or any(
-        any(re.search(r'\b' + re.escape(w[:4]) + r'\b', q.get("question", ""), re.I)
-            for w in [s.get("name", "") for s in failed_standards])
-        for q in cached_questions
-    )
+    # If state has no questions but matching previous session exists for this diff, restore questions & scores
+    if not cached_questions and state_matches_head:
+        candidates = [s for s in matching_sessions if s.get("diff_hash") == diff_hash and s.get("questions")]
+        if candidates:
+            def _rank_sess(s):
+                qs = s.get("questions", [])
+                ans = sum(1 for q in qs if ((q.get("evaluation") or {}).get("score", 0) >= 70 or q.get("score", 0) >= 70))
+                return (ans, len(qs), s.get("attempt_number", 0))
+            best_session = max(candidates, key=_rank_sess)
+            cached_questions = []
+            for sq in best_session.get("questions", []):
+                sq_eval = sq.get("evaluation") or {}
+                score = sq_eval.get("score") if isinstance(sq_eval, dict) and "score" in sq_eval else sq.get("score", 0)
+                cq = {
+                    "question_id": sq.get("question_id"),
+                    "question": sq.get("question"),
+                    "type": sq.get("type", "Reasoning"),
+                    "time_limit": sq.get("time_limit_seconds") or sq.get("time_limit", 60),
+                    "expected_concepts": sq.get("expected_concepts", []),
+                    "evaluation_criteria": sq.get("evaluation_criteria", []),
+                    "is_fallback": sq.get("is_fallback", False),
+                    "answer": sq.get("answer", ""),
+                    "status": sq.get("status", ""),
+                    "evaluation": sq_eval,
+                    "response_time_seconds": sq.get("response_time_seconds", 0),
+                    "best_score": score,
+                }
+                if score >= 70:
+                    cq["answered"] = True
+                    cq["passed"] = True
+                else:
+                    cq["answered"] = False
+                    cq["passed"] = False
+                cached_questions.append(cq)
 
-    if state_matches_diff and cached_questions and not has_fallback and has_std_in_cache:
+    if state_matches_diff and cached_questions:
         valid_questions = cached_questions
+        # Reconcile scores and answers with all matching sessions for this diff
         for q in valid_questions:
-            # Only scores in GREEN (>= 70%) are considered passed and skipped
-            if q.get("best_score", 0) >= 70:
+            q_text = (q.get("question") or "").strip().lower()
+            q_id = q.get("question_id")
+            for s in matching_sessions:
+                if s.get("diff_hash") == diff_hash:
+                    for sq in s.get("questions", []):
+                        sq_text = (sq.get("question") or "").strip().lower()
+                        sq_id = sq.get("question_id")
+                        if (q_id and q_id == sq_id) or (q_text and q_text == sq_text):
+                            sq_eval = sq.get("evaluation") or {}
+                            score = sq_eval.get("score") if isinstance(sq_eval, dict) and "score" in sq_eval else sq.get("score", 0)
+                            if score > q.get("best_score", 0):
+                                q["best_score"] = score
+                                q["answer"] = sq.get("answer", q.get("answer", ""))
+                                q["evaluation"] = sq_eval
+                                q["response_time_seconds"] = sq.get("response_time_seconds", q.get("response_time_seconds", 0))
+            if q.get("best_score", 0) >= 70 or q.get("answered", False) or q.get("passed", False):
+                q["answered"] = True
                 q["passed"] = True
             else:
+                q["answered"] = False
                 q["passed"] = False
     else:
         # Generate fresh questions for new diff (use prefetched if ready)
@@ -289,6 +334,7 @@ def main():
         valid_questions = question_generator.validate(questions)
         for q in valid_questions:
             q["passed"] = False
+            q["answered"] = False
             q["best_score"] = 0
 
     interaction = Interaction()
@@ -304,7 +350,7 @@ def main():
     RESET = "\033[0m"
 
     while True:
-        # Persist state so attempt number is tracked even if interrupted
+        # Persist state so attempt number and questions are tracked even if interrupted
         try:
             with open(state_file, "w") as f:
                 json.dump({
@@ -313,7 +359,7 @@ def main():
                     "commit_message": commit_msg,
                     "diff_hash": diff_hash,
                     "attempts": attempts,
-                    "questions": valid_questions if not any(quest.get("is_fallback") for quest in valid_questions) else []
+                    "questions": valid_questions
                 }, f)
         except Exception:
             pass
@@ -330,10 +376,27 @@ def main():
 
             print(f"{BOLD}{CYAN}Question {i}/{len(valid_questions)}{RESET}")
       
-            # Only consider answered and skip if the answer score is in GREEN (>= 70%)
-            if q.get("best_score", 0) >= 70:
-                print(f"{GREEN}✓ Already answered and verified{RESET}\n")
+            # If answer is already given with passing score, show Already Answered and skip
+            if q.get("best_score", 0) >= 70 or q.get("answered", False) or q.get("passed", False):
+                print(f"{GREEN}✓ Already Answered{RESET}\n")
                 total_score += q.get('best_score', 0)
+                final_results.append({
+                    "question_id": q_id,
+                    "question": q_text,
+                    "type": q_type,
+                    "time_limit_seconds": time_limit,
+                    "answer": q.get("answer", ""),
+                    "response_time_seconds": q.get("response_time_seconds", 0),
+                    "status": "answered",
+                    "evaluation": q.get("evaluation") or {
+                        "score": q.get("best_score", 0),
+                        "understanding": "good",
+                        "rationale": "Previously answered and verified",
+                        "key_points_covered": [],
+                        "missing_concepts": [],
+                        "follow_up_required": False
+                    }
+                })
                 continue
                 
             print(f"{YELLOW}Time Limit: {time_limit} seconds{RESET}\n")
@@ -451,20 +514,23 @@ def main():
                 }
             final_results.append(result_entry)
 
-            # Persist state immediately
-            if not any(quest.get("is_fallback") for quest in valid_questions):
-                try:
-                    with open(state_file, "w") as f:
-                        json.dump({
-                            "attempt_key": attempt_key,
-                            "head_commit": head_commit,
-                            "commit_message": commit_msg,
-                            "diff_hash": diff_hash,
-                            "attempts": attempts,
-                            "questions": valid_questions
-                        }, f)
-                except Exception:
-                    pass
+            q["answer"] = ans_text
+            q["evaluation"] = eval_res.to_dict()
+            q["response_time_seconds"] = response_time
+
+            # Persist state immediately so answered questions are preserved across attempts
+            try:
+                with open(state_file, "w") as f:
+                    json.dump({
+                        "attempt_key": attempt_key,
+                        "head_commit": head_commit,
+                        "commit_message": commit_msg,
+                        "diff_hash": diff_hash,
+                        "attempts": attempts,
+                        "questions": valid_questions
+                    }, f)
+            except Exception:
+                pass
 
             # If user gives wrong answer (< 25%), ask no next questions and abort
             if final_score < 25:
@@ -531,15 +597,14 @@ def main():
         except Exception:
             pass
         
-        # Save state: keep attempts tracked, but don't cache fallback questions so AI questions can retry
-        is_fallback_run = any(q.get("is_fallback") for q in valid_questions)
+        # Save state: keep attempts tracked and preserve questions across attempts
         new_state = {
             "attempt_key": attempt_key,
             "head_commit": head_commit,
             "commit_message": commit_msg,
             "diff_hash": diff_hash,
             "attempts": attempts,
-            "questions": valid_questions if not is_fallback_run else []
+            "questions": valid_questions
         }
         try:
             with open(state_file, "w") as f:
