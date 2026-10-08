@@ -216,7 +216,7 @@ def _get_change_summary(commit_id: str, files: List[Dict[str, Any]], repo_root: 
         ext = os.path.splitext(f["path"])[1].lstrip(".").lower() or "other"
         ext_groups.setdefault(ext, []).append(os.path.basename(f["path"]))
 
-    # Collect names of changed functions/classes from the diff skeleton
+    # Collect names of changed functions/classes from the diff skeleton or added definitions
     diff_text = _run_git(["show", "--unified=0", commit_id], repo_root)
     changed_symbols: List[str] = []
     for line in diff_text.splitlines():
@@ -227,16 +227,27 @@ def _get_change_summary(commit_id: str, files: List[Dict[str, Any]], repo_root: 
             token = re.split(r'[\s(:{]', raw)[0]
             if token and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', token) and token not in changed_symbols:
                 changed_symbols.append(token)
+        elif line.startswith('+') and not line.startswith('+++'):
+            clean_line = line[1:].strip()
+            decl_m = re.match(
+                r'^(?:export\s+)?(?:type|interface|class|def|function|enum|input|scalar|table)\s+([A-Za-z_][A-Za-z0-9_]*)',
+                clean_line
+            )
+            if decl_m:
+                sym = decl_m.group(1)
+                if sym not in changed_symbols and len(changed_symbols) < 8:
+                    changed_symbols.append(sym)
 
     file_names = ", ".join([os.path.basename(f["path"]) for f in files[:4]])
     if len(files) > 4:
         file_names += f" and {len(files) - 4} others"
 
+    action_verb = "added" if all(f.get("status") == "added" for f in files) else "modified"
     if changed_symbols:
         symbols_str = ", ".join(f"`{s}`" for s in changed_symbols[:5])
-        what = f"{len(files)} file(s) modified ({file_names}): updated {symbols_str}. +{total_added} / -{total_deleted} lines."
+        what = f"{len(files)} file(s) {action_verb} ({file_names}): defined {symbols_str}. +{total_added} / -{total_deleted} lines."
     else:
-        what = f"{len(files)} file(s) modified ({file_names}). +{total_added} / -{total_deleted} lines."
+        what = f"{len(files)} file(s) {action_verb} ({file_names}). +{total_added} / -{total_deleted} lines."
 
     # -- Why It Matters: infer from conventional-commit prefix or body --
     prefix_match = re.match(r'^(feat|fix|refactor|perf|test|docs|chore|style|build|ci)\b[:(]?', title, re.IGNORECASE)
@@ -272,6 +283,8 @@ def _get_change_summary(commit_id: str, files: List[Dict[str, Any]], repo_root: 
     risk_hints: List[str] = []
     if any(k in ("jsx", "tsx", "js", "ts") for k in ext_groups):
         risk_hints.append("Verify UI rendering and event handling in affected components")
+    if any(k in ("graphql", "gql") for k in ext_groups):
+        risk_hints.append("Verify GraphQL schema modifications maintain client compatibility and align with backend resolvers")
     if any(k in ("py",) for k in ext_groups) and any(kw in all_paths_lower for kw in ("test", "spec")):
         risk_hints.append("Confirm test coverage passes without regressions")
     elif "py" in ext_groups:
@@ -433,14 +446,21 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
             branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], effective_repo_root) or "main"
             author = _run_git(["config", "user.name"], effective_repo_root) or "Developer"
             email = _run_git(["config", "user.email"], effective_repo_root) or ""
-            summary = _get_change_summary("staged", files, effective_repo_root)
+            attempts = get_sessions_for_commit(effective_repo_root, "staged")
+            summary = None
+            for att in reversed(attempts):
+                s = att.get("change_summary")
+                if isinstance(s, dict) and s.get("what_changed") and s.get("what_changed") != "Staged changes awaiting pre-commit verification.":
+                    summary = s
+                    break
+            if not summary:
+                summary = _get_change_summary("staged", files, effective_repo_root)
 
             # Real coding standards audit on staged files
             checker = CodingStandardsChecker(effective_repo_root)
             standards_report = checker.check({"files": files})
             failed_standards = [s for s in standards_report if not s.get("is_good", True)]
 
-            attempts = get_sessions_for_commit(effective_repo_root, "staged")
             latest_status = "FAILED" if failed_standards else "PASSED"
             if attempts:
                 latest_status = attempts[-1].get("status", latest_status)
@@ -483,7 +503,6 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
         full_message = meta_parts[5] if len(meta_parts) > 5 else _run_git(["log", "-1", "--pretty=format:%B", commit_id], effective_repo_root)
 
         files = _get_commit_files(commit_id, effective_repo_root)
-        summary = _get_change_summary(commit_id, files, effective_repo_root)
         branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], effective_repo_root) or "main"
 
         # Check coding standards for this commit diff
@@ -492,6 +511,18 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
         failed_standards = [s for s in standards_report if not s.get("is_good", True)]
 
         attempts = get_sessions_for_commit(effective_repo_root, commit_id)
+
+        # 1. Prefer AI-generated summary from recorded pre-commit defense session
+        summary = None
+        for att in reversed(attempts):
+            s = att.get("change_summary")
+            if isinstance(s, dict) and s.get("what_changed") and s.get("what_changed") != "Staged changes awaiting pre-commit verification.":
+                summary = s
+                break
+        # 2. Fall back to diff-derived change summary
+        if not summary:
+            summary = _get_change_summary(commit_id, files, effective_repo_root)
+
         status = "PASSED"
 
         return {
