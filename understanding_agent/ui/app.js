@@ -361,6 +361,7 @@
           const isPass = attStatus === 'PASSED';
           const violationsCount = att.violations_count || 0;
           const score = Math.round(att.score || 0);
+          const isUnverifiedAtt = isAttemptUnverified(att);
 
           return `
             <div class="attempt-card" onclick="window.understandingAgent.openAttempt('${escapeHtml(att.attempt_id)}')">
@@ -372,7 +373,7 @@
                 <span class="badge-count ${violationsCount > 0 ? 'badge-danger' : 'badge-success'}">
                   ${violationsCount} violation${violationsCount === 1 ? '' : 's'}
                 </span>
-                <span class="attempt-score-tag">Score: ${score}%</span>
+                <span class="attempt-score-tag ${isUnverifiedAtt ? 'attempt-score-unverified' : ''}">${isUnverifiedAtt ? 'Not Verified' : `Score: ${score}%`}</span>
                 <span class="attempt-time">${formatDate(att.timestamp)}</span>
               </div>
               <button class="btn btn-secondary">
@@ -405,7 +406,14 @@
     if (st === 'PASSED') el.attemptStatusBadge.classList.add('status-passed');
     else el.attemptStatusBadge.classList.add('status-failed');
 
-    el.attemptScoreBadge.textContent = `Score: ${Math.round(data.score || 0)}%`;
+    const isUnverified = isAttemptUnverified(data);
+    if (isUnverified) {
+      el.attemptScoreBadge.textContent = 'Not Verified';
+      el.attemptScoreBadge.className = 'score-badge score-badge-unverified';
+    } else {
+      el.attemptScoreBadge.textContent = `Score: ${Math.round(data.score || 0)}%`;
+      el.attemptScoreBadge.className = 'score-badge';
+    }
     el.attemptTimestamp.textContent = formatDate(data.timestamp);
 
     // Navigation buttons (Previous / Next)
@@ -441,6 +449,30 @@
 
     // Render Violations & Coding Standards
     renderViolations(data.violations || [], data.standards_report || []);
+  }
+
+  function isQuestionUnverified(q) {
+    if (!q) return false;
+    if (q.is_fallback) return true;
+    const evalObj = q.evaluation || {};
+    if (evalObj.llm_verified === false) return true;
+    const text = ((evalObj.evaluation || '') + ' ' + (evalObj.feedback || '') + ' ' + (evalObj.qualitative_feedback || '')).toLowerCase();
+    return (
+      text.includes('llm evaluation unavailable') ||
+      text.includes('offline evaluation') ||
+      text.includes('failing open') ||
+      text.includes('llm scoring unavailable') ||
+      text.includes('reduced confidence') ||
+      text.includes('not verified') ||
+      text.includes('unverified')
+    );
+  }
+
+  function isAttemptUnverified(attemptData) {
+    if (!attemptData) return false;
+    if (attemptData.verification === 'llm-unverified') return true;
+    const qs = attemptData.questions || [];
+    return qs.some(q => isQuestionUnverified(q));
   }
 
   function resolveOriginAttempt(q, currentAttNumber) {
@@ -502,6 +534,7 @@
         const isFromPreviousAttempt = Boolean(originAttempt && currentAttemptNumber && originAttempt < currentAttemptNumber);
 
         // Status badge & score badge
+        const isUnverified = isQuestionUnverified(q) || (state.selectedAttemptData && isAttemptUnverified(state.selectedAttemptData));
         let originBadgeHtml = '';
         let statusBadgeHtml = '';
         let scoreBadgeHtml = '';
@@ -511,7 +544,9 @@
             originBadgeHtml = `<span class="qa-status-pill qa-status-attempt-origin" title="Answered in Attempt #${originAttempt}">Attempt #${originAttempt}</span>`;
           }
           statusBadgeHtml = `<span class="qa-status-pill qa-status-answered">Answered</span>`;
-          if (score !== null) {
+          if (isUnverified) {
+            scoreBadgeHtml = `<span class="qa-score-badge qa-score-unverified">Not Verified</span>`;
+          } else if (score !== null) {
             scoreBadgeHtml = `<span class="qa-score-badge ${passed ? 'qa-score-pass' : 'qa-score-fail'}">Score: ${score}%</span>`;
           }
         } else if (isTimedOut) {

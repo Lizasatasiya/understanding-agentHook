@@ -828,6 +828,10 @@ body {
   color: var(--text-secondary);
 }
 
+.attempt-score-unverified {
+  color: var(--accent-amber);
+}
+
 .attempt-time {
   font-size: 12px;
   color: var(--text-muted);
@@ -916,6 +920,12 @@ body {
   background: var(--badge-blue-bg);
   color: var(--accent-blue);
   border: 1px solid var(--badge-blue-border);
+}
+
+.score-badge-unverified {
+  background: var(--badge-amber-bg);
+  color: var(--badge-amber-text);
+  border: 1px solid var(--badge-amber-border);
 }
 
 .attempt-meta-info {
@@ -1089,6 +1099,13 @@ body {
   background: var(--bg-primary);
   color: var(--text-muted);
   border: 1px solid var(--border-color);
+}
+
+.qa-score-unverified,
+.qa-score-not-verified {
+  background: var(--badge-amber-bg);
+  color: var(--badge-amber-text);
+  border: 1px solid var(--badge-amber-border);
 }
 
 .qa-question-title {

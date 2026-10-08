@@ -21,6 +21,7 @@ from .server_client import ServerClient
 from .answer_evaluator import AnswerEvaluator
 from .coding_standards import CodingStandardsChecker
 from .session_store import save_session
+from .api_utils import load_nous_api_key
 from .commit_context import (
     get_head_commit,
     get_current_commit_message,
@@ -604,16 +605,29 @@ def main():
                 sys.exit(1)
 
         avg_score = total_score / len(valid_questions) if valid_questions else 100
-        attempt_status = "PASSED" if avg_score > 75 else "FAILED"
         # LLM verification: honest even when failing open. A session is only
         # "llm-verified" when questions were LLM-generated and no evaluation
         # fell back to the offline scorer.
         verification = "llm-verified" if (questions_llm_generated and not any_eval_unverified) else "llm-unverified"
-        if avg_score > 75:
+
+        # When API is not working and fallback questions are being asked,
+        # if all answers have been given, do not check score and allow commit.
+        fallback_questions_asked = (not questions_llm_generated) or any(q.get("is_fallback", False) for q in valid_questions)
+        api_not_working = (not load_nous_api_key()) or (verification == "llm-unverified") or any_eval_unverified or (not questions_llm_generated)
+        all_answers_given = (
+            bool(valid_questions)
+            and all(bool((q.get("answer") or "").strip()) for q in valid_questions)
+            and all(bool((r.get("answer") or "").strip()) and r.get("status") != "timeout" for r in final_results)
+        )
+
+        if fallback_questions_asked and api_not_working and all_answers_given:
+            is_passed = True
+        else:
+            is_passed = avg_score > 75
+
+        attempt_status = "PASSED" if is_passed else "FAILED"
+        if is_passed:
             print(f"\n{BOLD}{GREEN}Overall Understanding: Verified{RESET}")
-            if verification == "llm-unverified":
-                print(f"{YELLOW}⚠ LLM unreachable — answers evaluated by the offline fallback, not an LLM.{RESET}")
-                print(f"{YELLOW}  Commit may proceed (fail-open), but it is marked UNVERIFIED in the dashboard.{RESET}")
         else:
             print(f"\n{BOLD}{RED}Overall Understanding: Insufficient{RESET}")
 
@@ -649,7 +663,7 @@ def main():
         _write_state(state_file, attempt_key, head_commit, commit_msg,
                      diff_hash, attempts, valid_questions)
         
-        if avg_score <= 75:
+        if not is_passed:
             print(f"\n{RED}Attempt {attempts} failed. Understanding criteria not met.{RESET}")
             retry = interaction.timed_input(f"{YELLOW}Would you like to try Attempt {attempts + 1}? (y/n) {RESET}", 60)
             if retry and retry.strip().lower() == 'y':

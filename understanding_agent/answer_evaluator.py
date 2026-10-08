@@ -88,6 +88,7 @@ class AnswerEvaluator:
                 "follow_up_required": False,
             })
 
+        expected = question.get("expected_concepts") or []
         covered = []
         missing = []
         for concept in expected:
