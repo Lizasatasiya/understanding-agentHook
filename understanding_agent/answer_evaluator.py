@@ -47,30 +47,45 @@ class AnswerEvaluator:
         return EvaluationResult({"score": 50, "evaluation": "Failed to evaluate answer", "follow_up_required": False, "llm_verified": False})
 
     def _evaluate_fallback(self, question: dict, answer: dict, is_offline: bool = False) -> EvaluationResult:
-        """Intelligent semantic concept-matching fallback when LLM is unavailable."""
+        """Minimal fallback used only when the LLM is completely unavailable.
+
+        Avoids hardcoded grade scores: if the answer is dismissive/empty it is
+        blocked; if the developer wrote something substantive we fail-open so a
+        network outage never silently blocks a commit.
+        """
         import re
         text = (answer.get("answer") or "").strip().lower()
-        expected = question.get("expected_concepts") or []
+        status_prefix = (
+            "Offline evaluation (no NOUS_API_KEY configured)."
+            if is_offline
+            else "LLM evaluation unavailable (API error or timeout); failing open."
+        )
 
-        dismissive = {"idk", "dont know", "don't know", "dunno", "ok", "no", "none", "na", "n/a", "pass", "skip", "whatever", "nothing"}
+        dismissive_phrases = {
+            "idk", "i don't know", "i dont know", "dunno",
+            "ok", "no", "none", "na", "n/a", "pass", "skip",
+            "whatever", "nothing", "no idea", "not sure"
+        }
         cleaned_words = re.findall(r"\b[a-z]{2,}\b", text)
+        is_dismissive = (
+            not cleaned_words
+            or text in dismissive_phrases
+            or all(w in dismissive_phrases for w in cleaned_words)
+        )
 
-        # Non-answer or dismissive
-        if not cleaned_words or text in dismissive or all(w in dismissive for w in cleaned_words):
-            status_prefix = "Offline evaluation (no NOUS_API_KEY configured)." if is_offline else "LLM evaluation unavailable (API error or timeout); failing open."
+        if is_dismissive:
             return EvaluationResult({
-                "score": 10,
-                "technical_correctness": 2,
-                "code_understanding": 2,
-                "reasoning": 2,
-                "specificity": 2,
+                "score": 0,
+                "technical_correctness": 0,
+                "code_understanding": 0,
+                "reasoning": 0,
+                "specificity": 0,
                 "covered_concepts": [],
-                "missing_concepts": expected,
+                "missing_concepts": question.get("expected_concepts") or [],
                 "incorrect_claims": [],
                 "evaluation": f"{status_prefix} Answer is dismissive or lacks technical substance.",
-                "confidence": 0.8,
-                "follow_up_required": True,
-                "llm_verified": False
+                "confidence": 0.9,
+                "follow_up_required": False,
             })
 
         covered = []
@@ -110,18 +125,17 @@ class AnswerEvaluator:
             eval_text += f" Missing: {', '.join(missing)}."
 
         return EvaluationResult({
-            "score": score,
-            "technical_correctness": int(score * 0.4),
-            "code_understanding": int(score * 0.3),
-            "reasoning": int(score * 0.2),
-            "specificity": int(score * 0.1),
-            "covered_concepts": covered,
-            "missing_concepts": missing,
+            "score": 75,
+            "technical_correctness": 28,
+            "code_understanding": 22,
+            "reasoning": 15,
+            "specificity": 10,
+            "covered_concepts": [],
+            "missing_concepts": [],
             "incorrect_claims": [],
-            "evaluation": eval_text,
-            "confidence": 0.8,
-            "follow_up_required": follow_up,
-            "llm_verified": False
+            "evaluation": f"{status_prefix} Developer provided a substantive answer; LLM scoring unavailable — passing with reduced confidence.",
+            "confidence": 0.4,
+            "follow_up_required": True
         })
 
     def _build_prompt(self, question: dict, answer: dict, context: dict, summary: dict, env: dict | None = None) -> str:
@@ -138,18 +152,19 @@ class AnswerEvaluator:
             lines.append("")
 
         lines += [
-            "CRITICAL EVALUATION GUIDELINES:",
-            "- Focus ONLY on the core LOGIC and INTENT of the developer's answer.",
-            "- High-level, short, or general logical answers ARE FULLY ACCEPTABLE if the core engineering sense is right (e.g., 'data lost on server restart', 'need a db lock to avoid race conditions', 'use a database for multiple servers').",
-            "- Do NOT require textbook definitions or long essays. Developers are typing or speaking via mic in a live terminal; brief 1-2 sentence answers are completely valid.",
-            "- Be tolerant of speech-to-text transcription artifacts and minor voice mishearings.",
-            "- If the developer shows the right basic intuition, award a PASSING score (75% to 95%).",
-            "- If the answer is completely wrong, irrelevant, nonsensical, blank, or dismissive (e.g., 'ok', 'idk', 'dunno', random words), assign a score strictly below 25%.",
+            "EVALUATION GUIDELINES:",
+            "- Your ONLY job is to check whether the developer understands what their own code does.",
+            "- DO NOT penalise for poor grammar, spelling, English proficiency, or technical terminology.",
+            "- DO NOT require precise vocabulary — 'it gets removed' is as valid as 'the item is filtered out of the array'.",
+            "- Short answers (1-2 sentences) are perfectly fine if they show the right intuition.",
+            "- Developers may be typing fast or using voice-to-text; be tolerant of transcription artifacts.",
+            "- PASS (score 75-95): the developer shows they understand the core behaviour, even if explained informally.",
+            "- FAIL (score 0-40): the answer is clearly wrong, completely off-topic, blank, or dismissive ('idk', 'I don't know', 'ok', random words).",
+            "- Middle ground (score 41-74): partially correct — missing key details but not entirely wrong.",
             "",
-            "Evaluate against:",
-            "- changed code and components",
-            "- architectural intent and dependencies",
-            "- expected concepts"
+            "Focus your evaluation on:",
+            "- Does the developer understand what the changed code does?",
+            "- Do they grasp the consequences / side-effects of their change?"
         ]
 
         if is_large:

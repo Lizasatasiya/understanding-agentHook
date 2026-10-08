@@ -201,20 +201,97 @@ def _get_change_summary(commit_id: str, files: List[Dict[str, Any]], repo_root: 
             "key_risks": "Uncommitted work subject to pre-commit hook checks."
         }
 
-    # Historical commit: summarize from commit message and stats
+    # Historical commit: build a meaningful summary from actual diff data
     raw_msg = _run_git(["log", "-1", "--pretty=format:%B", commit_id], repo_root)
-    title = raw_msg.splitlines()[0] if raw_msg else f"Commit {commit_id[:7]}"
+    title = raw_msg.splitlines()[0].strip() if raw_msg else f"Commit {commit_id[:7]}"
     body = "\n".join(raw_msg.splitlines()[1:]).strip() if len(raw_msg.splitlines()) > 1 else ""
+
+    # -- What Changed: derive from diff stat and changed symbols --
+    total_added = sum(f.get("additions", 0) for f in files)
+    total_deleted = sum(f.get("deletions", 0) for f in files)
+
+    # Categorise changed files by type
+    ext_groups: Dict[str, List[str]] = {}
+    for f in files:
+        ext = os.path.splitext(f["path"])[1].lstrip(".").lower() or "other"
+        ext_groups.setdefault(ext, []).append(os.path.basename(f["path"]))
+
+    # Collect names of changed functions/classes from the diff skeleton
+    diff_text = _run_git(["show", "--unified=0", commit_id], repo_root)
+    changed_symbols: List[str] = []
+    for line in diff_text.splitlines():
+        m = re.search(r'@@.*@@ (.+)', line)
+        if m:
+            raw = m.group(1).strip()
+            # Keep only the first token (function/class name) if it looks like an identifier
+            token = re.split(r'[\s(:{]', raw)[0]
+            if token and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', token) and token not in changed_symbols:
+                changed_symbols.append(token)
 
     file_names = ", ".join([os.path.basename(f["path"]) for f in files[:4]])
     if len(files) > 4:
         file_names += f" and {len(files) - 4} others"
 
+    if changed_symbols:
+        symbols_str = ", ".join(f"`{s}`" for s in changed_symbols[:5])
+        what = f"{len(files)} file(s) modified ({file_names}): updated {symbols_str}. +{total_added} / -{total_deleted} lines."
+    else:
+        what = f"{len(files)} file(s) modified ({file_names}). +{total_added} / -{total_deleted} lines."
+
+    # -- Why It Matters: infer from conventional-commit prefix or body --
+    prefix_match = re.match(r'^(feat|fix|refactor|perf|test|docs|chore|style|build|ci)\b[:(]?', title, re.IGNORECASE)
+    if prefix_match:
+        prefix = prefix_match.group(1).lower()
+        _why_map = {
+            "feat":     "Introduces new functionality that expands the feature set available to users or downstream systems.",
+            "fix":      "Resolves a defect or incorrect behaviour, improving reliability and correctness.",
+            "refactor": "Restructures existing code without changing external behaviour, improving maintainability.",
+            "perf":     "Optimises performance, reducing latency or resource consumption.",
+            "test":     "Adds or updates tests, increasing confidence in correctness and preventing regressions.",
+            "docs":     "Updates documentation, improving developer understanding and onboarding.",
+            "chore":    "Handles maintenance tasks (dependencies, tooling, configs) that keep the project healthy.",
+            "style":    "Applies code-style or formatting changes with no functional impact.",
+            "build":    "Modifies the build system or external dependencies.",
+            "ci":       "Changes CI/CD pipeline configuration."
+        }
+        why = _why_map.get(prefix, body or "Implements required changes to the codebase.")
+    elif body:
+        # Use commit body if present
+        why = body[:280] + ("…" if len(body) > 280 else "")
+    else:
+        why = "Implements required changes to the codebase."
+
+    # -- Impact: file types and net line delta --
+    type_summary = ", ".join(
+        f"{len(v)} {k} file(s)" for k, v in sorted(ext_groups.items(), key=lambda x: -len(x[1]))
+    ) or f"{len(files)} file(s)"
+    impact = f"Modified {type_summary} (+{total_added} lines added, -{total_deleted} lines removed)."
+
+    # -- Key Risks: based on what kind of files changed --
+    all_paths_lower = " ".join(f["path"].lower() for f in files)
+    risk_hints: List[str] = []
+    if any(k in ("jsx", "tsx", "js", "ts") for k in ext_groups):
+        risk_hints.append("Verify UI rendering and event handling in affected components")
+    if any(k in ("py",) for k in ext_groups) and any(kw in all_paths_lower for kw in ("test", "spec")):
+        risk_hints.append("Confirm test coverage passes without regressions")
+    elif "py" in ext_groups:
+        risk_hints.append("Run the test suite to confirm no regressions in Python logic")
+    if any(kw in all_paths_lower for kw in ("auth", "login", "token", "secret", "password", "crypt")):
+        risk_hints.append("Review security implications of authentication/credential-related changes")
+    if any(kw in all_paths_lower for kw in ("migration", "schema", "model", "db", "database")):
+        risk_hints.append("Validate database schema migrations and data integrity")
+    if any(kw in all_paths_lower for kw in ("config", "env", "settings", ".yaml", ".yml", ".toml")):
+        risk_hints.append("Check environment-specific configuration values before deploying")
+    if not risk_hints:
+        risk_hints.append("Perform code review and run the full test suite before merging")
+
+    key_risks = "; ".join(risk_hints) + "."
+
     return {
-        "what_changed": title,
-        "impact": body or f"Modified {len(files)} files ({file_names}).",
-        "why_it_matters": f"Changes committed to branch history: {title}.",
-        "key_risks": "Ensure downstream services and unit tests account for modified behavior."
+        "what_changed": what,
+        "impact": impact,
+        "why_it_matters": why,
+        "key_risks": key_risks
     }
 
 

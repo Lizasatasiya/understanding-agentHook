@@ -434,6 +434,14 @@ def main():
                 continue
                 
             print(f"{YELLOW}Time Limit: {time_limit} seconds{RESET}\n")
+
+            # On retry attempts, lightly rephrase questions that were previously
+            # failed so the developer gets a fresh angle on the same concept.
+            if attempts > 1 and not q.get("passed", False) and q.get("best_score", 0) < 70:
+                rephrased = followup_generator.rephrase_failed_question(q)
+                if rephrased and rephrased.strip() != q_text.strip():
+                    q_text = rephrased
+
             print(f"{BOLD}{q_text}{RESET}\n")
 
             # Follow-up state for this question (set only if a partial answer triggers one)
