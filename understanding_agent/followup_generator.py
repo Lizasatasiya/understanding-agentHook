@@ -51,7 +51,7 @@ class FollowUpGenerator:
         for src, dst in replacements:
             if q.startswith(src):
                 return dst + q[len(src):] + "?"
-        return "In your own words, " + q[0].lower() + q[1:] + "?"
+        return q[0].lower() + q[1:] + "?"
 
     def _build_prompt(self, question: dict, answer: dict, evaluation: dict) -> str:
         missing = ", ".join(evaluation.get('missing_concepts', []))
