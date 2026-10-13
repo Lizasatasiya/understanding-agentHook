@@ -1,6 +1,6 @@
 import time
 from unittest.mock import patch, MagicMock
-from understanding_agent.interaction import Interaction
+from understanding_agent.telephone import Interaction
 
 
 def test_interaction_initial_response_time():

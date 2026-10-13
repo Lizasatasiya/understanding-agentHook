@@ -1,3 +1,8 @@
+"""Marry The Night — commit context.
+
+Commits to the night: HEAD commit, commit-message recovery (from the
+git process tree), diff hashing, attempt keys, and attempt numbering.
+"""
 import os
 import sys
 import subprocess

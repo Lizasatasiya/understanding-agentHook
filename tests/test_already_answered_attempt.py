@@ -4,7 +4,7 @@ import tempfile
 import shutil
 import json
 from unittest.mock import patch, MagicMock
-from understanding_agent.session_store import save_session
+from understanding_agent.always_remember import save_session
 
 
 class TestAlreadyAnsweredAttempts(unittest.TestCase):
@@ -74,7 +74,7 @@ class TestAlreadyAnsweredAttempts(unittest.TestCase):
             ]
         })
 
-        from understanding_agent.session_store import load_sessions
+        from understanding_agent.always_remember import load_sessions
         sessions = load_sessions(self.test_dir)
         matching_sessions = [
             s for s in sessions

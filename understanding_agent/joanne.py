@@ -1,7 +1,12 @@
+"""Joanne — context building and skeletonizing.
+
+The stripped-down essence of a diff: extracts per-function diffs and
+compresses large ones to semantic skeletons (signatures, branches, calls).
+"""
 import subprocess
 import ast
 
-from .language_support import (
+from .scheisse import (
     language_for,
     extract_functions as generic_extract_functions,
 )

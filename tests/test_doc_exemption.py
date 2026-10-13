@@ -14,7 +14,7 @@ import unittest
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from understanding_agent.security_lens import SecurityLens
+from understanding_agent.paparazzi import SecurityLens
 
 
 def _stage(repo, path, content):
@@ -30,9 +30,9 @@ class TestDocExemption(unittest.TestCase):
         subprocess.run(["git", "init", "-q"], cwd=self.repo, capture_output=True)
 
     def _findings(self):
-        from understanding_agent.change_detector import ChangeDetector
-        from understanding_agent.code_graph import CodeGraph
-        from understanding_agent.context_builder import ContextBuilder
+        from understanding_agent.enigma import ChangeDetector
+        from understanding_agent.bad_romance import CodeGraph
+        from understanding_agent.joanne import ContextBuilder
         os.chdir(self.repo)
         changes = ChangeDetector().detect()
         graph = CodeGraph()

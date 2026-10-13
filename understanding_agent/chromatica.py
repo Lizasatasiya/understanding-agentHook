@@ -1,24 +1,9 @@
-"""Central LLM provider manager.
+"""Chromatica — central LLM provider manager.
 
-ONE place to configure every LLM the hook talks to. Any provider exposing an
-OpenAI-compatible /chat/completions endpoint works by setting, at most:
-
-    UNDERSTANDING_AGENT_PROVIDER   preset name (nous, groq, openai, openrouter,
-                                   together, ollama, custom) — default: nous
-    UNDERSTANDING_AGENT_MODEL       model id (any preset, or custom)
-    UNDERSTANDING_AGENT_BASE_URL    endpoint override (makes ANY
-                                   OpenAI-compatible provider work)
-    UNDERSTANDING_AGENT_API_KEY    key (else the preset's default env var)
-
-Changing provider or model is ONE env var, not five. Legacy variables
-(NOUS_API_KEY / NOUS_MODEL / NOUS_BASE_URL / GROQ_API_KEY / GROQ_MODEL /
-GROQ_BASE_URL / UNDERSTANDING_AGENT_PROVIDER=groq) keep working through the
-compat resolution below, so existing user setups and tests do not break.
-
-Nothing here does retries or JSON parsing — api_utils owns transport and
-response-shape handling; this module only resolves WHAT to call.
+The planet where every provider voice lives: one module resolves provider,
+model, base URL, and API key for ANY OpenAI-compatible endpoint. Switching
+providers is one environment variable.
 """
-
 import os
 
 # ---------------------------------------------------------------------------
@@ -154,7 +139,7 @@ def resolve_api_key() -> str:
     if provider in ("ollama",):
         return ""
 
-    # Env-file fallbacks are handled by api_utils.load_nous_api_key, which
+    # Env-file fallbacks are handled by just_dance.load_api_key, which
     # delegates here for the env-var half of the search.
     return ""
 
@@ -162,7 +147,7 @@ def resolve_api_key() -> str:
 class LLMManager:
     """Single entry point for LLM endpoint configuration.
 
-    api_utils._nous_request_once consumes this for the actual HTTP call, so
+    just_dance._request_once consumes this for the actual HTTP call, so
     every caller (summary, questions, evaluation, follow-up) automatically
     follows whatever provider is configured here.
     """

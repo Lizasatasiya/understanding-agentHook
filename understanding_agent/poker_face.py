@@ -1,6 +1,12 @@
+"""Poker Face — question generation.
+
+Deals the questions: scale-aware (2-8) question generation with hints,
+the 80/20 diff/standards ratio, and offline fallback questions. Can you
+read your own code's poker face?
+"""
 import os
 import json
-from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, load_groq_api_key, call_groq_api
+from .just_dance import load_api_key, extract_json, call_llm, get_model, load_api_key, call_llm
 
 
 import re
@@ -146,7 +152,7 @@ class QuestionGenerator:
         failed_std = [s for s in std if not s.get("is_good")]
         scale, target_count = self.get_diff_scale(context)
 
-        api_key = load_nous_api_key()
+        api_key = load_api_key()
         if not api_key:
             print("\n  \033[93m[LLM] Warning: NOUS_API_KEY is not set.\033[0m")
             print("  \033[2mSet NOUS_API_KEY in your .env or shell (export NOUS_API_KEY=\"...\") to generate custom questions.\033[0m\n", flush=True)
@@ -378,7 +384,7 @@ class QuestionGenerator:
             "max_tokens": 1200
         }
 
-        status, body = call_nous_api(api_key, payload, timeout=30)
+        status, body = call_llm(api_key, payload, timeout=30)
         if status != 200:
             if status != 0:
                 print(f"\n  \033[93m[Nous API returned HTTP {status}: {body[:200]}]\033[0m\n", flush=True)
@@ -606,7 +612,7 @@ class QuestionGenerator:
                 "temperature": 0.3,
                 "max_tokens": 300
             }
-            status, body = call_nous_api(api_key, payload, timeout=10)
+            status, body = call_llm(api_key, payload, timeout=10)
             if status == 200:
                 res = json.loads(body)
                 choices = res.get("choices") or []

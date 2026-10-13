@@ -1,3 +1,8 @@
+"""John Wayne — telemetry client.
+
+Rides out to deliver session payloads — but only when you explicitly point
+UNDERSTANDING_AGENT_TELEMETRY_URL at a dashboard. Default: stays home.
+"""
 import os
 import urllib.request
 import json

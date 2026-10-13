@@ -1,3 +1,8 @@
+"""Telephone — the terminal interaction line.
+
+The line between you and the hook: timed text input, [Tab] microphone
+dictation with live transcription, macOS `say` TTS, and ANSI countdown.
+"""
 import os
 import sys
 import time

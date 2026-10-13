@@ -10,7 +10,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from understanding_agent.api_utils import load_nous_api_key, get_base_url  # noqa: E402
+from understanding_agent.just_dance import load_api_key, get_base_url  # noqa: E402
 from bench_llm_latency import realistic_question_prompt  # noqa: E402
 from bench_repeat import raw_call  # noqa: E402
 
@@ -34,7 +34,7 @@ VARIANTS = {
 
 
 def main():
-    api_key = load_nous_api_key()
+    api_key = load_api_key()
     msgs = [{"role": user_role(), "content": realistic_question_prompt()}]
 
     models = MODELS  # deepseek-v4-flash already included above

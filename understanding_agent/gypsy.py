@@ -1,3 +1,7 @@
+"""Gypsy — environment detection.
+
+Finds which venue we're playing tonight: repository, branch, and author.
+"""
 import os
 import subprocess
 from pathlib import Path

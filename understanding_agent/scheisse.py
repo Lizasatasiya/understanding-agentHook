@@ -1,15 +1,9 @@
-"""Language registry and function extraction for languages without a Python AST.
+"""Schei\u00dfe — multilingual function extraction.
 
-Python uses the native `ast` module (fast path). For JavaScript/TypeScript, C#,
-Go, Rust, Java, Kotlin, Ruby, PHP, and C/C++ we use line-anchored definition
-patterns with a keyword blacklist — precise enough to target questions at the
-right function, without pulling in tree-sitter as a hard dependency.
-
-Function spans use a "next definition wins" heuristic: a function's span runs
-from its definition line to the line before the next definition (or +400 lines
-cap). For question targeting this is accurate enough; it is not a compiler.
+Speaks every language: per-language function extraction for stacks without
+a Python AST (TS/JS/C#/Go/Rust/Java/...). The name is the only swear word;
+the code is polite.
 """
-
 import re
 from typing import List, Dict, Any, Set
 

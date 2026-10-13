@@ -44,14 +44,14 @@ os.environ.pop("GROQ_API_KEY", None)
 os.environ.pop("UNDERSTANDING_AGENT_API_KEY", None)
 os.environ["UNDERSTANDING_AGENT_TELEMETRY_URL"] = ""  # no telemetry in e2e
 
-from understanding_agent.security_lens import SecurityLens, security_gate_enabled
-from understanding_agent.question_generator import QuestionGenerator
-from understanding_agent.change_detector import ChangeDetector
-from understanding_agent.code_graph import CodeGraph
-from understanding_agent.context_builder import ContextBuilder
-from understanding_agent.stack_detector import StackDetector
-from understanding_agent.coding_standards import CodingStandardsChecker
-from understanding_agent import api_utils
+from understanding_agent.paparazzi import SecurityLens, security_gate_enabled
+from understanding_agent.poker_face import QuestionGenerator
+from understanding_agent.enigma import ChangeDetector
+from understanding_agent.bad_romance import CodeGraph
+from understanding_agent.joanne import ContextBuilder
+from understanding_agent.born_this_way import StackDetector
+from understanding_agent.teeth import CodingStandardsChecker
+from understanding_agent import just_dance
 
 os.chdir(tmp)
 
@@ -72,11 +72,11 @@ changes, context = build_context()
 lens = SecurityLens()
 
 llm_calls = []
-orig_request = api_utils._nous_request_once
+orig_request = just_dance._request_once
 def counting_request(api_key, payload, timeout):
     llm_calls.append(payload)
     return orig_request(api_key, payload, timeout)
-api_utils._nous_request_once = counting_request
+just_dance._request_once = counting_request
 
 critical = lens.find_critical_findings(context) if security_gate_enabled() else []
 expect("scene1: gate finds the staged AWS key", len(critical) >= 1,
@@ -97,7 +97,7 @@ expect("scene1: standards audit runs only after a clean gate (wiring intact)",
 # Cleanup scene 1
 run(tmp, "git", "restore", "--staged", "config.py")
 os.remove("config.py")
-api_utils._nous_request_once = orig_request
+just_dance._request_once = orig_request
 
 # ------------------------------------- scene 2: no-key fallback, no prompts wasted
 with open("app.py", "w") as f:
@@ -119,7 +119,7 @@ expect("scene2: fallback questions generated without any key", len(questions) >=
        f"count={len(questions)}")
 
 # Re-run with the real security hint wired (as cli.py does)
-from understanding_agent.security_lens import security_question_hint
+from understanding_agent.paparazzi import security_question_hint
 sec_hint = security_question_hint(profile)
 hints = {"security": sec_hint, "standards": []}
 questions2 = gen.generate(context, {}, hints=hints, env=None)
@@ -128,7 +128,7 @@ expect("scene2: offline path includes the security question",
        any("security" in t for t in q_texts), f"questions={q_texts}")
 
 # ------------------------------------------------- scene 3: sessions prune
-from understanding_agent.session_store import save_session, load_sessions
+from understanding_agent.always_remember import save_session, load_sessions
 os.environ["UNDERSTANDING_AGENT_MAX_SESSIONS"] = "25"
 for i in range(40):
     save_session(tmp, {

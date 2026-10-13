@@ -3,13 +3,13 @@ import os
 import tempfile
 import shutil
 import json
-from understanding_agent.commit_context import (
+from understanding_agent.marry_the_night import (
     compute_attempt_key,
     get_next_attempt_number,
     extract_commit_message_from_args,
     get_head_commit
 )
-from understanding_agent.session_store import save_session, load_sessions, get_sessions_for_commit
+from understanding_agent.always_remember import save_session, load_sessions, get_sessions_for_commit
 
 
 class TestCommitContextAndAttempts(unittest.TestCase):

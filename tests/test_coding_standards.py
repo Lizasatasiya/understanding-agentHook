@@ -1,7 +1,7 @@
 import unittest
 from io import StringIO
 import sys
-from understanding_agent.coding_standards import CodingStandardsChecker
+from understanding_agent.teeth import CodingStandardsChecker
 
 
 class TestCodingStandardsChecker(unittest.TestCase):

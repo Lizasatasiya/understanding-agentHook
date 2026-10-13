@@ -1,5 +1,11 @@
-from .evaluation_models import EvaluationResult
-from .api_utils import load_api_key, extract_json, call_llm, get_model, fail_open_enabled
+"""Judas — answer evaluation.
+
+Betray your bluff: multi-metric semantic scoring of developer answers
+against the actual diff. When the LLM is unavailable, substantive answers
+are recorded unscored (llm-unverified), never silently graded.
+"""
+from .the_fame import EvaluationResult
+from .just_dance import load_api_key, extract_json, call_llm, get_model, fail_open_enabled
 import json
 
 class AnswerEvaluator:
@@ -223,6 +229,3 @@ class AnswerEvaluator:
             return {}
         except Exception:
             return {}
-
-    def _call_groq(self, api_key: str, prompt: str) -> dict:
-        return self._call_llm(api_key, prompt)

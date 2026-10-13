@@ -1,9 +1,14 @@
+"""Million Reasons — follow-up questions.
+
+A million reasons to ask one more thing: targeted follow-ups on missing
+concepts and fresh-angle rephrasing of previously failed questions.
+"""
 import json
-from .api_utils import load_nous_api_key, call_nous_api, get_model
+from .just_dance import load_api_key, call_llm, get_model
 
 class FollowUpGenerator:
     def generate(self, question: dict, answer: dict, evaluation: dict) -> str:
-        api_key = load_nous_api_key()
+        api_key = load_api_key()
         if not api_key:
             return "Could you elaborate on what happens when the validation fails?"
             
@@ -20,7 +25,7 @@ class FollowUpGenerator:
         a fresh angle rather than the identical text they already saw.
         Falls back to simple angle-shifts when the LLM is unavailable.
         """
-        api_key = load_nous_api_key()
+        api_key = load_api_key()
         original = question.get("question", "")
         if not api_key:
             return self._fallback_rephrase(original)
@@ -76,7 +81,7 @@ RULES:
             "max_tokens": 128
         }
 
-        status, body = call_nous_api(api_key, payload, timeout=30)
+        status, body = call_llm(api_key, payload, timeout=30)
         if status != 200:
             return ""
 

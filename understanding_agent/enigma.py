@@ -1,8 +1,13 @@
+"""Enigma — staged-change detection.
+
+Solves the enigma of what actually changed: multi-language git diff parser,
+function-level change extraction, and scale metrics.
+"""
 import subprocess
 import ast
 import os
 from typing import List, Dict, Any, Set
-from .environment_detector import _EXTENSION_MAP
+from .gypsy import _EXTENSION_MAP
 
 # Non-code files still worth tracking as module-level changes (docs, config, schemas)
 _NON_CODE_EXTENSIONS = {
@@ -20,7 +25,7 @@ _IGNORED_FILES = {
     "composer.lock",
 }
 
-from .language_support import (
+from .scheisse import (
     language_for,
     functions_touching_lines as generic_functions_touching_lines,
     extract_functions as generic_extract_functions,

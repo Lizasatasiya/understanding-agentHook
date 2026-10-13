@@ -1,3 +1,9 @@
+"""Just Dance — LLM transport.
+
+The API will just dance: raw HTTP transport (no third-party deps), retry
+with exponential backoff, empty-content glitch detection, and robust JSON
+extraction from reasoning models. What to call is decided by chromatica.
+"""
 import os
 import json
 import re
@@ -7,16 +13,16 @@ import http.client
 import ssl
 from urllib.parse import urlparse
 
-from .llm_manager import resolve_base_url, resolve_model, resolve_api_key, get_provider, PROVIDER_PRESETS, thinking_control_params
+from .chromatica import resolve_base_url, resolve_model, resolve_api_key, get_provider, PROVIDER_PRESETS, thinking_control_params
 
 
 def get_base_url() -> str:
-    """Return the OpenAI-compatible base URL (resolved by llm_manager)."""
+    """Return the OpenAI-compatible base URL (resolved by chromatica)."""
     return resolve_base_url()
 
 
 def get_model() -> str:
-    """Return the LLM model id (resolved by llm_manager)."""
+    """Return the LLM model id (resolved by chromatica)."""
     return resolve_model()
 
 
@@ -82,10 +88,10 @@ def _env_search_dirs():
     return search_dirs
 
 
-def load_nous_api_key() -> str:
+def load_api_key() -> str:
     """Load the active provider's API key from the environment or .env files.
 
-    Provider-aware, resolved via llm_manager:
+    Provider-aware, resolved via chromatica:
       1. UNDERSTANDING_AGENT_API_KEY / the provider preset's env vars
       2. .env / .env.local in cwd, parents, git root, ~/.config
       3. Legacy NOUS_* then GROQ_API_KEY names, for backward compatibility
@@ -137,11 +143,6 @@ def load_nous_api_key() -> str:
                 return key
 
     return _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), ("GROQ_API_KEY",))
-
-
-# Alias for backward compatibility
-load_groq_api_key = load_nous_api_key
-load_api_key = load_nous_api_key
 
 
 def _safe_json_loads(s: str):
@@ -251,7 +252,7 @@ def _extract_message_text(data: dict) -> str:
     return text
 
 
-def call_nous_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: int = 2) -> tuple[int, str]:
+def call_llm(api_key: str, payload_dict: dict, timeout: int = 30, retries: int = 2) -> tuple[int, str]:
     """Send an HTTP request to the provider's OpenAI-compatible chat-completions API.
 
     Retries transient failures (connection errors, 429, 5xx, and the gateway's
@@ -270,7 +271,7 @@ def call_nous_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: 
 
     last_status, last_body = 0, ""
     for attempt in range(retries + 1):
-        status, body = _groq_request_once(api_key, payload_dict, timeout)
+        status, body = _request_once(api_key, payload_dict, timeout)
         if _is_meaningful_response(status, body):
             return status, body
         last_status, last_body = status, body
@@ -296,18 +297,7 @@ def _is_meaningful_response(status: int, body: str) -> bool:
     return bool(_extract_message_text(data))
 
 
-def _groq_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[int, str]:
-    """Compatibility bridge for mock patches and direct calls."""
-    return _nous_request_once(api_key, payload_dict, timeout)
-
-
-# Backward compatibility aliases
-call_groq_api = call_nous_api
-# Canonical name going forward: provider-agnostic transport call
-call_llm = call_nous_api
-
-
-def _nous_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[int, str]:
+def _request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[int, str]:
     base_url = get_base_url().rstrip("/")
     parsed = urlparse(base_url)
     scheme = parsed.scheme or "https"
@@ -347,7 +337,3 @@ def _nous_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[
                 conn.close()
             except Exception:
                 pass
-
-
-# Backward compatibility alias
-_groq_request_once = _nous_request_once

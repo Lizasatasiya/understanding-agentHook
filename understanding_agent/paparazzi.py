@@ -1,16 +1,9 @@
-"""Security lens: classify the security relevance of a change and shape questions.
+"""Paparazzi — security lens and the credential gate.
 
-Grounded in the research: ~45% of AI-generated code samples fail security tests
-(Veracode 2025 GenAI report, 100+ LLMs across Java/Python/C#/JS), security
-performance is flat across model generations, and developers using AI
-assistants write more insecure code while feeling more confident about it
-(Perry et al., CCS 2023). An oral defense question at commit time attacks
-exactly that belief-reality gap.
-
-This module is deterministic pattern classification — no LLM, no network.
-It produces a security_profile that question_generator weights questions with.
+Chases what you're exposing: deterministic security-relevance classification
+for questions, plus the hard credential gate that blocks stealable secrets
+before any prompt or LLM call.
 """
-
 import math
 import os
 import re
@@ -76,7 +69,7 @@ _SECURITY_PATTERNS = [
     (r"agent.*tool|execute_tool|function_call|run_agent",
      "llm-agency", 4, "the blast radius if the LLM output is adversarial"),
 
-    # --- Transport (moved from coding_standards._check_secure_transport, A0.1) ---
+    # --- Transport (moved from teeth._check_secure_transport, A0.1) ---
     (r"['\"]http://(?!localhost|127\.0\.0\.1|www\.w3\.org)[a-zA-Z0-9\-_.]+",
      "cleartext-transport", 4, "why this endpoint uses cleartext HTTP instead of HTTPS"),
 

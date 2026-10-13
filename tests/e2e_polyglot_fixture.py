@@ -126,14 +126,14 @@ os.chdir(REPO)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # ---- 3. Run the REAL pipeline ----
-from understanding_agent.change_detector import ChangeDetector
-from understanding_agent.stack_detector import StackDetector
-from understanding_agent.code_graph import CodeGraph
-from understanding_agent.context_builder import ContextBuilder
-from understanding_agent.security_lens import SecurityLens, security_question_hint
-from understanding_agent.evidence_collector import collect_evidence, evidence_question_hint
-from understanding_agent.practice_packs import practice_pack_hint
-from understanding_agent.question_generator import QuestionGenerator
+from understanding_agent.enigma import ChangeDetector
+from understanding_agent.born_this_way import StackDetector
+from understanding_agent.bad_romance import CodeGraph
+from understanding_agent.joanne import ContextBuilder
+from understanding_agent.paparazzi import SecurityLens, security_question_hint
+from understanding_agent.rain_on_me import collect_evidence, evidence_question_hint
+from understanding_agent.the_cure import practice_pack_hint
+from understanding_agent.poker_face import QuestionGenerator
 
 print("=" * 70)
 print("STAGE 1: ChangeDetector (real git)")
@@ -212,7 +212,7 @@ print("=" * 70)
 print("STAGE 6: PracticePacks (NestJS + .NET + ML topics)")
 hints = practice_pack_hint(stack, context, sec_hint)
 print(f"  topics (top-8 shown to prompt): {hints['practice_topics']}")
-all_topics = [t["topic"] for t in __import__('understanding_agent.practice_packs', fromlist=['get_practice_topics']).get_practice_topics(stack, context)]
+all_topics = [t["topic"] for t in __import__('understanding_agent.the_cure', fromlist=['get_practice_topics']).get_practice_topics(stack, context)]
 assert any("DTO" in t or "validation" in t for t in all_topics), "NestJS pack missing"
 assert any("async" in t or "EF Core" in t for t in all_topics), ".NET pack missing"
 assert any("train/test" in t or "reproducib" in t for t in all_topics), "ML pack missing"

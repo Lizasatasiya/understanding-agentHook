@@ -1,3 +1,9 @@
+"""Monster Ball — the dashboard.
+
+The tour stop: opt-in FastAPI dashboard serving session history, commit
+analysis, and the single-page UI. Nothing runs unless you install the
+[ui] extra and start it yourself.
+"""
 import os
 import re
 import sys
@@ -11,8 +17,8 @@ from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSON
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
-from .coding_standards import CodingStandardsChecker
-from .session_store import (
+from .teeth import CodingStandardsChecker
+from .always_remember import (
     load_sessions,
     save_session,
     get_sessions_for_commit,
@@ -180,10 +186,10 @@ def _get_change_summary(commit_id: str, files: List[Dict[str, Any]], repo_root: 
     if commit_id == "staged":
         # Attempt to run ChangeSummary if available
         try:
-            from .change_detector import ChangeDetector
-            from .code_graph import CodeGraph
-            from .context_builder import ContextBuilder
-            from .change_summary import ChangeSummary
+            from .enigma import ChangeDetector
+            from .bad_romance import CodeGraph
+            from .joanne import ContextBuilder
+            from .shallow import ChangeSummary
 
             detector = ChangeDetector()
             changes = detector.detect()

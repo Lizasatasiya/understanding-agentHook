@@ -8,8 +8,8 @@ setup(
     include_package_data=True,
     entry_points={
         "console_scripts": [
-            "understanding-agent = understanding_agent.cli:main",
-            "understanding-agent-ui = understanding_agent.server:run",
+            "understanding-agent = understanding_agent.applause:main",
+            "understanding-agent-ui = understanding_agent.monster_ball:run",
         ]
     },
     python_requires=">=3.10",

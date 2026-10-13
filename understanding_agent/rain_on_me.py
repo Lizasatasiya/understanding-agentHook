@@ -1,20 +1,8 @@
-"""Collect deterministic evidence about a change from already-configured tools.
+"""Rain On Me — evidence collection.
 
-Philosophy (grounded in the Tricorder/Google static analysis research): this
-system does NOT install or run its own linters. It reuses the project's
-existing, already-trusted tooling output as *question evidence* — findings
-become questions, never verdicts. That inherits scanner recall without
-inheriting the false-positive-blocks-commit problem.
-
-Tools consulted when present on PATH (all optional, all cached, all timed):
-- semgrep      (security findings; --json)
-- gitleaks     (hardcoded secrets)
-- npm/pip audit-able manifests are deliberately NOT run here: too slow at
-               commit time; dependency review stays a question topic.
-
-Every collector is wrapped so a missing/broken tool degrades to no evidence.
+Findings rain in from scanners you already have (semgrep, gitleaks,
+test-gap analysis) and become question evidence.
 """
-
 import json
 import os
 import re

@@ -1,23 +1,9 @@
-"""Deterministic Coding Standards Analyzer.
+"""Teeth — deterministic coding-standards audit.
 
-Audits staged changes against established coding standards — scoped to what
-this commit ADDED (added diff lines, changed functions), never whole-file
-history:
-- React & Frontend Standards (Immutability, Hooks, Cleanups, Virtual DOM)
-- Modern JavaScript/TypeScript Standards (Variable Scoping, Strict Equality, Error Handling)
-- Python Standards (Exception specificity, Resource management, Mutable defaults)
-- Go Standards (Error handling)
-- Complexity (changed-function length, nesting depth)
-- Input Validation (changed functions accepting external input)
-
-Security checks live in security_lens.SecurityLens, not here: the credential
-gate hard-blocks stealable secrets, and the rest become severity-weighted
-security questions. One module owns security.
-
-Produces a clear terminal report displaying which standards PASSED (Good)
-and which standards FAILED (Violations) before questions are presented.
+"Show me your teeth": audits staged changes against established coding
+standards, scoped to changed lines only. The credential gate lives in
+paparazzi.SecurityLens, not here.
 """
-
 import os
 import re
 import subprocess
@@ -88,7 +74,7 @@ class CodingStandardsChecker:
         has_go = any(p.endswith('.go') for p in file_diffs)
 
         # Security checks (secrets, transport, XSS/eval) are NOT run here —
-        # they moved to security_lens.SecurityLens (one module owns security:
+        # they moved to paparazzi.SecurityLens (one module owns security:
         # the credential gate hard-blocks, the rest become severity-weighted
         # questions via security_question_hint). See PLAN.md A0.1.
 
@@ -385,7 +371,7 @@ class CodingStandardsChecker:
         span overlaps an added line are included — a 1-line edit to a legacy
         file never flags untouched functions.
         """
-        from .language_support import extract_functions, language_for
+        from .scheisse import extract_functions, language_for
         for path, content in contents.items():
             if not content.strip():
                 continue

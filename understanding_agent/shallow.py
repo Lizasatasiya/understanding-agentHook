@@ -1,11 +1,15 @@
+"""Shallow — change summary.
+
+The surface summary of a change, before the deep questions begin.
+"""
 import os
 import json
-from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model
+from .just_dance import load_api_key, extract_json, call_llm, get_model
 
 
 class ChangeSummary:
     def generate(self, context: dict) -> dict:
-        api_key = load_nous_api_key()
+        api_key = load_api_key()
         changes = context.get("structured_changes", [])
         is_large = context.get("is_large_change", False) or len(changes) > 1
 
@@ -93,7 +97,7 @@ class ChangeSummary:
             "max_tokens": max_tokens
         }
 
-        status, body = call_nous_api(api_key, payload, timeout=30)
+        status, body = call_llm(api_key, payload, timeout=30)
         if status != 200:
             return {}
 

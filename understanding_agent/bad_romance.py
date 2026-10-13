@@ -1,3 +1,8 @@
+"""Bad Romance — the code graph.
+
+Caller/callee relations are a love-hate relationship: builds the dependency
+graph (who calls whom, signatures) used for cross-file context.
+"""
 import subprocess
 import ast
 

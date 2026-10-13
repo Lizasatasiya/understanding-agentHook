@@ -4,15 +4,15 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from understanding_agent.stack_detector import StackDetector
-from understanding_agent.language_support import (
+from understanding_agent.born_this_way import StackDetector
+from understanding_agent.scheisse import (
     language_for, extract_functions, functions_touching_lines
 )
-from understanding_agent.security_lens import SecurityLens, security_question_hint
-from understanding_agent.evidence_collector import collect_evidence, evidence_question_hint, _find_test_gaps
-from understanding_agent.practice_packs import get_practice_topics, practice_pack_hint
-from understanding_agent.change_detector import ChangeDetector
-from understanding_agent.question_generator import QuestionGenerator
+from understanding_agent.paparazzi import SecurityLens, security_question_hint
+from understanding_agent.rain_on_me import collect_evidence, evidence_question_hint, _find_test_gaps
+from understanding_agent.the_cure import get_practice_topics, practice_pack_hint
+from understanding_agent.enigma import ChangeDetector
+from understanding_agent.poker_face import QuestionGenerator
 
 
 def _write(root: Path, rel: str, content: str):

@@ -1,17 +1,8 @@
-"""Domain practice packs: best-practice question guidance per stack and domain.
+"""The Cure — domain practice packs.
 
-Each pack converts a detected stack into concrete question TOPICS with
-expected_concepts the evaluator grades against. Packs are declarative —
-they shape the prompt, they never hard-block a commit.
-
-Research grounding: best practices split into (a) mechanical rules linters
-already cover (deliberately excluded), and (b) semantic/behavioral practices
-only a human reviewer — or an oral defense — can verify (what these packs
-encode). Source domains: OWASP ASVS/cheat sheets for security, React/Nest
-official docs for framework invariants, and ML reproducibility literature
-(papers with code norms, mlflow/dvc conventions) for data/ML.
+Best-practice medicine per framework and domain: React invariants, NestJS
+DTO boundaries, .NET async discipline, ML reproducibility, and more.
 """
-
 from typing import Dict, Any
 
 

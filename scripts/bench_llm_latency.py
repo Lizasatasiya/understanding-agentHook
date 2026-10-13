@@ -9,7 +9,7 @@ Usage (from the repo root, so .env is found):
     python3.14 scripts/bench_llm_latency.py            # full matrix
     python3.14 scripts/bench_llm_latency.py --quick    # baseline + best variant only
 
-The API key is loaded via understanding_agent.api_utils.load_nous_api_key()
+The API key is loaded via understanding_agent.just_dance.load_api_key()
 (env var or .env) and is NEVER printed or logged.
 """
 
@@ -24,7 +24,7 @@ from urllib.parse import urlparse
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 
-from understanding_agent.api_utils import load_nous_api_key, get_base_url, get_model  # noqa: E402
+from understanding_agent.just_dance import load_api_key, get_base_url, get_model  # noqa: E402
 
 TIMEOUT = 90
 
@@ -104,9 +104,9 @@ def stream_timed_call(api_key, payload):
 
 def plain_timed_call(api_key, payload):
     """Non-streaming timed call via the package's own transport (retries off)."""
-    from understanding_agent.api_utils import _nous_request_once
+    from understanding_agent.just_dance import _request_once
     t0 = time.perf_counter()
-    status, body = _nous_request_once(api_key, payload, TIMEOUT)
+    status, body = _request_once(api_key, payload, TIMEOUT)
     return status, time.perf_counter() - t0, body[:300]
 
 
@@ -155,7 +155,7 @@ def fmt(status, ttft, total, gen, note):
 def main():
     quick = "--quick" in sys.argv
 
-    api_key = load_nous_api_key()
+    api_key = load_api_key()
     if not api_key:
         print("No API key found (env or .env). Aborting — nothing to test against.")
         sys.exit(1)

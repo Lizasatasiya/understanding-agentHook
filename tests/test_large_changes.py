@@ -1,10 +1,10 @@
 import unittest
 from unittest.mock import patch, MagicMock
-from understanding_agent.change_detector import ChangeDetector
-from understanding_agent.context_builder import ContextBuilder
-from understanding_agent.change_summary import ChangeSummary
-from understanding_agent.question_generator import QuestionGenerator
-from understanding_agent.interaction import Interaction
+from understanding_agent.enigma import ChangeDetector
+from understanding_agent.joanne import ContextBuilder
+from understanding_agent.shallow import ChangeSummary
+from understanding_agent.poker_face import QuestionGenerator
+from understanding_agent.telephone import Interaction
 
 
 class TestLargeChangesPipeline(unittest.TestCase):

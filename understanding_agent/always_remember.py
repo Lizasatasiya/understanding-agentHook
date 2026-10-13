@@ -1,9 +1,14 @@
+"""Always Remember Us This Way — session persistence.
+
+Remembers your attempts: session store with dedupe, git-log reconciliation,
+and pruning to the most recent N sessions.
+"""
 import os
 import json
 import time
 import subprocess
 from typing import List, Dict, Any, Optional
-from .commit_context import (
+from .marry_the_night import (
     get_head_commit,
     get_current_commit_message,
     compute_attempt_key
@@ -173,7 +178,7 @@ def _seed_from_state(repo_root: str, state_data: dict, attempt_number: Optional[
     # Run real standards checker
     standards_report = []
     try:
-        from .coding_standards import CodingStandardsChecker
+        from .teeth import CodingStandardsChecker
         checker = CodingStandardsChecker(repo_root)
         standards_report = checker.check({"files": staged_files})
     except Exception:

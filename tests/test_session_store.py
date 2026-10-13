@@ -3,7 +3,7 @@ import os
 import json
 import tempfile
 
-from understanding_agent.session_store import save_session, load_sessions, get_sessions_file, _prune_sessions
+from understanding_agent.always_remember import save_session, load_sessions, get_sessions_file, _prune_sessions
 
 
 def _mk_session(i):

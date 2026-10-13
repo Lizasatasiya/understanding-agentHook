@@ -1,3 +1,9 @@
+"""Applause — the showrunner entrypoint (pre-commit hook main).
+
+"I live for the applause": orchestrates the whole run — change detection,
+credential gate, standards audit, question loop, scoring, session save —
+and a commit that demonstrates understanding earns the applause.
+"""
 import sys
 import time
 import json
@@ -5,24 +11,24 @@ import os
 import re
 import hashlib
 import subprocess
-from .environment_detector import EnvironmentDetector
-from .change_detector import ChangeDetector
-from .stack_detector import StackDetector
-from .code_graph import CodeGraph
-from .context_builder import ContextBuilder
-from .change_summary import ChangeSummary
-from .security_lens import SecurityLens, security_question_hint, security_gate_enabled
-from .evidence_collector import collect_evidence, evidence_question_hint
-from .practice_packs import practice_pack_hint
-from .question_generator import QuestionGenerator
-from .followup_generator import FollowUpGenerator
-from .interaction import Interaction
-from .server_client import ServerClient
-from .answer_evaluator import AnswerEvaluator
-from .coding_standards import CodingStandardsChecker
-from .session_store import save_session
-from .api_utils import load_nous_api_key
-from .commit_context import (
+from .gypsy import EnvironmentDetector
+from .enigma import ChangeDetector
+from .born_this_way import StackDetector
+from .bad_romance import CodeGraph
+from .joanne import ContextBuilder
+from .shallow import ChangeSummary
+from .paparazzi import SecurityLens, security_question_hint, security_gate_enabled
+from .rain_on_me import collect_evidence, evidence_question_hint
+from .the_cure import practice_pack_hint
+from .poker_face import QuestionGenerator
+from .million_reasons import FollowUpGenerator
+from .telephone import Interaction
+from .john_wayne import ServerClient
+from .judas import AnswerEvaluator
+from .teeth import CodingStandardsChecker
+from .always_remember import save_session
+from .just_dance import load_api_key
+from .marry_the_night import (
     get_head_commit,
     get_current_commit_message,
     compute_attempt_key,
@@ -200,7 +206,7 @@ def main():
         if choice in ("1", "fix", "f"):
             print(f"\n{RED}Please resolve the violations listed above before committing.{RESET}\n")
             try:
-                from .session_store import load_sessions
+                from .always_remember import load_sessions
                 _existing = load_sessions(project_root)
                 fix_attempt_num = get_next_attempt_number(
                     _existing, head_commit, diff_hash, commit_msg, state_attempts=0
@@ -254,7 +260,7 @@ def main():
 
     existing_sessions = []
     try:
-        from .session_store import load_sessions
+        from .always_remember import load_sessions
         existing_sessions = load_sessions(project_root)
     except Exception:
         pass
@@ -617,7 +623,7 @@ def main():
         # substantive answer to every question lets the commit proceed, and
         # the session/terminal both say the pass is UNVERIFIED.
         fallback_questions_asked = (not questions_llm_generated) or any(q.get("is_fallback", False) for q in valid_questions)
-        api_not_working = (not load_nous_api_key()) or (verification == "llm-unverified") or any_eval_unverified or (not questions_llm_generated)
+        api_not_working = (not load_api_key()) or (verification == "llm-unverified") or any_eval_unverified or (not questions_llm_generated)
         all_answers_given = (
             bool(valid_questions)
             and all(bool((q.get("answer") or "").strip()) for q in valid_questions)

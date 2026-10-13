@@ -1,3 +1,9 @@
+"""The Fame — evaluation data model.
+
+The shape of a score, written down: EvaluationResult carries score,
+metric sub-scores, verification/unscored flags, and serializes to the
+session payload.
+"""
 from typing import List, Dict, Any, Optional
 
 class EvaluationResult:

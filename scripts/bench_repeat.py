@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 
-from understanding_agent.api_utils import load_nous_api_key, get_base_url, get_model  # noqa: E402
+from understanding_agent.just_dance import load_api_key, get_base_url, get_model  # noqa: E402
 from bench_llm_latency import realistic_question_prompt  # reuse the exact prompt
 
 TIMEOUT = 90
@@ -47,7 +47,7 @@ def raw_call(api_key, payload):
 
 
 def main():
-    api_key = load_nous_api_key()
+    api_key = load_api_key()
     model = get_model()
     msgs = [{"role": "user", "content": realistic_question_prompt()}]
 

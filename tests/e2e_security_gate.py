@@ -15,13 +15,19 @@ run(["git", "config", "user.email", "t@t"])
 run(["git", "config", "user.name", "t"])
 
 # Make sure the pre-commit hook IS our entrypoint (installed via -e earlier; verify importable)
-probe = subprocess.run([sys.executable, "-c", "import understanding_agent.cli; print('ok')"],
+probe = subprocess.run([sys.executable, "-c", "import understanding_agent.applause; print('ok')"],
                        capture_output=True, text=True)
 assert probe.stdout.strip() == "ok", f"package not importable: {probe.stderr}"
 
-# Install as a real pre-commit hook (classic hook style)
-(REPO / ".git" / "hooks" / "pre-commit").write_text(
-    "#!/bin/sh\nexec python3 -m understanding_agent.cli\n", encoding="utf-8")
+# Install as a real pre-commit hook (classic hook style). Use the same
+# interpreter and package path as this test run so the scratch repo does not
+# depend on a global pip install.
+hook = f"""#!/bin/sh
+PYTHONPATH={os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}
+export PYTHONPATH
+exec '{sys.executable}' -m understanding_agent.applause
+"""
+(REPO / ".git" / "hooks" / "pre-commit").write_text(hook, encoding="utf-8")
 os.chmod(REPO / ".git" / "hooks" / "pre-commit", 0o755)
 
 # 1. Benign commit MUST pass the gate (no GROQ key -> offline fallback questions,

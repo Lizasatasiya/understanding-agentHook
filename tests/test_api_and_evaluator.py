@@ -2,9 +2,9 @@ import unittest
 from unittest.mock import patch, MagicMock
 import os
 
-from understanding_agent.api_utils import extract_json, load_groq_api_key, call_groq_api, load_nous_api_key, call_nous_api
-from understanding_agent.answer_evaluator import AnswerEvaluator
-from understanding_agent.server_client import ServerClient
+from understanding_agent.just_dance import extract_json, load_api_key, call_llm, load_api_key, call_llm
+from understanding_agent.judas import AnswerEvaluator
+from understanding_agent.john_wayne import ServerClient
 
 
 class TestExtractJson(unittest.TestCase):
@@ -40,31 +40,31 @@ class TestExtractJson(unittest.TestCase):
 class TestApiRetry(unittest.TestCase):
     def test_retries_transient_errors_then_succeeds(self):
         responses = [(0, "connection refused"), (500, "server error"), (200, '{"ok": true}')]
-        with patch("understanding_agent.api_utils._groq_request_once",
+        with patch("understanding_agent.just_dance._request_once",
                    side_effect=[r for r in responses]) as mock_req, \
              patch("time.sleep"):
-            status, body = call_groq_api("key", {"model": "m"})
+            status, body = call_llm("key", {"model": "m"})
         self.assertEqual(status, 200)
         self.assertEqual(mock_req.call_count, 3)
 
     def test_does_not_retry_client_errors(self):
-        with patch("understanding_agent.api_utils._groq_request_once",
+        with patch("understanding_agent.just_dance._request_once",
                    return_value=(401, "unauthorized")) as mock_req:
-            status, _ = call_groq_api("key", {"model": "m"})
+            status, _ = call_llm("key", {"model": "m"})
         self.assertEqual(status, 401)
         self.assertEqual(mock_req.call_count, 1)
 
     def test_returns_last_error_after_exhausting_retries(self):
-        with patch("understanding_agent.api_utils._groq_request_once",
+        with patch("understanding_agent.just_dance._request_once",
                    return_value=(0, "timeout")) as mock_req, \
              patch("time.sleep"):
-            status, body = call_groq_api("key", {"model": "m"}, retries=2)
+            status, body = call_llm("key", {"model": "m"}, retries=2)
         self.assertEqual(status, 0)
         self.assertEqual(mock_req.call_count, 3)
         self.assertEqual(body, "timeout")
 
     def test_no_key_short_circuits(self):
-        status, body = call_groq_api("", {"model": "m"})
+        status, body = call_llm("", {"model": "m"})
         self.assertEqual(status, 0)
         self.assertIn("GROQ_API_KEY", body)
 
@@ -72,11 +72,11 @@ class TestApiRetry(unittest.TestCase):
 class TestApiKeyLoading(unittest.TestCase):
     def test_nous_env_var_wins(self):
         with patch.dict(os.environ, {"NOUS_API_KEY": "from-nous-env"}):
-            self.assertEqual(load_nous_api_key(), "from-nous-env")
+            self.assertEqual(load_api_key(), "from-nous-env")
 
     def test_env_var_wins(self):
         with patch.dict(os.environ, {"GROQ_API_KEY": "from-env"}):
-            self.assertEqual(load_groq_api_key(), "from-env")
+            self.assertEqual(load_api_key(), "from-env")
 
     def test_reads_env_file_in_cwd(self):
         import tempfile
@@ -89,7 +89,7 @@ class TestApiKeyLoading(unittest.TestCase):
                  patch("os.path.expanduser", lambda p: "/nonexistent-home"):
                 # Patch getcwd too since abspath uses it
                 with patch("os.getcwd", return_value=d):
-                    self.assertEqual(load_groq_api_key(), "from-file")
+                    self.assertEqual(load_api_key(), "from-file")
 
     def test_never_reads_shell_configs(self):
         # Ensure ~/.zshrc etc. are never touched even if present
@@ -98,7 +98,7 @@ class TestApiKeyLoading(unittest.TestCase):
              patch("os.getcwd", return_value="/nonexistent/dir"), \
              patch("os.path.expanduser", lambda p: "/tmp/fake-home") as exp:
             with patch("builtins.open", side_effect=FileNotFoundError()):
-                result = load_groq_api_key()
+                result = load_api_key()
         self.assertEqual(result, "")
 
 
@@ -110,21 +110,21 @@ class TestAnswerEvaluator(unittest.TestCase):
         self.context = {"is_large_change": False, "structured_changes": []}
 
     def test_empty_answer_short_circuits_without_llm(self):
-        with patch("understanding_agent.answer_evaluator.load_api_key") as mock_key:
+        with patch("understanding_agent.judas.load_api_key") as mock_key:
             res = self.evaluator.evaluate(
                 self.q, {"answer": "", "status": "timeout"}, self.context, {})
         self.assertEqual(res.score, 0)
         mock_key.assert_not_called()
 
     def test_whitespace_answer_short_circuits(self):
-        with patch("understanding_agent.answer_evaluator.load_api_key") as mock_key:
+        with patch("understanding_agent.judas.load_api_key") as mock_key:
             res = self.evaluator.evaluate(
                 self.q, {"answer": "   ", "status": "answered"}, self.context, {})
         self.assertEqual(res.score, 0)
         mock_key.assert_not_called()
 
     def test_api_failure_fails_open_unscored(self):
-        with patch("understanding_agent.answer_evaluator.load_api_key", return_value="k"), \
+        with patch("understanding_agent.judas.load_api_key", return_value="k"), \
              patch.object(AnswerEvaluator, "_call_llm", return_value={}):
             res = self.evaluator.evaluate(
                 self.q, {"answer": "my answer", "status": "answered"}, self.context, {})
@@ -136,7 +136,7 @@ class TestAnswerEvaluator(unittest.TestCase):
 
     def test_api_failure_blocks_in_closed_mode(self):
         with patch.dict(os.environ, {"UNDERSTANDING_AGENT_FAIL_MODE": "closed"}), \
-             patch("understanding_agent.answer_evaluator.load_api_key", return_value="k"), \
+             patch("understanding_agent.judas.load_api_key", return_value="k"), \
              patch.object(AnswerEvaluator, "_call_llm", return_value={}):
             res = self.evaluator.evaluate(
                 self.q, {"answer": "my answer", "status": "answered"}, self.context, {})
@@ -145,7 +145,7 @@ class TestAnswerEvaluator(unittest.TestCase):
         self.assertIn("FAIL_MODE", res.evaluation)
 
     def test_no_key_fails_open_unscored(self):
-        with patch("understanding_agent.answer_evaluator.load_api_key", return_value=""):
+        with patch("understanding_agent.judas.load_api_key", return_value=""):
             res = self.evaluator.evaluate(
                 self.q, {"answer": "my answer", "status": "answered"}, self.context, {})
         self.assertEqual(res.score, 0)
@@ -155,7 +155,7 @@ class TestAnswerEvaluator(unittest.TestCase):
 
     def test_no_key_blocks_in_closed_mode(self):
         with patch.dict(os.environ, {"UNDERSTANDING_AGENT_FAIL_MODE": "closed"}), \
-             patch("understanding_agent.answer_evaluator.load_api_key", return_value=""):
+             patch("understanding_agent.judas.load_api_key", return_value=""):
             res = self.evaluator.evaluate(
                 self.q, {"answer": "my answer", "status": "answered"}, self.context, {})
         self.assertEqual(res.score, 0)
@@ -163,7 +163,7 @@ class TestAnswerEvaluator(unittest.TestCase):
         self.assertIn("FAIL_MODE", res.evaluation)
 
     def test_unscored_result_serializes_to_session(self):
-        with patch("understanding_agent.answer_evaluator.load_api_key", return_value=""):
+        with patch("understanding_agent.judas.load_api_key", return_value=""):
             res = self.evaluator.evaluate(
                 self.q, {"answer": "my answer", "status": "answered"}, self.context, {})
         d = res.to_dict()
@@ -173,7 +173,7 @@ class TestAnswerEvaluator(unittest.TestCase):
 
     def test_successful_llm_result_passthrough(self):
         llm_result = {"score": 82, "evaluation": "good", "missing_concepts": ["locking"]}
-        with patch("understanding_agent.answer_evaluator.load_api_key", return_value="k"), \
+        with patch("understanding_agent.judas.load_api_key", return_value="k"), \
              patch.object(AnswerEvaluator, "_call_llm", return_value=llm_result):
             res = self.evaluator.evaluate(
                 self.q, {"answer": "my answer", "status": "answered"}, self.context, {})
@@ -192,7 +192,7 @@ class TestAnswerEvaluator(unittest.TestCase):
         good_answer = {
             "answer": "risk is that it is not modular and dependency injectable, causing cascading failure at runtime"
         }
-        with patch("understanding_agent.answer_evaluator.load_api_key", return_value="k"), \
+        with patch("understanding_agent.judas.load_api_key", return_value="k"), \
              patch.object(AnswerEvaluator, "_call_llm", return_value={}):
             res = self.evaluator.evaluate(question, good_answer, self.context, {})
         self.assertEqual(res.score, 0)
@@ -204,7 +204,7 @@ class TestAnswerEvaluator(unittest.TestCase):
             "question": "Why?",
             "expected_concepts": ["modular", "coupling"]
         }
-        with patch("understanding_agent.answer_evaluator.load_api_key", return_value="k"), \
+        with patch("understanding_agent.judas.load_api_key", return_value="k"), \
              patch.object(AnswerEvaluator, "_call_llm", return_value={}):
             res = self.evaluator.evaluate(question, {"answer": "idk"}, self.context, {})
         self.assertLessEqual(res.score, 15)
@@ -242,7 +242,7 @@ class TestServerClient(unittest.TestCase):
 
 class TestFollowUpGenerator(unittest.TestCase):
     def test_offline_fallback_question(self):
-        from understanding_agent.followup_generator import FollowUpGenerator
+        from understanding_agent.million_reasons import FollowUpGenerator
         gen = FollowUpGenerator()
         result = gen.generate(
             {"question": "What happens on failure?"},

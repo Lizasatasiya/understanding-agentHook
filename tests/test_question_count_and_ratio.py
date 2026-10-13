@@ -1,5 +1,5 @@
 import unittest
-from understanding_agent.question_generator import QuestionGenerator
+from understanding_agent.poker_face import QuestionGenerator
 
 
 class TestQuestionCountAndRatio(unittest.TestCase):

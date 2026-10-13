@@ -2,8 +2,8 @@ import unittest
 from unittest.mock import patch
 import os
 
-from understanding_agent.api_utils import call_nous_api, _is_meaningful_response, _extract_message_text
-from understanding_agent.llm_manager import thinking_disabled, thinking_control_params
+from understanding_agent.just_dance import call_llm, _is_meaningful_response, _extract_message_text
+from understanding_agent.chromatica import thinking_disabled, thinking_control_params
 
 
 def _ok_body(content):
@@ -47,8 +47,8 @@ class TestThinkingControl(unittest.TestCase):
             seen.update(payload)
             return 200, _ok_body("[{\"question\": \"Why?\"}]")
         with patch.dict(os.environ, {"UNDERSTANDING_AGENT_PROVIDER": "nous"}), \
-             patch("understanding_agent.api_utils._groq_request_once", side_effect=fake_request):
-            call_nous_api("k", {"model": "m"})
+             patch("understanding_agent.just_dance._request_once", side_effect=fake_request):
+            call_llm("k", {"model": "m"})
         self.assertEqual(seen.get("reasoning_effort"), "none")
 
 
@@ -70,17 +70,17 @@ class TestEmptyContentRetry(unittest.TestCase):
 
     def test_call_retries_on_empty_content_then_succeeds(self):
         responses = [(200, _empty_body()), (200, _ok_body("[{\"question\": \"Why?\"}]"))]
-        with patch("understanding_agent.api_utils._groq_request_once",
+        with patch("understanding_agent.just_dance._request_once",
                    side_effect=responses) as mock_req, patch("time.sleep"):
-            status, body = call_nous_api("k", {"model": "m"})
+            status, body = call_llm("k", {"model": "m"})
         self.assertEqual(status, 200)
         self.assertIn("Why?", body)
         self.assertEqual(mock_req.call_count, 2)
 
     def test_call_returns_last_empty_body_after_exhausting_retries(self):
-        with patch("understanding_agent.api_utils._groq_request_once",
+        with patch("understanding_agent.just_dance._request_once",
                    return_value=(200, _empty_body())) as mock_req, patch("time.sleep"):
-            status, body = call_nous_api("k", {"model": "m"}, retries=2)
+            status, body = call_llm("k", {"model": "m"}, retries=2)
         self.assertEqual(status, 200)
         self.assertEqual(mock_req.call_count, 3)
 

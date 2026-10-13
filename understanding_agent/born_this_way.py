@@ -1,10 +1,8 @@
-"""Detect the project's stack: languages, frameworks, and domains from manifest files.
+"""Born This Way — stack detection.
 
-Reads package.json, pyproject.toml, requirements.txt, *.csproj/*.sln (and other
-manifests) to determine what the project is built with. Everything downstream
-(question generation, security weighting, practice packs) keys off this.
+Your repo was born this way: languages, frameworks, and domains detected
+from its manifests (package.json, pyproject, *.csproj, go.mod, ...).
 """
-
 import json
 import os
 import re

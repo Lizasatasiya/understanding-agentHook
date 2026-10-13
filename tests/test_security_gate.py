@@ -2,7 +2,7 @@ import unittest
 import os
 from unittest.mock import patch
 
-from understanding_agent.security_lens import (
+from understanding_agent.paparazzi import (
     SecurityLens, security_gate_enabled,
 )
 

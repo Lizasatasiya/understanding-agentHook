@@ -2,11 +2,11 @@ import unittest
 from unittest.mock import patch
 import os
 
-from understanding_agent.llm_manager import (
+from understanding_agent.chromatica import (
     PROVIDER_PRESETS, get_provider, resolve_base_url, resolve_model,
     resolve_api_key, LLMManager,
 )
-from understanding_agent.api_utils import get_base_url, get_model, load_nous_api_key
+from understanding_agent.just_dance import get_base_url, get_model, load_api_key
 
 
 def _clean_env(f):
@@ -154,7 +154,7 @@ class TestApiUtilsDelegation(unittest.TestCase):
     def test_load_key_delegates_to_provider_env(self):
         os.environ["UNDERSTANDING_AGENT_PROVIDER"] = "openai"
         os.environ["OPENAI_API_KEY"] = "sk-openai-key"
-        self.assertEqual(load_nous_api_key(), "sk-openai-key")
+        self.assertEqual(load_api_key(), "sk-openai-key")
 
 
 if __name__ == "__main__":

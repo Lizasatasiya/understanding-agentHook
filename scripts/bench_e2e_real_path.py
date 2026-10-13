@@ -9,9 +9,9 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from understanding_agent.api_utils import load_nous_api_key  # noqa: E402
-from understanding_agent.question_generator import QuestionGenerator  # noqa: E402
-from understanding_agent.change_summary import ChangeSummary  # noqa: E402
+from understanding_agent.just_dance import load_api_key  # noqa: E402
+from understanding_agent.poker_face import QuestionGenerator  # noqa: E402
+from understanding_agent.shallow import ChangeSummary  # noqa: E402
 from bench_llm_latency import realistic_question_prompt  # noqa: E402
 
 
@@ -39,7 +39,7 @@ def build_context():
 
 def run_once(model):
     os.environ["UNDERSTANDING_AGENT_MODEL"] = model
-    import understanding_agent.api_utils as au
+    import understanding_agent.just_dance as au
     ctx = build_context()
     gen = QuestionGenerator()
 
@@ -62,7 +62,7 @@ def run_once(model):
 
 
 def main():
-    key = load_nous_api_key()
+    key = load_api_key()
     if not key:
         print("no key; abort")
         sys.exit(1)
