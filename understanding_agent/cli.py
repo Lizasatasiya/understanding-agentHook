@@ -572,8 +572,10 @@ def main():
             _write_state(state_file, attempt_key, head_commit, commit_msg,
                          diff_hash, attempts, valid_questions)
 
-            # If user gives wrong answer (< 25%), ask no next questions and abort
-            if final_score < 25:
+            # If user gives wrong answer (< 25%), ask no next questions and abort.
+            # An unscored fallback answer (LLM unavailable) is never treated as
+            # wrong: it was recorded, not scored, so it must not abort here.
+            if final_score < 25 and not getattr(eval_res, "unscored", False):
                 print(f"\n{BOLD}{RED}Commit aborted. Please review the code and then try again.{RESET}\n")
                 
                 try:
@@ -610,8 +612,10 @@ def main():
         # fell back to the offline scorer.
         verification = "llm-verified" if (questions_llm_generated and not any_eval_unverified) else "llm-unverified"
 
-        # When API is not working and fallback questions are being asked,
-        # if all answers have been given, do not check score and allow commit.
+        # When the API is unavailable, fallback questions are asked and the
+        # answers are recorded WITHOUT a score (user-mandated contract): a
+        # substantive answer to every question lets the commit proceed, and
+        # the session/terminal both say the pass is UNVERIFIED.
         fallback_questions_asked = (not questions_llm_generated) or any(q.get("is_fallback", False) for q in valid_questions)
         api_not_working = (not load_nous_api_key()) or (verification == "llm-unverified") or any_eval_unverified or (not questions_llm_generated)
         all_answers_given = (
@@ -627,7 +631,11 @@ def main():
 
         attempt_status = "PASSED" if is_passed else "FAILED"
         if is_passed:
-            print(f"\n{BOLD}{GREEN}Overall Understanding: Verified{RESET}")
+            if verification == "llm-unverified":
+                print(f"\n{BOLD}{GREEN}Overall Understanding: Recorded (not LLM-scored){RESET}")
+                print(f"{YELLOW}⚠ LLM unreachable — answers were not LLM-evaluated; commit marked UNVERIFIED in dashboard.{RESET}")
+            else:
+                print(f"\n{BOLD}{GREEN}Overall Understanding: Verified{RESET}")
         else:
             print(f"\n{BOLD}{RED}Overall Understanding: Insufficient{RESET}")
 

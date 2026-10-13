@@ -110,60 +110,80 @@ class TestAnswerEvaluator(unittest.TestCase):
         self.context = {"is_large_change": False, "structured_changes": []}
 
     def test_empty_answer_short_circuits_without_llm(self):
-        with patch("understanding_agent.answer_evaluator.load_groq_api_key") as mock_key:
+        with patch("understanding_agent.answer_evaluator.load_api_key") as mock_key:
             res = self.evaluator.evaluate(
                 self.q, {"answer": "", "status": "timeout"}, self.context, {})
         self.assertEqual(res.score, 0)
         mock_key.assert_not_called()
 
     def test_whitespace_answer_short_circuits(self):
-        with patch("understanding_agent.answer_evaluator.load_groq_api_key") as mock_key:
+        with patch("understanding_agent.answer_evaluator.load_api_key") as mock_key:
             res = self.evaluator.evaluate(
                 self.q, {"answer": "   ", "status": "answered"}, self.context, {})
         self.assertEqual(res.score, 0)
         mock_key.assert_not_called()
 
-    def test_api_failure_fails_open_by_default(self):
-        with patch("understanding_agent.answer_evaluator.load_groq_api_key", return_value="k"), \
-             patch.object(AnswerEvaluator, "_call_groq", return_value={}):
+    def test_api_failure_fails_open_unscored(self):
+        with patch("understanding_agent.answer_evaluator.load_api_key", return_value="k"), \
+             patch.object(AnswerEvaluator, "_call_llm", return_value={}):
             res = self.evaluator.evaluate(
                 self.q, {"answer": "my answer", "status": "answered"}, self.context, {})
-        self.assertEqual(res.score, 76)
+        self.assertEqual(res.score, 0)
+        self.assertTrue(res.unscored)
+        self.assertFalse(res.llm_verified)
+        self.assertFalse(res.follow_up_required)
         self.assertIn("failing open", res.evaluation)
 
     def test_api_failure_blocks_in_closed_mode(self):
         with patch.dict(os.environ, {"UNDERSTANDING_AGENT_FAIL_MODE": "closed"}), \
-             patch("understanding_agent.answer_evaluator.load_groq_api_key", return_value="k"), \
-             patch.object(AnswerEvaluator, "_call_groq", return_value={}):
-            res = self.evaluator.evaluate(
-                self.q, {"answer": "my answer", "status": "answered"}, self.context, {})
-        self.assertEqual(res.score, 50)
-
-    def test_no_key_fails_open_by_default(self):
-        with patch("understanding_agent.answer_evaluator.load_groq_api_key", return_value=""):
-            res = self.evaluator.evaluate(
-                self.q, {"answer": "my answer", "status": "answered"}, self.context, {})
-        self.assertEqual(res.score, 76)
-
-    def test_no_key_blocks_in_closed_mode(self):
-        with patch.dict(os.environ, {"UNDERSTANDING_AGENT_FAIL_MODE": "closed"}), \
-             patch("understanding_agent.answer_evaluator.load_groq_api_key", return_value=""):
+             patch("understanding_agent.answer_evaluator.load_api_key", return_value="k"), \
+             patch.object(AnswerEvaluator, "_call_llm", return_value={}):
             res = self.evaluator.evaluate(
                 self.q, {"answer": "my answer", "status": "answered"}, self.context, {})
         self.assertEqual(res.score, 0)
+        self.assertFalse(res.unscored)
         self.assertIn("FAIL_MODE", res.evaluation)
+
+    def test_no_key_fails_open_unscored(self):
+        with patch("understanding_agent.answer_evaluator.load_api_key", return_value=""):
+            res = self.evaluator.evaluate(
+                self.q, {"answer": "my answer", "status": "answered"}, self.context, {})
+        self.assertEqual(res.score, 0)
+        self.assertTrue(res.unscored)
+        self.assertFalse(res.llm_verified)
+        self.assertFalse(res.follow_up_required)
+
+    def test_no_key_blocks_in_closed_mode(self):
+        with patch.dict(os.environ, {"UNDERSTANDING_AGENT_FAIL_MODE": "closed"}), \
+             patch("understanding_agent.answer_evaluator.load_api_key", return_value=""):
+            res = self.evaluator.evaluate(
+                self.q, {"answer": "my answer", "status": "answered"}, self.context, {})
+        self.assertEqual(res.score, 0)
+        self.assertFalse(res.unscored)
+        self.assertIn("FAIL_MODE", res.evaluation)
+
+    def test_unscored_result_serializes_to_session(self):
+        with patch("understanding_agent.answer_evaluator.load_api_key", return_value=""):
+            res = self.evaluator.evaluate(
+                self.q, {"answer": "my answer", "status": "answered"}, self.context, {})
+        d = res.to_dict()
+        self.assertTrue(d["unscored"])
+        self.assertFalse(d["llm_verified"])
+        self.assertEqual(d["score"], 0)
 
     def test_successful_llm_result_passthrough(self):
         llm_result = {"score": 82, "evaluation": "good", "missing_concepts": ["locking"]}
-        with patch("understanding_agent.answer_evaluator.load_groq_api_key", return_value="k"), \
-             patch.object(AnswerEvaluator, "_call_groq", return_value=llm_result):
+        with patch("understanding_agent.answer_evaluator.load_api_key", return_value="k"), \
+             patch.object(AnswerEvaluator, "_call_llm", return_value=llm_result):
             res = self.evaluator.evaluate(
                 self.q, {"answer": "my answer", "status": "answered"}, self.context, {})
         self.assertEqual(res.score, 82)
+        self.assertFalse(res.unscored)
+        self.assertTrue(res.llm_verified)
         self.assertTrue(res.follow_up_required)
         self.assertEqual(res.missing_concepts, ["locking"])
 
-    def test_fallback_evaluates_correct_answer_above_76(self):
+    def test_fallback_substantive_answer_is_unscored(self):
         question = {
             "question": "What are the runtime risks of growing function length?",
             "expected_concepts": ["modular", "dependency injection", "cascading failure", "testability"],
@@ -172,23 +192,24 @@ class TestAnswerEvaluator(unittest.TestCase):
         good_answer = {
             "answer": "risk is that it is not modular and dependency injectable, causing cascading failure at runtime"
         }
-        with patch("understanding_agent.answer_evaluator.load_groq_api_key", return_value="k"), \
-             patch.object(AnswerEvaluator, "_call_groq", return_value={}):
+        with patch("understanding_agent.answer_evaluator.load_api_key", return_value="k"), \
+             patch.object(AnswerEvaluator, "_call_llm", return_value={}):
             res = self.evaluator.evaluate(question, good_answer, self.context, {})
-        self.assertGreaterEqual(res.score, 85)
-        self.assertIn("modular", res.covered_concepts)
-        self.assertIn("cascading failure", res.covered_concepts)
+        self.assertEqual(res.score, 0)
+        self.assertTrue(res.unscored)
+        self.assertFalse(res.llm_verified)
 
     def test_fallback_evaluates_dismissive_answer_low(self):
         question = {
             "question": "Why?",
             "expected_concepts": ["modular", "coupling"]
         }
-        with patch("understanding_agent.answer_evaluator.load_groq_api_key", return_value="k"), \
-             patch.object(AnswerEvaluator, "_call_groq", return_value={}):
+        with patch("understanding_agent.answer_evaluator.load_api_key", return_value="k"), \
+             patch.object(AnswerEvaluator, "_call_llm", return_value={}):
             res = self.evaluator.evaluate(question, {"answer": "idk"}, self.context, {})
         self.assertLessEqual(res.score, 15)
-        self.assertTrue(res.follow_up_required)
+        self.assertFalse(res.unscored)
+        self.assertFalse(res.follow_up_required)
 
 
 class TestServerClient(unittest.TestCase):

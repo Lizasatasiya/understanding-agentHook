@@ -1,9 +1,6 @@
 from .evaluation_models import EvaluationResult
-from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, fail_open_enabled
+from .api_utils import load_api_key, extract_json, call_llm, get_model, fail_open_enabled
 import json
-
-# Backward compatibility alias for tests and external callers
-load_groq_api_key = load_nous_api_key
 
 class AnswerEvaluator:
     def evaluate(self, question: dict, answer: dict, context: dict, summary: dict, env: dict = None) -> EvaluationResult:
@@ -17,25 +14,21 @@ class AnswerEvaluator:
                 "llm_verified": False,
             })
 
-        # Check if load_groq_api_key or load_nous_api_key is patched by mock
-        if hasattr(load_groq_api_key, "assert_called") or hasattr(load_groq_api_key, "mock_calls"):
-            api_key = load_groq_api_key()
-        else:
-            api_key = load_nous_api_key()
+        api_key = load_api_key()
         if not api_key:
             # No key configured: fail open rather than fail the whole commit pipeline.
             if fail_open_enabled():
                 return self._evaluate_fallback(question, answer, is_offline=True)
             return EvaluationResult({
                 "score": 0,
-                "evaluation": "Cannot verify understanding: NOUS_API_KEY is not configured and UNDERSTANDING_AGENT_FAIL_MODE=closed.",
+                "evaluation": "Cannot verify understanding: no API key is configured and UNDERSTANDING_AGENT_FAIL_MODE=closed.",
                 "follow_up_required": False,
                 "missing_concepts": [],
                 "llm_verified": False,
             })
 
         prompt = self._build_prompt(question, answer, context, summary, env=env)
-        result_dict = self._call_groq(api_key, prompt)
+        result_dict = self._call_llm(api_key, prompt)
         if result_dict:
             return EvaluationResult(result_dict)
 
@@ -44,19 +37,24 @@ class AnswerEvaluator:
         # unless UNDERSTANDING_AGENT_FAIL_MODE=closed is explicitly set.
         if fail_open_enabled():
             return self._evaluate_fallback(question, answer, is_offline=False)
-        return EvaluationResult({"score": 50, "evaluation": "Failed to evaluate answer", "follow_up_required": False, "llm_verified": False})
+        return EvaluationResult({
+            "score": 0,
+            "evaluation": "LLM evaluation failed and UNDERSTANDING_AGENT_FAIL_MODE=closed — commit blocked.",
+            "follow_up_required": False,
+            "llm_verified": False,
+        })
 
     def _evaluate_fallback(self, question: dict, answer: dict, is_offline: bool = False) -> EvaluationResult:
-        """Minimal fallback used only when the LLM is completely unavailable.
+        """Used only when the LLM is completely unavailable.
 
-        Avoids hardcoded grade scores: if the answer is dismissive/empty it is
-        blocked; if the developer wrote something substantive we fail-open so a
-        network outage never silently blocks a commit.
+        No score is assigned on purpose (user-mandated contract): a
+        substantive answer is recorded and fails open; a dismissive or empty
+        answer aborts. Either way the session is stored as llm-unverified.
         """
         import re
         text = (answer.get("answer") or "").strip().lower()
         status_prefix = (
-            "Offline evaluation (no NOUS_API_KEY configured)."
+            "Offline evaluation (no API key configured)."
             if is_offline
             else "LLM evaluation unavailable (API error or timeout); failing open."
         )
@@ -86,57 +84,27 @@ class AnswerEvaluator:
                 "evaluation": f"{status_prefix} Answer is dismissive or lacks technical substance.",
                 "confidence": 0.9,
                 "follow_up_required": False,
+                "llm_verified": False,
+                "unscored": False,
             })
 
-        expected = question.get("expected_concepts") or []
-        covered = []
-        missing = []
-        for concept in expected:
-            c_lower = concept.lower()
-            tokens = re.findall(r"\b[a-z]{3,}\b", c_lower)
-            matched = False
-            for t in tokens:
-                root = t[:4] if len(t) >= 5 else t
-                if root in text:
-                    matched = True
-                    break
-            if matched:
-                covered.append(concept)
-            else:
-                missing.append(concept)
-
-        coverage_ratio = len(covered) / max(1, len(expected)) if expected else 0.5
-
-        if coverage_ratio >= 0.70:
-            score = 85 + int(min(10, (coverage_ratio - 0.70) * 33))
-            follow_up = False
-        elif coverage_ratio >= 0.40:
-            score = 70 + int((coverage_ratio - 0.40) * 20)
-            follow_up = True
-        else:
-            # Baseline fail-open score (76) for minimal concept match to pass commit gate
-            score = 76
-            follow_up = False
-
-        status_prefix = "Offline evaluation (no NOUS_API_KEY configured)." if is_offline else "LLM evaluation unavailable (API error or timeout); failing open."
-        eval_text = f"{status_prefix} Semantic fallback: covered {len(covered)}/{len(expected)} expected concepts."
-        if covered:
-            eval_text += f" Recognized: {', '.join(covered)}."
-        if missing:
-            eval_text += f" Missing: {', '.join(missing)}."
-
+        # Substantive answer, LLM unavailable: record it, assign NO score,
+        # let the commit proceed (fail-open). The session will carry
+        # verification="llm-unverified".
         return EvaluationResult({
-            "score": 75,
-            "technical_correctness": 28,
-            "code_understanding": 22,
-            "reasoning": 15,
-            "specificity": 10,
+            "score": 0,
+            "technical_correctness": 0,
+            "code_understanding": 0,
+            "reasoning": 0,
+            "specificity": 0,
             "covered_concepts": [],
             "missing_concepts": [],
             "incorrect_claims": [],
-            "evaluation": f"{status_prefix} Developer provided a substantive answer; LLM scoring unavailable — passing with reduced confidence.",
-            "confidence": 0.4,
-            "follow_up_required": True
+            "evaluation": f"{status_prefix} Answer recorded without an LLM score — marked UNVERIFIED, not scored.",
+            "confidence": 0.0,
+            "follow_up_required": False,
+            "llm_verified": False,
+            "unscored": True,
         })
 
     def _build_prompt(self, question: dict, answer: dict, context: dict, summary: dict, env: dict | None = None) -> str:
@@ -224,7 +192,7 @@ class AnswerEvaluator:
         ]
         return "\n".join(lines)
 
-    def _call_nous(self, api_key: str, prompt: str) -> dict:
+    def _call_llm(self, api_key: str, prompt: str) -> dict:
         payload = {
             "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
@@ -232,7 +200,7 @@ class AnswerEvaluator:
             "max_tokens": 450
         }
 
-        status, body = call_nous_api(api_key, payload, timeout=35)
+        status, body = call_llm(api_key, payload, timeout=35)
         if status != 200:
             return {}
 
@@ -257,4 +225,4 @@ class AnswerEvaluator:
             return {}
 
     def _call_groq(self, api_key: str, prompt: str) -> dict:
-        return self._call_nous(api_key, prompt)
+        return self._call_llm(api_key, prompt)

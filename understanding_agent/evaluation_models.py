@@ -18,11 +18,12 @@ class EvaluationResult:
         self.incorrect_claims = data.get("incorrect_claims", [])
         self.evaluation = data.get("evaluation", "")
         self.confidence = data.get("confidence", 0.0)
-        # True when this score came from an LLM evaluation rather than the
-        # offline/semantic fallback — the session is then not LLM-verified.
         self.llm_verified = bool(data.get("llm_verified", True))
+        # True when this result carries NO score on purpose: the LLM was
+        # unavailable, the answer was recorded, but no score was assigned.
+        # The session is then stored as llm-unverified.
+        self.unscored = bool(data.get("unscored", False))
 
-        
         # If there are missing concepts, or the prompt explicitly asked for follow up
         self.follow_up_required = bool(data.get("follow_up_required", len(self.missing_concepts) > 0))
 
@@ -39,5 +40,6 @@ class EvaluationResult:
             "evaluation": self.evaluation,
             "confidence": self.confidence,
             "follow_up_required": self.follow_up_required,
-            "llm_verified": self.llm_verified
+            "llm_verified": self.llm_verified,
+            "unscored": self.unscored
         }

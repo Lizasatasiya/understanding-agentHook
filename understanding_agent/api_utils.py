@@ -301,8 +301,10 @@ def _groq_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[
     return _nous_request_once(api_key, payload_dict, timeout)
 
 
-# Backward compatibility alias
+# Backward compatibility aliases
 call_groq_api = call_nous_api
+# Canonical name going forward: provider-agnostic transport call
+call_llm = call_nous_api
 
 
 def _nous_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[int, str]:
