@@ -14,6 +14,7 @@ import ssl
 from urllib.parse import urlparse
 
 from .chromatica import resolve_base_url, resolve_model, resolve_api_key, get_provider, PROVIDER_PRESETS, thinking_control_params
+from .chromatica import load_api_key as chromatica_load_api_key
 
 
 def get_base_url() -> str:
@@ -89,60 +90,8 @@ def _env_search_dirs():
 
 
 def load_api_key() -> str:
-    """Load the active provider's API key from the environment or .env files.
-
-    Provider-aware, resolved via chromatica:
-      1. UNDERSTANDING_AGENT_API_KEY / the provider preset's env vars
-      2. .env / .env.local in cwd, parents, git root, ~/.config
-      3. Legacy NOUS_* then GROQ_API_KEY names, for backward compatibility
-    """
-    # 1. Environment variables (process env takes precedence over disk files)
-    env_key = resolve_api_key()
-    if env_key:
-        return env_key
-
-    # Legacy GROQ_API_KEY env var outranks any key found in .env files
-    # (preserves the pre-manager precedence: all env vars before all files).
-    groq_env = os.environ.get("GROQ_API_KEY", "").strip()
-    if groq_env:
-        return groq_env
-
-    provider = get_provider()
-    preset = PROVIDER_PRESETS[provider]
-    file_key_names = (preset["api_key_env"],) + preset["alt_api_key_envs"] + ("UNDERSTANDING_AGENT_API_KEY",)
-
-    search_dirs = _env_search_dirs()
-
-    # 2. Check .env files for the provider's key names first
-    for d in search_dirs:
-        for fname in (".env", ".env.local"):
-            key = _parse_key_from_file(os.path.join(d, fname), file_key_names)
-            if key:
-                return key
-
-    key = _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), file_key_names)
-    if key:
-        return key
-
-    # 3. Legacy fallback names (NOUS_* then GROQ) for pre-manager setups
-    legacy_nous = ("NOUS_API_KEY", "NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY")
-    for d in search_dirs:
-        for fname in (".env", ".env.local"):
-            key = _parse_key_from_file(os.path.join(d, fname), legacy_nous)
-            if key:
-                return key
-
-    key = _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), legacy_nous)
-    if key:
-        return key
-
-    for d in search_dirs:
-        for fname in (".env", ".env.local"):
-            key = _parse_key_from_file(os.path.join(d, fname), ("GROQ_API_KEY",))
-            if key:
-                return key
-
-    return _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), ("GROQ_API_KEY",))
+    """Delegates to chromatica — the single home for key resolution."""
+    return chromatica_load_api_key()
 
 
 def _safe_json_loads(s: str):

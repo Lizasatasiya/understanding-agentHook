@@ -144,6 +144,119 @@ def resolve_api_key() -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
+# Key resolution ladder (the single home)
+# ---------------------------------------------------------------------------
+
+def _parse_key_from_file(filepath: str, preferred_keys: tuple) -> str:
+    """Extract specified keys from an env file (KEY=VALUE or export KEY=VALUE)."""
+    if not filepath or not os.path.exists(filepath):
+        return ""
+    try:
+        found_keys = {}
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("export "):
+                    line = line[7:].strip()
+                for key_name in preferred_keys:
+                    if line.startswith(key_name):
+                        parts = line.split("=", 1)
+                        if len(parts) == 2 and parts[0].strip() == key_name:
+                            val = parts[1].strip()
+                            if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                                val = val[1:-1].strip()
+                            if val:
+                                found_keys[key_name] = val
+        for pref in preferred_keys:
+            if pref in found_keys:
+                return found_keys[pref]
+    except Exception:
+        pass
+    return ""
+
+
+def _env_search_dirs():
+    """Directories searched for .env / .env.local: cwd, its parents, git root."""
+    import subprocess
+    search_dirs = []
+    cur = os.path.abspath(os.getcwd())
+    for _ in range(4):
+        search_dirs.append(cur)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+
+    try:
+        repo_root = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            text=True, stderr=subprocess.DEVNULL
+        ).strip()
+        if repo_root and repo_root not in search_dirs:
+            search_dirs.append(repo_root)
+    except Exception:
+        pass
+    return search_dirs
+
+
+def load_api_key() -> str:
+    """Resolve the active provider's API key — ONE documented ladder.
+
+    1. Process environment: UNDERSTANDING_AGENT_API_KEY, then the active
+       provider preset's env vars, then legacy GROQ_API_KEY
+       (all env vars outrank all disk files).
+    2. .env / .env.local in cwd, parents, and git root — the provider's
+       key names first, then legacy NOUS_* then GROQ names.
+    3. ~/.config/understanding-agent/.env — same name order.
+    """
+    # 1. Environment variables
+    env_key = resolve_api_key()
+    if env_key:
+        return env_key
+
+    groq_env = os.environ.get("GROQ_API_KEY", "").strip()
+    if groq_env:
+        return groq_env
+
+    provider = get_provider()
+    preset = PROVIDER_PRESETS[provider]
+    file_key_names = (preset["api_key_env"],) + preset["alt_api_key_envs"] + ("UNDERSTANDING_AGENT_API_KEY",)
+    legacy_nous = ("NOUS_API_KEY", "NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY")
+
+    search_dirs = _env_search_dirs()
+
+    def _search_files(key_names):
+        for d in search_dirs:
+            for fname in (".env", ".env.local"):
+                key = _parse_key_from_file(os.path.join(d, fname), key_names)
+                if key:
+                    return key
+        return ""
+
+    # 2. .env files: provider names first, then legacy names
+    key = _search_files(file_key_names)
+    if key:
+        return key
+    key = _search_files(legacy_nous)
+    if key:
+        return key
+    key = _search_files(("GROQ_API_KEY",))
+    if key:
+        return key
+
+    # 3. Central user config
+    central = os.path.expanduser("~/.config/understanding-agent/.env")
+    for names in (file_key_names, legacy_nous, ("GROQ_API_KEY",)):
+        key = _parse_key_from_file(central, names)
+        if key:
+            return key
+
+    return ""
+
+
 class LLMManager:
     """Single entry point for LLM endpoint configuration.
 
