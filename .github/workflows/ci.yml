@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.12", "3.14"]
+    runs-on: ${{ matrix.os }}
+    env:
+      # No LLM calls in CI: the suite exercises deterministic layers and
+      # mocked transport; telemetry off; gate ON to prove blocking paths.
+      UNDERSTANDING_AGENT_TELEMETRY_URL: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit suite
+        run: python -m unittest discover -s tests
+      - name: E2E — credential gate first (scratch git repo)
+        run: python tests/e2e_gate_first.py
+      - name: E2E — security gate via real git commit
+        run: python tests/e2e_security_gate.py
+      - name: E2E — polyglot fixture (TS/C#/Python)
+        run: python tests/e2e_polyglot_fixture.py

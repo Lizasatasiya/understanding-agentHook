@@ -160,3 +160,10 @@ Scope: fix overreach/false-positive shapes without changing thresholds.
 - cli.py main() decomposition.
 - answer_evaluator mock-detection hack (hasattr assert_called) — needed by
   existing tests; removing requires rewriting those tests' patch targets.
+
+## Addendum (2026-10): superseded by PRODUCTION_PLAN.md
+
+The workstreams above are complete. The production restructure
+(fallback no-score contract, Chromatica module rename, payload/schema
+unification, key-resolution consolidation, packaging/CI/docs) is tracked
+in PRODUCTION_PLAN.md.

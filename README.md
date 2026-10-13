@@ -88,12 +88,12 @@ Within every scale, ~80% of questions target the actual diff and at most ~20% ad
 ## 🚀 Key Features
 
 - **🎙️ Voice-First Interaction**: Reads questions aloud (`say`) and transcribes developer speech in real-time using local OpenAI Whisper (`sounddevice` / `pyaudio`). Press **[Tab]** to toggle speech capture.
-- **🔌 Central LLM Provider Manager**: One module (`llm_manager.py`) resolves provider, model, base URL, and API key. Switch between Nous Research, Groq, OpenAI, OpenRouter, Together, Ollama (local), or ANY OpenAI-compatible endpoint by changing ONE environment variable — no code changes, no five-variable dances.
+- **🔌 Central LLM Provider Manager**: One module (`chromatica.py`) resolves provider, model, base URL, and API key. Switch between Nous Research, Groq, OpenAI, OpenRouter, Together, Ollama (local), or ANY OpenAI-compatible endpoint by changing ONE environment variable — no code changes, no five-variable dances.
 - **⚡ Fast, Resilient Execution**: Sub-second question generation with the configured provider; retries with exponential backoff on transient errors; robust JSON extraction from reasoning models.
 - **🎯 Multi-Language Change Analysis**: Function-level change detection across 15+ languages — native Python `ast` for Python, line-anchored definition matching for TS/JS/C#/Go/Rust/Java and more. Only genuinely-touched functions become questions.
 - **🛡️ Security Lens (deterministic)**: Every staged change is scanned for security-relevant surfaces — injection sinks, auth flows, hardcoded secrets, unsafe deserialization, command injection, LLM-output trust, disabled TLS, cleartext HTTP. Security-relevant changes always get one targeted security question (never a hard block). **Exception: stealable credentials hard-block the commit BEFORE any prompt or LLM call** — git history is permanent, so no answer can make committing a real credential safe. The gate covers: 25+ vendor-pinned token formats (AWS, Google, Stripe, Anthropic, GitHub, GitLab, npm, PyPI, Slack, Telegram, SendGrid, Twilio, ...), private key material, connection strings with inline credentials (`postgres://user:***@...`), basic-auth URLs, high-entropy values assigned to secret-named variables (Shannon-entropy gated, with a `# pragma: allow-secret` escape hatch), and **staged key files** (`.pem`, `.p12`, `id_rsa`, `.npmrc`, `.netrc`, ... — detected by filename alone, contents never read). Exact vendor formats block even in test files (a real leaked key is real anywhere); fixture-shaped values in tests stay exempt. The gate scans the raw staged diff (module-level code included), redacts secrets in its output, suggests `git restore --staged <file>` per finding, calls out staged-but-gitignored files, and can be disabled per-commit with `UNDERSTANDING_AGENT_SECURITY_GATE=off`.
 - **🚫 No Wasted LLM Calls**: The credential gate and coding-standards audit run BEFORE any LLM call. A blocked credential or a "fix violations" choice costs zero API spend. Same-diff retries reuse cached questions.
-- **🔍 Honest Verification Marking**: If the LLM is unreachable, the hook fails open with fallback questions, but the session is recorded as `llm-unverified` and the terminal says so — dashboards never show an offline fallback pass as a verified pass.
+- **🔍 Honest Verification Marking**: If the LLM is unreachable, the hook asks its offline fallback questions and records your answers **without assigning any score** — a substantive answer lets the commit proceed (fail-open), the session is stored as `llm-unverified`, and the terminal says so. Dashboards never show an offline fallback pass as a verified pass. Strict teams set `UNDERSTANDING_AGENT_FAIL_MODE=closed` to block instead.
 - **🔬 Evidence-Driven Questions**: Reuses your already-installed scanners (semgrep, gitleaks) and test-gap analysis as *question evidence* — scanner findings become "explain this finding" questions, inheriting scanner recall without false-positive-blocking commits.
 - **📚 Domain Practice Packs**: Framework- and domain-aware best-practice topics: React state/effect invariants, NestJS DTO validation boundaries, .NET async/CancellationToken and EF Core behavior, ML train/test separation and reproducibility, data-pipeline idempotency, SQL migration safety.
 - **🔄 Smart State Persistence**: Saves attempts in `.git/understanding_agent_state.json` hashed against the staged diff. If an attempt fails, developers can retry without regenerating or paying for redundant API calls. The sessions log is auto-pruned (default: last 500 sessions).
@@ -120,39 +120,45 @@ Within every scale, ~80% of questions target the actual diff and at most ~20% ad
 
 ## 📂 Project Structure & Components
 
+Every module is named for a Lady Gaga song — the first line of each docstring states the module's plain-words job; the Gaga is flavor, never a comprehension tax.
+
 ```text
 understanding-agent-hook/
-├── .pre-commit-hooks.yaml      # Hook definitions for the pre-commit framework
-├── LICENSE                     # MIT License
-├── PLAN.md                     # PoC → production hardening plan & status
-├── setup.py                    # Package manifest & console script entrypoints
-├── tests/                      # 160+ unit and e2e tests (gate matrix, standards, evaluator, attempts)
+├── .github/workflows/ci.yml  # CI: unit suite + 3 e2e suites (ubuntu/macos × py3.12/3.14)
+├── .pre-commit-hooks.yaml    # Hook definitions for the pre-commit framework
+├── pyproject.toml            # Canonical package manifest (console scripts, extras)
+├── setup.py                  # Thin shim for legacy tooling
+├── LICENSE                   # MIT License
+├── PLAN.md                   # PoC → production hardening plan & status (historic)
+├── PRODUCTION_PLAN.md        # Production restructure plan ("Chromatica track")
+├── scripts/                  # LLM latency/capture benches (bench_*.py)
+├── tests/                    # 180 unit tests + 3 e2e suites (gate, security, polyglot)
 └── understanding_agent/
     ├── __init__.py
-    ├── cli.py                  # CLI orchestrator & pre-commit entrypoint
-    ├── change_detector.py      # Multi-language git diff parser & scale metrics
-    ├── language_support.py     # Per-language function extraction (TS/JS/C#/Go/Rust/Java/...)
-    ├── stack_detector.py       # Manifest-driven language/framework/domain detection
-    ├── security_lens.py        # Deterministic security classifier + credential gate
-    ├── coding_standards.py     # Deterministic coding-standards audit (changed lines only)
-    ├── evidence_collector.py   # semgrep/gitleaks/test-gap evidence as question input
-    ├── practice_packs.py       # Domain best-practice question topics
-    ├── code_graph.py           # Dependency graph analyzer (caller/callee relations)
-    ├── context_builder.py     # Diff extractor & semantic skeletonizer (<35 lines)
-    ├── change_summary.py       # Single-pass unified commit summarizer
-    ├── question_generator.py   # Scale-aware question generator with hints & macro prompts
-    ├── llm_manager.py          # Central LLM provider manager (presets, plug-and-play)
-    ├── api_utils.py            # Resilient HTTP client, retry, & JSON extractors
-    ├── interaction.py          # Terminal UI, timer, TTS ('say'), & Dictation voice input
-    ├── answer_evaluator.py     # Multi-metric semantic answer scoring
-    ├── followup_generator.py   # Targeted follow-up question generator
-    ├── evaluation_models.py    # Dataclasses for evaluation scoring
-    ├── environment_detector.py # Repository, branch, and author detector
-    ├── commit_context.py       # Head-commit / attempt-key helpers
-    ├── session_store.py        # Session persistence, reconciliation & pruning
-    ├── server.py               # FastAPI dashboard API (opt-in)
-    ├── server_client.py        # Opt-in telemetry client (self-hosted dashboard)
-    └── ui/                     # Vanilla JS/CSS single-page dashboard (index.html, app.js, style.css)
+    ├── applause.py            # "I live for the applause" — showrunner entrypoint (pre-commit main)
+    ├── gypsy.py               # environment detection: which venue tonight (repo/branch/author)
+    ├── enigma.py              # staged-change detection: multi-language diff parser & scale metrics
+    ├── scheisse.py            # per-language function extraction (TS/JS/C#/Go/Rust/Java/...)
+    ├── born_this_way.py      # stack detection from manifests (package.json, pyproject, *.csproj, ...)
+    ├── paparazzi.py           # security lens + THE credential gate (hard-blocks stealable secrets)
+    ├── teeth.py               # deterministic coding-standards audit (changed lines only)
+    ├── rain_on_me.py          # scanner evidence (semgrep/gitleaks/test-gaps) as question input
+    ├── the_cure.py            # domain best-practice question topics per stack
+    ├── bad_romance.py         # caller/callee dependency graph
+    ├── joanne.py              # diff extraction & semantic skeletonizer (large diffs)
+    ├── shallow.py             # the surface summary of a change
+    ├── poker_face.py          # scale-aware question generator (2–8 questions, 80/20 ratio)
+    ├── chromatica.py          # central LLM provider manager — provider/model/key in ONE place
+    ├── just_dance.py          # LLM transport: raw HTTP, retry, JSON extraction (zero-dep core)
+    ├── telephone.py           # terminal UI: timed input, TTS ('say'), [Tab] mic dictation
+    ├── judas.py               # answer evaluator — betrays your bluff; offline answers go unscored
+    ├── million_reasons.py     # targeted follow-up questions on missing concepts
+    ├── the_fame.py            # EvaluationResult dataclass (the shape of a score)
+    ├── marry_the_night.py     # commit context: HEAD, commit message, attempt keys & numbering
+    ├── always_remember.py     # session persistence, dedupe, reconciliation, pruning
+    ├── monster_ball.py        # FastAPI dashboard API (opt-in [ui] extra)
+    ├── john_wayne.py          # opt-in telemetry client (only rides with UNDERSTANDING_AGENT_TELEMETRY_URL)
+    └── ui/                    # vanilla JS/CSS single-page dashboard (index.html, app.js, style.css)
 ```
 
 ---
@@ -267,8 +273,8 @@ When `pre-commit` runs hooks, it runs inside an isolated virtualenv sandbox. The
    - A 500-LoC architectural change genuinely needs more coverage than a 20-LoC fix, but an unbounded exam turns every commit into a 10-minute exam — developers would bypass the hook (`git commit --no-verify`). The scale ladder (2–3 / 3–5 / 6–8) with hard length limits ("under 25 words, answerable in 30–45 seconds") balances rigor against velocity.
 3. **Why hard-block credentials before asking questions?**
    - An oral defense verifies understanding; it cannot verify that a secret is safe to leak. Git history is permanent and cloned everywhere — the only safe time to stop a credential is before the commit object exists. So the gate runs before any prompt and costs zero LLM spend.
-4. **Why fail open (by default) but mark the session `llm-unverified`?**
-   - A third-party LLM outage must not freeze every commit in the org — that turns a hook into an outage amplifier. But failing open silently would let dashboards claim verified commits that were scored by a keyword-matching fallback. The `llm-unverified` marker keeps the fail-open ergonomics AND the telemetry honest. Strict teams set `UNDERSTANDING_AGENT_FAIL_MODE=closed`.
+4. **Why fail open (by default) but record answers without a score?**
+   - A third-party LLM outage must not freeze every commit in the org — that turns a hook into an outage amplifier. But failing open silently would let dashboards claim verified commits that were scored by a keyword-matching fallback. So offline answers are stored **unscored** with the `llm-unverified` marker: fail-open ergonomics AND honest telemetry. Strict teams set `UNDERSTANDING_AGENT_FAIL_MODE=closed`.
 5. **Why deterministic checks before any LLM call?**
    - The credential gate, coding-standards audit, security lens, and evidence collection are pure pattern/AST analysis — fast, free, and reproducible. Running them first means blocked commits spend nothing, and the LLM only ever sees diffs that already passed the deterministic filters.
 6. **Why semantic diff skeletons for large diffs?**
@@ -276,13 +282,32 @@ When `pre-commit` runs hooks, it runs inside an isolated virtualenv sandbox. The
 
 ---
 
-## 🧪 Running Unit Tests
+## 🧪 Running Tests
 
-Run the test suite using Python's built-in `unittest` runner:
+The suite is stdlib-only (no LLM, no network) using Python's built-in `unittest` runner. Python **3.10+** required; CI runs 3.12 and 3.14 on Ubuntu and macOS.
 
 ```bash
-python3 -m unittest discover -s tests
+python3 -m unittest discover -s tests   # 180 unit tests
+python3 tests/e2e_gate_first.py         # scratch git repo: gate blocks w/ zero LLM calls,
+                                        # offline fallback still asks the security question,
+                                        # sessions prune
+python3 tests/e2e_security_gate.py      # real `git commit` with a live-shaped key is blocked
+python3 tests/e2e_polyglot_fixture.py   # NestJS/TS + .NET/C# + ML/Python question pipeline
 ```
+
+CI runs exactly this matrix on every push/PR (`.github/workflows/ci.yml`).
+
+---
+
+## 🖥️ Platform Support
+
+| Platform | Status | Notes |
+|---|---|---|
+| macOS | ✅ Full | TTY input, `say` TTS, [Tab] mic dictation, KERN_PROCARGS2 commit-message recovery |
+| Linux | ✅ Core | Question/answer flow over TTY works (termios/tty). No TTS (`say` is macOS-only) — espeak/festival integration is future work. Commit-message recovery falls back to `/proc` and `ps`. CI-verified (ubuntu-latest). |
+| Windows | ⚠️ Untested | `termios`/`tty` import is guarded; without a TTY the hook degrades to non-interactive (no timed input, no voice). Real Windows support (CTTY/`CONIN$`) is tracked as future work. |
+
+The credential gate, coding-standards audit, question generation, evaluation, and session persistence are pure Python and platform-independent — the gaps are all in the interactive/voice layer.
 
 ---
 

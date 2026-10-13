@@ -1,29 +1,4 @@
-from setuptools import setup, find_packages
+"""Backward-compatible shim: pyproject.toml is the canonical manifest."""
+from setuptools import setup
 
-setup(
-    name="understanding-agent",
-    version="0.3.0",
-    packages=find_packages(),
-    package_data={"understanding_agent": ["ui/*"]},
-    include_package_data=True,
-    entry_points={
-        "console_scripts": [
-            "understanding-agent = understanding_agent.applause:main",
-            "understanding-agent-ui = understanding_agent.monster_ball:run",
-        ]
-    },
-    python_requires=">=3.10",
-    install_requires=[],
-    extras_require={
-        "voice": [
-            "sounddevice",
-            "openai-whisper",
-            "numpy",
-        ],
-        "ui": [
-            "fastapi",
-            "uvicorn",
-            "pydantic>=2",
-        ],
-    },
-)
+setup()
