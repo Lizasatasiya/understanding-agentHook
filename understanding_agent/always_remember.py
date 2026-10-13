@@ -372,3 +372,54 @@ def get_session_by_id(repo_root: str, session_id: str) -> Optional[Dict[str, Any
         if s.get("session_id") == session_id or s.get("attempt_id") == session_id:
             return s
     return None
+
+
+SCHEMA_VERSION = 1
+
+
+def build_session_payload(
+    *,
+    attempt_number: int,
+    head_commit: str,
+    commit_message: str,
+    attempt_key: str,
+    diff_hash: str,
+    env: dict,
+    status: str,
+    verification: str,
+    score: float,
+    changed_files: list,
+    change_summary: dict,
+    standards_report: list,
+    questions: list,
+) -> Dict[str, Any]:
+    """Build the ONE session/telemetry payload shape (schema_version 1).
+
+    Every call site in applause.py (abort, standards-fix, final) goes through
+    this builder so the stored dict, the telemetry POST, and the dashboard
+    API always see the same fields — no more per-site drift (the standards-fix
+    site previously omitted the verification field entirely).
+    """
+    sid = f"sess_{int(time.time()*1000)}_{attempt_number}"
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "session_id": sid,
+        "attempt_id": sid,
+        "attempt_number": attempt_number,
+        "commit_id": "staged",
+        "head_commit": head_commit,
+        "commit_message": commit_message,
+        "attempt_key": attempt_key,
+        "diff_hash": diff_hash,
+        "repository": env.get("repository", "unknown"),
+        "branch": env.get("branch", "unknown"),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "status": status,
+        "verification": verification,
+        "score": round(score, 1),
+        "changed_files": changed_files,
+        "change_summary": change_summary,
+        "standards_report": standards_report,
+        "violations_count": sum(1 for s in standards_report if not s.get("is_good", True)),
+        "questions": questions,
+    }

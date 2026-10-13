@@ -26,13 +26,16 @@ from .telephone import Interaction
 from .john_wayne import ServerClient
 from .judas import AnswerEvaluator
 from .teeth import CodingStandardsChecker
-from .always_remember import save_session
+from .always_remember import save_session, load_sessions, build_session_payload
 from .just_dance import load_api_key
 from .marry_the_night import (
     get_head_commit,
     get_current_commit_message,
     compute_attempt_key,
-    get_next_attempt_number
+    get_next_attempt_number,
+    compute_current_attempt,
+    state_matches_current,
+    restore_cached_questions,
 )
 
 def _is_gitignored(repo_root: str, path: str) -> bool:
@@ -206,33 +209,27 @@ def main():
         if choice in ("1", "fix", "f"):
             print(f"\n{RED}Please resolve the violations listed above before committing.{RESET}\n")
             try:
-                from .always_remember import load_sessions
                 _existing = load_sessions(project_root)
                 fix_attempt_num = get_next_attempt_number(
                     _existing, head_commit, diff_hash, commit_msg, state_attempts=0
                 )
             except Exception:
                 fix_attempt_num = 1
-            session_data = {
-                "session_id": f"sess_{int(time.time()*1000)}_{fix_attempt_num}",
-                "attempt_id": f"sess_{int(time.time()*1000)}_{fix_attempt_num}",
-                "attempt_number": fix_attempt_num,
-                "commit_id": "staged",
-                "head_commit": head_commit,
-                "commit_message": commit_msg,
-                "attempt_key": attempt_key,
-                "diff_hash": diff_hash,
-                "repository": env.get("repository", "unknown"),
-                "branch": env.get("branch", "unknown"),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "status": "FAILED",
-                "score": 0,
-                "changed_files": changes.get("files", []),
-                "change_summary": {"what_changed": "Staged changes blocked by coding standards."},
-                "standards_report": standards_report,
-                "violations_count": len(failed_standards),
-                "questions": []
-            }
+            session_data = build_session_payload(
+                attempt_number=fix_attempt_num,
+                head_commit=head_commit,
+                commit_message=commit_msg,
+                attempt_key=attempt_key,
+                diff_hash=diff_hash,
+                env=env,
+                status="FAILED",
+                verification="llm-unverified",
+                score=0,
+                changed_files=changes.get("files", []),
+                change_summary={"what_changed": "Staged changes blocked by coding standards."},
+                standards_report=standards_report,
+                questions=[],
+            )
             try:
                 save_session(project_root, session_data)
                 ServerClient().send(session_data)
@@ -260,114 +257,43 @@ def main():
 
     existing_sessions = []
     try:
-        from .always_remember import load_sessions
         existing_sessions = load_sessions(project_root)
     except Exception:
         pass
 
-    norm_head = (head_commit or "").strip()
-    matching_sessions = [
-        s for s in existing_sessions
-        if (s.get("commit_id") == "staged" or s.get("is_staged") or not s.get("commit_id")) and
-        (s.get("head_commit") or "").strip() == norm_head
-    ]
-    recorded_attempts = [s.get("attempt_number", 0) for s in matching_sessions]
-    max_recorded_attempt = max(recorded_attempts + [len(matching_sessions)], default=0)
-
-    # State belongs to current commit cycle if head matches
-    state_head = (state.get("head_commit") or "").strip()
-    state_matches_head = (state_head == norm_head) if (state_head or norm_head) else True
-    state_attempts = state.get("attempts", 0) if state_matches_head else 0
-
-    # Attempts only depend on how many attempts made to next commit
-    attempts = max(max_recorded_attempt + 1, state_attempts + 1, 1)
+    # Attempt count depends solely on attempts made towards the next commit
+    # (under head_commit). Commit message is NOT checked.
+    attempts = compute_current_attempt(existing_sessions, head_commit, state)
 
     # Cached questions can be reused if the diff hasn't changed
-    state_matches_diff = state_matches_head and (state.get("diff_hash") == diff_hash)
-    cached_questions = state.get("questions", []) if state_matches_diff else []
-
-    # If state has no questions but matching previous session exists for this diff, restore questions & scores
-    if not cached_questions and state_matches_head:
-        candidates = [s for s in matching_sessions if s.get("diff_hash") == diff_hash and s.get("questions")]
-        if candidates:
-            def _rank_sess(s):
-                qs = s.get("questions", [])
-                ans = sum(1 for q in qs if ((q.get("evaluation") or {}).get("score", 0) >= 70 or q.get("score", 0) >= 70))
-                return (ans, len(qs), s.get("attempt_number", 0))
-            best_session = max(candidates, key=_rank_sess)
-            cached_questions = []
-            for sq in best_session.get("questions", []):
-                sq_eval = sq.get("evaluation") or {}
-                score = sq_eval.get("score") if isinstance(sq_eval, dict) and "score" in sq_eval else sq.get("score", 0)
-                cq = {
-                    "question_id": sq.get("question_id"),
-                    "question": sq.get("question"),
-                    "type": sq.get("type", "Reasoning"),
-                    "time_limit": sq.get("time_limit_seconds") or sq.get("time_limit", 60),
-                    "expected_concepts": sq.get("expected_concepts", []),
-                    "evaluation_criteria": sq.get("evaluation_criteria", []),
-                    "is_fallback": sq.get("is_fallback", False),
-                    "answer": sq.get("answer", ""),
-                    "status": sq.get("status", ""),
-                    "evaluation": sq_eval,
-                    "response_time_seconds": sq.get("response_time_seconds", 0),
-                    "best_score": score,
-                    "answered_in_attempt": sq.get("answered_in_attempt") or best_session.get("attempt_number"),
-                }
-                if score >= 70:
-                    cq["answered"] = True
-                    cq["passed"] = True
-                else:
-                    cq["answered"] = False
-                    cq["passed"] = False
-                cached_questions.append(cq)
-
-    if state_matches_diff and cached_questions:
-        valid_questions = cached_questions
-        # Reconcile scores and answers with all matching sessions for this diff
+    if state_matches_current(state, head_commit, diff_hash):
+        valid_questions = state.get("questions", []) or restore_cached_questions(
+            existing_sessions, head_commit, diff_hash)
+        # Modernize any legacy or robotic cached standards questions so a
+        # retry asks the human-shaped version (behavior preserved from the
+        # pre-refactor inline code).
         for q in valid_questions:
-            q_text = (q.get("question") or "").strip().lower()
-            q_id = q.get("question_id")
-            for s in matching_sessions:
-                if s.get("diff_hash") == diff_hash:
-                    for sq in s.get("questions", []):
-                        sq_text = (sq.get("question") or "").strip().lower()
-                        sq_id = sq.get("question_id")
-                        if (q_id and q_id == sq_id) or (q_text and q_text == sq_text):
-                            sq_eval = sq.get("evaluation") or {}
-                            score = sq_eval.get("score") if isinstance(sq_eval, dict) and "score" in sq_eval else sq.get("score", 0)
-                            if score > q.get("best_score", 0):
-                                q["best_score"] = score
-                                q["answer"] = sq.get("answer", q.get("answer", ""))
-                                q["evaluation"] = sq_eval
-                                q["response_time_seconds"] = sq.get("response_time_seconds", q.get("response_time_seconds", 0))
-                                q["answered_in_attempt"] = sq.get("answered_in_attempt") or s.get("attempt_number")
             if q.get("best_score", 0) >= 70 or q.get("answered", False) or q.get("passed", False):
-                q["answered"] = True
-                q["passed"] = True
-            else:
-                q["answered"] = False
-                q["passed"] = False
-                # Modernize any legacy or robotic cached standards questions
-                raw_q = q.get("question", "")
-                if "coding audit flagged" in raw_q.lower() or "(changed)" in raw_q:
-                    q_gen = QuestionGenerator()
-                    name_m = re.search(r"flagged '([^']+)'", raw_q)
-                    rule_name = name_m.group(1) if name_m else "Nesting Depth"
-                    matching_fs = None
-                    for fs in failed_standards:
-                        if rule_name in fs.get("name", ""):
-                            matching_fs = fs
-                            break
-                    if not matching_fs:
-                        matching_fs = {"name": rule_name, "details": raw_q}
-                    modern_q = q_gen._build_proper_standard_question(matching_fs, context)
-                    q["question"] = modern_q["question"]
-                    q["type"] = modern_q["type"]
-                    q["time_limit"] = modern_q["time_limit"]
-                    q["expected_concepts"] = modern_q["expected_concepts"]
-                    q["evaluation_criteria"] = modern_q["evaluation_criteria"]
-                    q["is_standards_violation"] = True
+                continue
+            raw_q = q.get("question", "")
+            if "coding audit flagged" in raw_q.lower() or "(changed)" in raw_q:
+                q_gen = QuestionGenerator()
+                name_m = re.search(r"flagged '([^']+)'", raw_q)
+                rule_name = name_m.group(1) if name_m else "Nesting Depth"
+                matching_fs = None
+                for fs in failed_standards:
+                    if rule_name in fs.get("name", ""):
+                        matching_fs = fs
+                        break
+                if not matching_fs:
+                    matching_fs = {"name": rule_name, "details": raw_q}
+                modern_q = q_gen._build_proper_standard_question(matching_fs, context)
+                q["question"] = modern_q["question"]
+                q["type"] = modern_q["type"]
+                q["time_limit"] = modern_q["time_limit"]
+                q["expected_concepts"] = modern_q["expected_concepts"]
+                q["evaluation_criteria"] = modern_q["evaluation_criteria"]
+                q["is_standards_violation"] = True
     else:
         # Generate fresh questions for new diff
         question_generator = QuestionGenerator()
@@ -381,6 +307,9 @@ def main():
     # An attempt is LLM-verified only when questions were LLM-generated AND
     # every evaluation came from the LLM (not the offline fallback).
     questions_llm_generated = not all(q.get("is_fallback", False) for q in valid_questions) if valid_questions else True
+
+    def current_verification(any_eval_unverified: bool) -> str:
+        return "llm-verified" if (questions_llm_generated and not any_eval_unverified) else "llm-unverified"
 
     interaction = Interaction()
     evaluator = AnswerEvaluator()
@@ -585,27 +514,21 @@ def main():
                 print(f"\n{BOLD}{RED}Commit aborted. Please review the code and then try again.{RESET}\n")
                 
                 try:
-                    session_data = {
-                        "session_id": f"sess_{int(time.time()*1000)}_{attempts}",
-                        "attempt_id": f"sess_{int(time.time()*1000)}_{attempts}",
-                        "attempt_number": attempts,
-                        "commit_id": "staged",
-                        "head_commit": head_commit,
-                        "commit_message": commit_msg,
-                        "attempt_key": attempt_key,
-                        "diff_hash": diff_hash,
-                        "repository": env.get("repository", "unknown"),
-                        "branch": env.get("branch", "unknown"),
-                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                        "status": "FAILED",
-                        "verification": "llm-verified" if (questions_llm_generated and not any_eval_unverified) else "llm-unverified",
-                        "score": round(final_score, 1),
-                        "changed_files": changes.get("files", []),
-                        "change_summary": summary,
-                        "standards_report": standards_report,
-                        "violations_count": len(failed_standards),
-                        "questions": final_results
-                    }
+                    session_data = build_session_payload(
+                        attempt_number=attempts,
+                        head_commit=head_commit,
+                        commit_message=commit_msg,
+                        attempt_key=attempt_key,
+                        diff_hash=diff_hash,
+                        env=env,
+                        status="FAILED",
+                        verification=current_verification(any_eval_unverified),
+                        score=final_score,
+                        changed_files=changes.get("files", []),
+                        change_summary=summary,
+                        standards_report=standards_report,
+                        questions=final_results,
+                    )
                     save_session(project_root, session_data)
                     ServerClient().send(session_data)
                 except Exception:
@@ -616,7 +539,7 @@ def main():
         # LLM verification: honest even when failing open. A session is only
         # "llm-verified" when questions were LLM-generated and no evaluation
         # fell back to the offline scorer.
-        verification = "llm-verified" if (questions_llm_generated and not any_eval_unverified) else "llm-unverified"
+        verification = current_verification(any_eval_unverified)
 
         # When the API is unavailable, fallback questions are asked and the
         # answers are recorded WITHOUT a score (user-mandated contract): a
@@ -646,27 +569,21 @@ def main():
             print(f"\n{BOLD}{RED}Overall Understanding: Insufficient{RESET}")
 
         # 9. Server Client & Session Storage
-        session_data = {
-            "session_id": f"sess_{int(time.time()*1000)}_{attempts}",
-            "attempt_id": f"sess_{int(time.time()*1000)}_{attempts}",
-            "attempt_number": attempts,
-            "commit_id": "staged",
-            "head_commit": head_commit,
-            "commit_message": commit_msg,
-            "attempt_key": attempt_key,
-            "diff_hash": diff_hash,
-            "repository": env.get("repository", "unknown"),
-            "branch": env.get("branch", "unknown"),
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "status": attempt_status,
-            "verification": verification,
-            "score": round(avg_score, 1),
-            "changed_files": changes.get("files", []),
-            "change_summary": summary,
-            "standards_report": standards_report,
-            "violations_count": len(failed_standards),
-            "questions": final_results
-        }
+        session_data = build_session_payload(
+            attempt_number=attempts,
+            head_commit=head_commit,
+            commit_message=commit_msg,
+            attempt_key=attempt_key,
+            diff_hash=diff_hash,
+            env=env,
+            status=attempt_status,
+            verification=verification,
+            score=avg_score,
+            changed_files=changes.get("files", []),
+            change_summary=summary,
+            standards_report=standards_report,
+            questions=final_results,
+        )
         try:
             save_session(project_root, session_data)
             ServerClient().send(session_data)

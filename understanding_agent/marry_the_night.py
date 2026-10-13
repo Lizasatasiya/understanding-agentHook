@@ -240,3 +240,120 @@ def get_next_attempt_number(
     recorded_attempts = [s.get("attempt_number", 0) for s in matching_sessions]
     max_attempt = max(recorded_attempts + [len(matching_sessions)], default=0)
     return max(max_attempt + 1, state_attempts + 1, 1)
+
+
+def compute_current_attempt(
+    existing_sessions: List[Dict[str, Any]],
+    head_commit: str,
+    state: dict,
+) -> int:
+    """Resolve the attempt number for this run.
+
+    The single home for attempt math (was inlined in the CLI): the state file
+    and the sessions log both count attempts towards the NEXT commit under
+    head_commit; whichever knows more wins.
+    """
+    norm_head = (head_commit or "").strip()
+    matching_sessions = [
+        s for s in existing_sessions
+        if (s.get("commit_id") == "staged" or s.get("is_staged") or not s.get("commit_id"))
+        and (s.get("head_commit") or "").strip() == norm_head
+    ]
+    recorded_attempts = [s.get("attempt_number", 0) for s in matching_sessions]
+    max_recorded = max(recorded_attempts + [len(matching_sessions)], default=0)
+
+    state_head = (state.get("head_commit") or "").strip()
+    state_matches = (state_head == norm_head) if (state_head or norm_head) else True
+    state_attempts = state.get("attempts", 0) if state_matches else 0
+    return max(max_recorded + 1, state_attempts + 1, 1)
+
+
+def state_matches_current(state: dict, head_commit: str, diff_hash: str) -> bool:
+    """True when the state file belongs to this commit cycle AND this diff."""
+    norm_head = (head_commit or "").strip()
+    state_head = (state.get("head_commit") or "").strip()
+    matches_head = (state_head == norm_head) if (state_head or norm_head) else True
+    return matches_head and state.get("diff_hash") == diff_hash
+
+
+def restore_cached_questions(
+    existing_sessions: List[Dict[str, Any]],
+    head_commit: str,
+    diff_hash: str,
+) -> List[dict]:
+    """Rebuild cached questions from the best prior session for this diff.
+
+    Picks the session whose questions have the most >=70 scores, then
+    reconciles each question's best score across ALL matching sessions for
+    this diff. Returns [] when no prior session has questions for this diff.
+    """
+    norm_head = (head_commit or "").strip()
+    matching_sessions = [
+        s for s in existing_sessions
+        if (s.get("commit_id") == "staged" or s.get("is_staged") or not s.get("commit_id"))
+        and (s.get("head_commit") or "").strip() == norm_head
+    ]
+    candidates = [s for s in matching_sessions if s.get("diff_hash") == diff_hash and s.get("questions")]
+    if not candidates:
+        return []
+
+    def _rank_sess(s):
+        qs = s.get("questions", [])
+        ans = sum(1 for q in qs if ((q.get("evaluation") or {}).get("score", 0) >= 70 or q.get("score", 0) >= 70))
+        return (ans, len(qs), s.get("attempt_number", 0))
+
+    best_session = max(candidates, key=_rank_sess)
+    cached = []
+    for sq in best_session.get("questions", []):
+        sq_eval = sq.get("evaluation") or {}
+        score = sq_eval.get("score") if isinstance(sq_eval, dict) and isinstance(sq_eval.get("score"), (int, float)) else sq.get("score", 0)
+        cq = {
+            "question_id": sq.get("question_id"),
+            "question": sq.get("question"),
+            "type": sq.get("type", "Reasoning"),
+            "time_limit": sq.get("time_limit_seconds") or sq.get("time_limit", 60),
+            "expected_concepts": sq.get("expected_concepts", []),
+            "evaluation_criteria": sq.get("evaluation_criteria", []),
+            "is_fallback": sq.get("is_fallback", False),
+            "answer": sq.get("answer", ""),
+            "status": sq.get("status", ""),
+            "evaluation": sq_eval,
+            "response_time_seconds": sq.get("response_time_seconds", 0),
+            "best_score": score,
+            "answered_in_attempt": sq.get("answered_in_attempt") or best_session.get("attempt_number"),
+        }
+        if score >= 70:
+            cq["answered"] = True
+            cq["passed"] = True
+        else:
+            cq["answered"] = False
+            cq["passed"] = False
+        cached.append(cq)
+
+    # Reconcile best scores across every matching session for this diff
+    for q in cached:
+        q_text = (q.get("question") or "").strip().lower()
+        q_id = q.get("question_id")
+        for s in matching_sessions:
+            if s.get("diff_hash") != diff_hash:
+                continue
+            for sq in s.get("questions", []):
+                sq_text = (sq.get("question") or "").strip().lower()
+                sq_id = sq.get("question_id")
+                if (q_id and q_id == sq_id) or (q_text and q_text == sq_text):
+                    sq_eval = sq.get("evaluation") or {}
+                    score = sq_eval.get("score") if isinstance(sq_eval, dict) and isinstance(sq_eval.get("score"), (int, float)) else sq.get("score", 0)
+                    if score > q.get("best_score", 0):
+                        q["best_score"] = score
+                        q["answer"] = sq.get("answer", q.get("answer", ""))
+                        q["evaluation"] = sq_eval
+                        q["response_time_seconds"] = sq.get("response_time_seconds", q.get("response_time_seconds", 0))
+                        q["answered_in_attempt"] = sq.get("answered_in_attempt") or s.get("attempt_number")
+        if q.get("best_score", 0) >= 70 or q.get("answered", False) or q.get("passed", False):
+            q["answered"] = True
+            q["passed"] = True
+        else:
+            q["answered"] = False
+            q["passed"] = False
+
+    return cached
