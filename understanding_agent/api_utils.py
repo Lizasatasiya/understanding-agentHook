@@ -20,6 +20,19 @@ def get_model() -> str:
     return resolve_model()
 
 
+def get_judge_model() -> str:
+    """Model used to EVALUATE answers, deliberately separable from the
+    question-GENERATION model (RepoProbe: judge and checklist-author should
+    differ to avoid self-preference bias). UNDERSTANDING_AGENT_JUDGE_MODEL
+    overrides; absent it, the normal model is used.
+
+    Resolution lives in the central LLM manager (llm_manager.resolve_judge_model);
+    this stays as the compatibility surface callers already import.
+    """
+    from .llm_manager import resolve_judge_model
+    return resolve_judge_model()
+
+
 def fail_open_enabled() -> bool:
     """When the LLM service is unreachable, allow the commit (default) or block it.
 
@@ -251,7 +264,7 @@ def _extract_message_text(data: dict) -> str:
     return text
 
 
-def call_nous_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: int = 2) -> tuple[int, str]:
+def call_llm_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: int = 2) -> tuple[int, str]:
     """Send an HTTP request to the provider's OpenAI-compatible chat-completions API.
 
     Retries transient failures (connection errors, 429, 5xx, and the gateway's
@@ -301,8 +314,15 @@ def _groq_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[
     return _nous_request_once(api_key, payload_dict, timeout)
 
 
-# Backward compatibility alias
-call_groq_api = call_nous_api
+# ---------------------------------------------------------------------------
+# Naming: call_llm_api / load_api_key are the canonical, provider-agnostic
+# names. The historic nous/groq names remain as deprecated aliases pointing at
+# the SAME function objects, so existing imports, mock-patch targets, and
+# colleague code keep working unchanged. Call sites migrate gradually.
+# ---------------------------------------------------------------------------
+call_nous_api = call_llm_api          # deprecated alias
+call_groq_api = call_llm_api          # deprecated alias
+# load_api_key / load_groq_api_key aliases are defined near load_nous_api_key.
 
 
 def _nous_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[int, str]:

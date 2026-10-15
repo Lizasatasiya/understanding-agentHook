@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "understanding-agent"
+version = "0.3.0"
+description = "Oral-defense pre-commit hook: credential gate, coding-standards audit, LLM questions with checklist-based evaluation"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+voice = ["sounddevice", "openai-whisper", "numpy"]
+ui = ["fastapi", "uvicorn", "pydantic>=2"]
+
+[project.scripts]
+understanding-agent = "understanding_agent.cli:main"
+understanding-agent-ui = "understanding_agent.server:run"
+
+[tool.setuptools]
+packages = ["understanding_agent"]
+
+[tool.setuptools.package-data]
+understanding_agent = ["ui/*"]

@@ -15,12 +15,14 @@ from .security_lens import SecurityLens, security_question_hint, security_gate_e
 from .evidence_collector import collect_evidence, evidence_question_hint
 from .practice_packs import practice_pack_hint
 from .question_generator import QuestionGenerator
+from .change_intelligence import master_analysis_enabled, run_master_analysis
 from .followup_generator import FollowUpGenerator
 from .interaction import Interaction
 from .server_client import ServerClient
 from .answer_evaluator import AnswerEvaluator
 from .coding_standards import CodingStandardsChecker
 from .session_store import save_session
+from .session_payload import build_session_payload
 from .api_utils import load_nous_api_key
 from .commit_context import (
     get_head_commit,
@@ -39,6 +41,25 @@ def _is_gitignored(repo_root: str, path: str) -> bool:
         return code == 0
     except Exception:
         return False
+
+
+def _print_advisory_findings(findings: list) -> None:
+    """Print the master-analysis LLM review block.
+
+    Advisory only — these findings cannot block anything; they inform the
+    questions that follow. Severity-sorted, citation-bearing.
+    """
+    if not findings:
+        return
+    YELLOW = "\033[93m"
+    BOLD = "\033[1m"
+    RESET = "\033[0m"
+    print(f"\n{BOLD}{YELLOW}LLM Review (advisory — informs the questions below){RESET}")
+    for f in findings[:3]:
+        loc = f"{f['file']}:{f['line']}" if f.get("line") else f.get("file", "?")
+        print(f"  {YELLOW}[{f.get('category', 'note')} sev {f.get('severity', '?')}] "
+              f"{f.get('description', '')} ({loc}){RESET}")
+    print()
 
 
 def _print_gate_block(critical: list, env: dict, project_root: str) -> None:
@@ -207,26 +228,24 @@ def main():
                 )
             except Exception:
                 fix_attempt_num = 1
-            session_data = {
-                "session_id": f"sess_{int(time.time()*1000)}_{fix_attempt_num}",
-                "attempt_id": f"sess_{int(time.time()*1000)}_{fix_attempt_num}",
-                "attempt_number": fix_attempt_num,
-                "commit_id": "staged",
-                "head_commit": head_commit,
-                "commit_message": commit_msg,
-                "attempt_key": attempt_key,
-                "diff_hash": diff_hash,
-                "repository": env.get("repository", "unknown"),
-                "branch": env.get("branch", "unknown"),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "status": "FAILED",
-                "score": 0,
-                "changed_files": changes.get("files", []),
-                "change_summary": {"what_changed": "Staged changes blocked by coding standards."},
-                "standards_report": standards_report,
-                "violations_count": len(failed_standards),
-                "questions": []
-            }
+            session_data = build_session_payload(
+                attempt_number=fix_attempt_num,
+                head_commit=head_commit,
+                commit_message=commit_msg,
+                attempt_key=attempt_key,
+                diff_hash=diff_hash,
+                repository=env.get("repository", "unknown"),
+                branch=env.get("branch", "unknown"),
+                status="FAILED",
+                score=0,
+                changed_files=changes.get("files", []),
+                change_summary={"what_changed": "Staged changes blocked by coding standards."},
+                # No defense happened on this path — record it honestly.
+                verification="llm-unverified",
+                standards_report=standards_report,
+                violations_count=len(failed_standards),
+                questions=[],
+            )
             try:
                 save_session(project_root, session_data)
                 ServerClient().send(session_data)
@@ -277,6 +296,9 @@ def main():
     attempts = max(max_recorded_attempt + 1, state_attempts + 1, 1)
 
     # Cached questions can be reused if the diff hasn't changed
+    # (analysis holds the master-analysis result when that path ran; None
+    # on cached attempts, which reuse recorded questions.)
+    analysis = None
     state_matches_diff = state_matches_head and (state.get("diff_hash") == diff_hash)
     cached_questions = state.get("questions", []) if state_matches_diff else []
 
@@ -365,8 +387,21 @@ def main():
     else:
         # Generate fresh questions for new diff
         question_generator = QuestionGenerator()
-        questions = question_generator.generate(context, summary, hints, env=env)
-        valid_questions = question_generator.validate(questions)
+        analysis = None
+        if master_analysis_enabled():
+            # Master Analysis Pass (opt-in): one LLM call produces change
+            # classification, advisory findings (citation-verified) and the
+            # questions themselves. Degrades to None -> normal path.
+            analysis = run_master_analysis(
+                context, summary, hints=hints, env=env,
+                project_root=project_root, question_generator=question_generator,
+            )
+        if analysis and analysis.get("questions"):
+            valid_questions = question_generator.validate(analysis["questions"])
+            _print_advisory_findings(analysis.get("findings") or [])
+        else:
+            questions = question_generator.generate(context, summary, hints, env=env)
+            valid_questions = question_generator.validate(questions)
         for q in valid_questions:
             q["passed"] = False
             q["answered"] = False
@@ -577,27 +612,23 @@ def main():
                 print(f"\n{BOLD}{RED}Commit aborted. Please review the code and then try again.{RESET}\n")
                 
                 try:
-                    session_data = {
-                        "session_id": f"sess_{int(time.time()*1000)}_{attempts}",
-                        "attempt_id": f"sess_{int(time.time()*1000)}_{attempts}",
-                        "attempt_number": attempts,
-                        "commit_id": "staged",
-                        "head_commit": head_commit,
-                        "commit_message": commit_msg,
-                        "attempt_key": attempt_key,
-                        "diff_hash": diff_hash,
-                        "repository": env.get("repository", "unknown"),
-                        "branch": env.get("branch", "unknown"),
-                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                        "status": "FAILED",
-                        "verification": "llm-verified" if (questions_llm_generated and not any_eval_unverified) else "llm-unverified",
-                        "score": round(final_score, 1),
-                        "changed_files": changes.get("files", []),
-                        "change_summary": summary,
-                        "standards_report": standards_report,
-                        "violations_count": len(failed_standards),
-                        "questions": final_results
-                    }
+                    session_data = build_session_payload(
+                        attempt_number=attempts,
+                        head_commit=head_commit,
+                        commit_message=commit_msg,
+                        attempt_key=attempt_key,
+                        diff_hash=diff_hash,
+                        repository=env.get("repository", "unknown"),
+                        branch=env.get("branch", "unknown"),
+                        status="FAILED",
+                        verification="llm-verified" if (questions_llm_generated and not any_eval_unverified) else "llm-unverified",
+                        score=round(final_score, 1),
+                        changed_files=changes.get("files", []),
+                        change_summary=summary,
+                        standards_report=standards_report,
+                        violations_count=len(failed_standards),
+                        questions=final_results,
+                    )
                     save_session(project_root, session_data)
                     ServerClient().send(session_data)
                 except Exception:
@@ -632,27 +663,24 @@ def main():
             print(f"\n{BOLD}{RED}Overall Understanding: Insufficient{RESET}")
 
         # 9. Server Client & Session Storage
-        session_data = {
-            "session_id": f"sess_{int(time.time()*1000)}_{attempts}",
-            "attempt_id": f"sess_{int(time.time()*1000)}_{attempts}",
-            "attempt_number": attempts,
-            "commit_id": "staged",
-            "head_commit": head_commit,
-            "commit_message": commit_msg,
-            "attempt_key": attempt_key,
-            "diff_hash": diff_hash,
-            "repository": env.get("repository", "unknown"),
-            "branch": env.get("branch", "unknown"),
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "status": attempt_status,
-            "verification": verification,
-            "score": round(avg_score, 1),
-            "changed_files": changes.get("files", []),
-            "change_summary": summary,
-            "standards_report": standards_report,
-            "violations_count": len(failed_standards),
-            "questions": final_results
-        }
+        session_data = build_session_payload(
+            attempt_number=attempts,
+            head_commit=head_commit,
+            commit_message=commit_msg,
+            attempt_key=attempt_key,
+            diff_hash=diff_hash,
+            repository=env.get("repository", "unknown"),
+            branch=env.get("branch", "unknown"),
+            status=attempt_status,
+            verification=verification,
+            score=round(avg_score, 1),
+            changed_files=changes.get("files", []),
+            change_summary=summary,
+            standards_report=standards_report,
+            violations_count=len(failed_standards),
+            questions=final_results,
+            analysis=analysis,
+        )
         try:
             save_session(project_root, session_data)
             ServerClient().send(session_data)

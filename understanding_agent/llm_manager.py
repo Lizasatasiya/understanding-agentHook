@@ -119,6 +119,18 @@ def resolve_model() -> str:
     return PROVIDER_PRESETS[provider]["model"]
 
 
+def resolve_judge_model() -> str:
+    """Model used to EVALUATE answers (the judge), separable from the
+    question-GENERATION model on purpose: authoring and judging the same
+    checklist with the same model invites self-preference bias
+    (RepoProbe, arXiv 2608.04783, keeps its judge outside the evaluated set).
+
+    UNDERSTANDING_AGENT_JUDGE_MODEL overrides; absent it, the normal model is
+    used (single-model setups are still valid, just less controlled).
+    """
+    return _env("UNDERSTANDING_AGENT_JUDGE_MODEL") or resolve_model()
+
+
 def _resolve_api_key(provider: str) -> str:
     """Resolve the API key for a provider, honoring the central var first."""
     # Central var first.
