@@ -1,0 +1,6 @@
+fastapi>=0.110
+uvicorn>=0.29
+sqlalchemy>=2
+pydantic>=2
+# Postgres driver for org deployments (SQLite works with no extra driver)
+psycopg[binary]>=3.1

@@ -10,11 +10,17 @@ Every session record produced here carries:
   - schema_version: lets the server/dashboard migrate old payloads safely
   - verification: ALWAYS present — a fallback/offline pass is marked
     "llm-unverified", never silently omitted (the honesty invariant)
+
+Schema v3 (Pokerface P3, PLAN_POKERFACE_JUDAS.md) adds:
+  - identity: zero-touch developer/repo identity (understanding_agent/identity.py)
+    — the central service JIT-provisions users/repos from it
+  - evidence: deterministic tool findings (semgrep/gitleaks) recorded at
+    commit time so the ledger can show WHY questions were asked
 """
 
 import time
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def build_session_payload(
@@ -35,6 +41,8 @@ def build_session_payload(
     violations_count: int = 0,
     questions: list | None = None,
     analysis: dict | None = None,
+    identity: dict | None = None,
+    evidence: dict | None = None,
 ) -> dict:
     """Build one session record. All call sites go through here so the
     schema can never drift between paths again.
@@ -43,6 +51,9 @@ def build_session_payload(
     "llm-verified" only when questions were LLM-generated and every
     evaluation came from the LLM; "llm-unverified" otherwise (including the
     standards-blocked path, where no defense happened at all).
+
+    identity/evidence are optional (older call paths and offline tests may
+    omit them) but the interactive CLI always attaches both.
     """
     session_id = f"sess_{int(time.time() * 1000)}_{attempt_number}"
     payload = {
@@ -69,4 +80,13 @@ def build_session_payload(
     }
     if analysis:
         payload["analysis"] = analysis  # master-analysis classification/findings, when present
+    if identity:
+        payload["identity"] = identity  # zero-touch identity (IdentityDetector)
+    if evidence:
+        # record only the deterministic tool findings, never raw diff content
+        payload["evidence"] = {
+            "semgrep": evidence.get("semgrep") or [],
+            "gitleaks": evidence.get("gitleaks") or [],
+            "test_coverage_gaps": evidence.get("test_coverage_gaps") or [],
+        }
     return payload

@@ -1,5 +1,6 @@
 import os
 import json
+import sqlite3
 import time
 import subprocess
 from typing import List, Dict, Any, Optional
@@ -9,13 +10,116 @@ from .commit_context import (
     compute_attempt_key
 )
 
+# Pokerface P3 (PLAN_POKERFACE_JUDAS.md, decision B): the local session store
+# is SQLite (.git/understanding_sessions.db, 0600) — plaintext JSON readable
+# by anyone was overruled. The public API (save_session/load_sessions/
+# get_sessions_for_commit/get_session_by_id) keeps its exact semantics; a
+# legacy JSON file is imported once on first open and renamed to
+# .imported (kept as backup, never deleted). JSON remains an EXPORT format
+# (export_sessions). If the .git dir is unusable for sqlite, save/load
+# degrade to the legacy JSON path so a commit is never blocked by storage.
+
+_DB_NAME = "understanding_sessions.db"
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id     TEXT PRIMARY KEY,
+    payload        TEXT NOT NULL,
+    timestamp      TEXT,
+    attempt_number INTEGER,
+    head_commit    TEXT,
+    diff_hash      TEXT
+)
+"""
+
 
 def get_sessions_file(repo_root: str) -> str:
-    """Return the path to the sessions file, preferring .git directory if present."""
+    """Legacy JSON path (kept for migration + export; the live store is SQLite)."""
     git_dir = os.path.join(repo_root, ".git")
     if os.path.isdir(git_dir):
         return os.path.join(git_dir, "understanding_sessions.json")
     return os.path.join(repo_root, "understanding_sessions.json")
+
+
+def get_sessions_db(repo_root: str) -> str:
+    """SQLite store path, preferring .git directory if present."""
+    git_dir = os.path.join(repo_root, ".git")
+    if os.path.isdir(git_dir):
+        return os.path.join(git_dir, _DB_NAME)
+    return os.path.join(repo_root, _DB_NAME)
+
+
+def _read_json_sessions(path: str) -> List[Dict[str, Any]]:
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                return data
+            if isinstance(data, dict):
+                return [data]
+    except Exception:
+        pass
+    return []
+
+
+def _migrate_legacy_json(repo_root: str, conn) -> None:
+    """One-time import of the legacy JSON store into SQLite. The JSON file is
+    RENAMED to <name>.imported (kept as a local backup, never deleted)."""
+    for path in (get_sessions_file(repo_root),
+                 os.path.join(repo_root, "understanding_sessions.json")):
+        if not os.path.exists(path) or path.endswith(".imported"):
+            continue
+        imported = 0
+        for s in _read_json_sessions(path):
+            sid = s.get("session_id")
+            if not sid:
+                continue
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO sessions "
+                    "(session_id, payload, timestamp, attempt_number, head_commit, diff_hash) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (sid, json.dumps(s), s.get("timestamp", ""),
+                     s.get("attempt_number", 1), s.get("head_commit", ""),
+                     s.get("diff_hash", "")),
+                )
+                imported += 1
+            except Exception:
+                continue
+        if imported:
+            conn.commit()
+        try:
+            os.rename(path, path + ".imported")
+        except Exception:
+            pass  # leave the JSON in place; IGNORE-dedupe makes re-import safe
+
+
+def _connect(repo_root: str):
+    path = get_sessions_db(repo_root)
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    conn = sqlite3.connect(path, timeout=5)
+    conn.execute(_SCHEMA)
+    _migrate_legacy_json(repo_root, conn)
+    try:
+        os.chmod(path, 0o600)  # developer answers are personal data
+    except Exception:
+        pass
+    return conn
+
+
+def _row_from_session(s: Dict[str, Any]) -> tuple:
+    return (
+        s.get("session_id"),
+        json.dumps(s),
+        s.get("timestamp", ""),
+        s.get("attempt_number", 1),
+        s.get("head_commit", ""),
+        s.get("diff_hash", ""),
+    )
 
 
 def reconcile_sessions(repo_root: str, sessions: List[Dict[str, Any]]) -> bool:
@@ -92,40 +196,47 @@ def reconcile_sessions(repo_root: str, sessions: List[Dict[str, Any]]) -> bool:
     return modified
 
 
+def _load_sessions_db(repo_root: str) -> List[Dict[str, Any]]:
+    conn = _connect(repo_root)
+    try:
+        rows = conn.execute("SELECT payload FROM sessions ORDER BY rowid").fetchall()
+    finally:
+        conn.close()
+    sessions = []
+    for (payload,) in rows:
+        try:
+            sessions.append(json.loads(payload))
+        except Exception:
+            continue
+    return sessions
+
+
 def load_sessions(repo_root: str) -> List[Dict[str, Any]]:
     """Load all persisted sessions for the given repository and reconcile completed commits."""
-    path = get_sessions_file(repo_root)
-    sessions = []
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    sessions = data
-                elif isinstance(data, dict):
-                    sessions = [data]
-        except Exception:
-            sessions = []
+    try:
+        sessions = _load_sessions_db(repo_root)
+    except Exception:
+        # Storage unusable (read-only .git, locked db): read legacy JSON only.
+        sessions = _read_json_sessions(get_sessions_file(repo_root))
+        fallback_path = os.path.join(repo_root, "understanding_sessions.json")
+        if os.path.exists(fallback_path):
+            existing_ids = {s.get("session_id") for s in sessions if s.get("session_id")}
+            for item in _read_json_sessions(fallback_path):
+                if item.get("session_id") not in existing_ids:
+                    sessions.append(item)
+        return sessions
 
-    # Also check if secondary file exists in root (if path was inside .git)
-    fallback_path = os.path.join(repo_root, "understanding_sessions.json")
-    if os.path.exists(fallback_path) and fallback_path != path:
-        try:
-            with open(fallback_path, "r", encoding="utf-8") as f:
-                extra = json.load(f)
-                if isinstance(extra, list):
-                    existing_ids = {s.get("session_id") for s in sessions if s.get("session_id")}
-                    for item in extra:
-                        if item.get("session_id") not in existing_ids:
-                            sessions.append(item)
-        except Exception:
-            pass
-
-    # Reconcile completed commits so old staged sessions do not linger as active staged attempts
     if reconcile_sessions(repo_root, sessions):
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(sessions, f, indent=2)
+            conn = _connect(repo_root)
+            with conn:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO sessions "
+                    "(session_id, payload, timestamp, attempt_number, head_commit, diff_hash) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    [_row_from_session(s) for s in sessions],
+                )
+            conn.close()
         except Exception:
             pass
 
@@ -248,32 +359,42 @@ def _max_sessions() -> int:
 
 
 def _prune_sessions(sessions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Keep only the most recent N sessions (by attempt_number, then timestamp)."""
+    """Keep only the most recent N sessions (by timestamp, then attempt_number).
+
+    Timestamp is the primary key — attempt_number RESETS per commit cycle, so
+    ranking by attempt_number first would prune a brand-new session (attempt 1)
+    in favor of old sessions that happened to accrue high attempt numbers.
+    attempt_number is only the within-a-second tiebreaker.
+    """
     limit = _max_sessions()
     if not limit or len(sessions) <= limit:
         return sessions
     ranked = sorted(
         sessions,
-        key=lambda s: (s.get("attempt_number", 1), s.get("timestamp", "")),
+        key=lambda s: (s.get("timestamp", ""), s.get("attempt_number", 1)),
     )
     return ranked[-limit:]
 
 
+def _prune_db(conn) -> None:
+    """SQLite-side prune mirroring _prune_sessions (timestamp, then attempt)."""
+    limit = _max_sessions()
+    if not limit:
+        return
+    count = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+    if count <= limit:
+        return
+    conn.execute(
+        "DELETE FROM sessions WHERE session_id NOT IN ("
+        "  SELECT session_id FROM sessions"
+        "  ORDER BY timestamp DESC, attempt_number DESC LIMIT ?"
+        ")",
+        (limit,),
+    )
+
+
 def save_session(repo_root: str, session_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Save or update a session in the repository's sessions file."""
-    path = get_sessions_file(repo_root)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-
-    sessions = []
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    sessions = data
-        except Exception:
-            sessions = []
-
+    """Save or update a session in the repository's SQLite store."""
     # Ensure head_commit, commit_message, and attempt_key are present
     head_commit = session_data.get("head_commit") or get_head_commit(repo_root)
     commit_msg = session_data.get("commit_message") or get_current_commit_message(repo_root)
@@ -294,8 +415,45 @@ def save_session(repo_root: str, session_data: Dict[str, Any]) -> Dict[str, Any]
 
     sid = session_data.get("session_id")
 
-    # If staged attempt, ensure unique sequential attempt_number scoped strictly to:
-    # the current HEAD commit (attempts made towards the next commit).
+    try:
+        conn = _connect(repo_root)
+        try:
+            # If staged attempt, ensure unique sequential attempt_number scoped
+            # strictly to: the current HEAD commit (attempts towards the next commit).
+            if session_data.get("commit_id") == "staged":
+                rows = conn.execute(
+                    "SELECT attempt_number, head_commit, session_id FROM sessions"
+                ).fetchall()
+                other_matching_attempts = {
+                    r[0] for r in rows
+                    if r[2] != sid
+                    and (r[1] or "").strip() == (head_commit or "").strip()
+                    # legacy staged shape: commit_id lives inside the payload
+                    and _is_staged_row(conn, r[2])
+                }
+                curr_no = session_data.get("attempt_number", 1)
+                if curr_no in other_matching_attempts:
+                    session_data["attempt_number"] = max(other_matching_attempts) + 1
+
+            with conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO sessions "
+                    "(session_id, payload, timestamp, attempt_number, head_commit, diff_hash) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    _row_from_session(session_data),
+                )
+                _prune_db(conn)
+        finally:
+            conn.close()
+        return session_data
+    except Exception:
+        pass
+
+    # Fallback: legacy JSON store (read-only .git, sqlite failure of any kind)
+    path = get_sessions_file(repo_root)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    sessions = _read_json_sessions(path)
+    # staged-attempt uniqueness (same contract as above)
     if session_data.get("commit_id") == "staged":
         other_matching_attempts = {
             s.get("attempt_number") for s in sessions
@@ -307,7 +465,6 @@ def save_session(repo_root: str, session_data: Dict[str, Any]) -> Dict[str, Any]
         if curr_no in other_matching_attempts:
             session_data["attempt_number"] = max(other_matching_attempts) + 1
 
-    # Deduplicate / update by session_id
     updated = False
     for i, s in enumerate(sessions):
         if s.get("session_id") == sid:
@@ -316,8 +473,6 @@ def save_session(repo_root: str, session_data: Dict[str, Any]) -> Dict[str, Any]
             break
     if not updated:
         sessions.append(session_data)
-
-    # Prune BEFORE writing so the file never grows unboundedly on busy repos
     sessions = _prune_sessions(sessions)
 
     try:
@@ -329,6 +484,29 @@ def save_session(repo_root: str, session_data: Dict[str, Any]) -> Dict[str, Any]
             json.dump(sessions, f, indent=2)
 
     return session_data
+
+
+def _is_staged_row(conn, session_id: str) -> bool:
+    """True if the row's payload records a staged (or legacy staged) attempt."""
+    row = conn.execute(
+        "SELECT payload FROM sessions WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    if not row:
+        return False
+    try:
+        s = json.loads(row[0])
+        return (s.get("commit_id") == "staged" or s.get("is_staged")
+                or not s.get("commit_id"))
+    except Exception:
+        return False
+
+
+def export_sessions(repo_root: str, export_path: str) -> int:
+    """Export all sessions to a JSON file (portability/inspection). Returns count."""
+    sessions = load_sessions(repo_root)
+    with open(export_path, "w", encoding="utf-8") as f:
+        json.dump(sessions, f, indent=2)
+    return len(sessions)
 
 
 def get_sessions_for_commit(repo_root: str, commit_id: str, diff_hash: Optional[str] = None) -> List[Dict[str, Any]]:

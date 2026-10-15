@@ -144,6 +144,53 @@ kept = {s["session_id"] for s in loaded}
 expect("scene3: most recent sessions kept", "sess_e2e_39" in kept and "sess_e2e_0" not in kept,
        f"kept={sorted(kept)[:3]}...{sorted(kept)[-3:]}")
 
+# ------------------------------------------- scene 4: agent mode records and passes
+# Judas J2: UNDERSTANDING_AGENT_MODE=agent must skip the interactive defense,
+# record the session as agent-unverified, and exit 0 — an agent literally
+# cannot perform an oral defense, so it must be a first-class unverified
+# actor instead of a hard abort.
+import json as _json
+hook_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+env4 = dict(os.environ)
+env4["UNDERSTANDING_AGENT_MODE"] = "agent"
+env4["PYTHONPATH"] = hook_root
+proc = subprocess.run(
+    [sys.executable, "-m", "understanding_agent.cli"],
+    cwd=tmp, env=env4, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+)
+expect("scene4: agent mode exits 0", proc.returncode == 0,
+       f"rc={proc.returncode} out={proc.stdout[-400:]} err={proc.stderr[-200:]}")
+expect("scene4: agent mode prints the unverified marker",
+       "agent-unverified" in proc.stdout, f"out={proc.stdout[-400:]}")
+expect("scene4: agent mode asks no questions",
+       "Question 1/" not in proc.stdout, f"out={proc.stdout[-400:]}")
+sess_path = os.path.join(tmp, ".git", "understanding_sessions.json")
+sessions = load_sessions(tmp)
+agent_rows = [s for s in sessions if s.get("verification") == "agent-unverified"]
+expect("scene4: session recorded as agent-unverified", len(agent_rows) == 1,
+       f"rows={[s.get('verification') for s in sessions]}")
+expect("scene4: local store is SQLite (not plaintext JSON)",
+       os.path.exists(os.path.join(tmp, ".git", "understanding_sessions.db")),
+       "no .git/understanding_sessions.db found")
+
+# --------------------- scene 5: the gate STILL hard-blocks in agent mode
+# Agents are unverified actors, not exempt ones: a staged live credential must
+# block (exit 1, gate output) before record-only mode is ever reached.
+aws = "AKIA" + "".join(chr(65 + (i * 7 + 3) % 26) for i in range(16))
+with open("leaky.py", "w") as f:
+    f.write(f'import os\nAWS_ACCESS_KEY_ID = "{aws}"\n')
+run(tmp, "git", "add", "leaky.py")
+proc5 = subprocess.run(
+    [sys.executable, "-m", "understanding_agent.cli"],
+    cwd=tmp, env=env4, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+)
+expect("scene5: gate blocks in agent mode", proc5.returncode == 1,
+       f"rc={proc5.returncode} out={proc5.stdout[-400:]}")
+expect("scene5: gate output only (no record-only marker)",
+       "RECORD-ONLY" not in proc5.stdout, f"out={proc5.stdout[-400:]}")
+run(tmp, "git", "restore", "--staged", "leaky.py")
+os.remove("leaky.py")
+
 # ------------------------------------------------------------------- summary
 print()
 if FAILED:

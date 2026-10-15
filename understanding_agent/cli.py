@@ -6,6 +6,7 @@ import re
 import hashlib
 import subprocess
 from .environment_detector import EnvironmentDetector
+from .identity import IdentityDetector
 from .change_detector import ChangeDetector
 from .stack_detector import StackDetector
 from .code_graph import CodeGraph
@@ -20,6 +21,7 @@ from .followup_generator import FollowUpGenerator
 from .interaction import Interaction
 from .server_client import ServerClient
 from .answer_evaluator import AnswerEvaluator
+from .answer_hygiene import classify_answer, hygiene_enabled
 from .coding_standards import CodingStandardsChecker
 from .session_store import save_session
 from .session_payload import build_session_payload
@@ -39,6 +41,28 @@ def _is_gitignored(repo_root: str, path: str) -> bool:
             cwd=repo_root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
         return code == 0
+    except Exception:
+        return False
+
+
+def _interactive_input_available() -> bool:
+    """Judas J2: can a human actually answer questions here?
+
+    True when stdin is a TTY, or /dev/tty (CON on Windows) is openable —
+    interaction.timed_input falls back to /dev/tty, so a piped stdin in a
+    real terminal is still interactive. False means no interactive answer is
+    possible (agents, CI, cron) and the hook must record-and-pass rather
+    than abort a defense nobody can perform.
+    """
+    try:
+        if sys.stdin.isatty():
+            return True
+    except Exception:
+        pass
+    try:
+        con = 'CON' if sys.platform == 'win32' else '/dev/tty'
+        with open(con, 'r'):
+            return True
     except Exception:
         return False
 
@@ -166,6 +190,11 @@ def main():
     evidence_hint = evidence_question_hint(evidence)
     practice_hint = practice_pack_hint(stack, context, security_hint)
 
+    # Pokerface P3: zero-touch identity (git author metadata) attached to
+    # every session so the central service can JIT-provision developer and
+    # repo records without any login flow.
+    identity = IdentityDetector.resolve(project_root)
+
     # 5c. Security gate FIRST: deterministic critical findings (live
     # credentials) block before any prompt or LLM call. Unlike the oral
     # defense, no answer can make committing a real credential safe, and git
@@ -182,6 +211,19 @@ def main():
     standards_report = standards_checker.check(changes, context)
     standards_checker.print_report(standards_report)
 
+    # 5d-2. Tool evidence (deterministic, advisory): semgrep/gitleaks results
+    # are displayed and recorded regardless of what any LLM later says —
+    # the LLM elaborates this evidence into questions; it cannot suppress
+    # or fabricate it (docs/LLM_POLICY.md, "Deterministic evidence").
+    evidence_findings = (evidence.get("semgrep") or []) + (evidence.get("gitleaks") or [])
+    if evidence_findings:
+        print(f"\n\033[93mTool Evidence (advisory — informs the questions below):\033[0m")
+        for f in evidence_findings[:5]:
+            loc = f"{f.get('path', '?')}:{f.get('line', 0)}" if f.get("path") else "?"
+            print(f"  \033[93m[{f.get('rule', 'finding')}] {loc} "
+                  f"{(f.get('message') or '')[:120]}\033[0m")
+        print()
+
     hints = {
         "stack": stack,
         "security": security_hint,
@@ -191,6 +233,62 @@ def main():
     }
 
     failed_standards = [s for s in standards_report if not s.get("is_good", True)]
+
+    # 5e. Judas J2 — agent / non-interactive record-only mode.
+    # Agents (Codex/Claude CLI/etc.) commit via git, so the hook fires — but
+    # no human is present: /dev/tty EOF yields empty answers and aborts at
+    # <25%, meaning an agent literally cannot commit. Model agents as a
+    # first-class UNVERIFIED actor instead of failing them:
+    #   - explicit: UNDERSTANDING_AGENT_MODE=agent (preferred, predictable)
+    #   - auto: no interactive stdin reachable (no TTY and no /dev/tty)
+    # The deterministic gate ABOVE still hard-blocks on live credentials, and
+    # the standards audit still ran — only the interactive parts are skipped.
+    # Zero LLM calls; the session is recorded loudly as unverified so the
+    # central ledger (and the CI proof-of-defense check) can require human
+    # review on top of agent commits.
+    agent_mode = os.environ.get("UNDERSTANDING_AGENT_MODE", "").strip().lower() == "agent"
+    if agent_mode or not _interactive_input_available():
+        verification = "agent-unverified" if agent_mode else "unattended-unverified"
+        reason = ("UNDERSTANDING_AGENT_MODE=agent" if agent_mode
+                  else "no interactive terminal reachable (no TTY, /dev/tty unavailable)")
+        print(f"\033[93m⚠ RECORD-ONLY MODE ({verification}): no oral defense performed.\033[0m")
+        print(f"\033[93m  Trigger: {reason}.\033[0m")
+        print(f"\033[93m  The deterministic credential gate and standards audit still ran;\033[0m")
+        print(f"\033[93m  this commit is recorded as UNVERIFIED for the central ledger.\033[0m")
+        try:
+            from .session_store import load_sessions
+            _existing = load_sessions(project_root)
+            ro_attempt = get_next_attempt_number(
+                _existing, head_commit, diff_hash, commit_msg, state_attempts=0
+            )
+        except Exception:
+            ro_attempt = 1
+        ro_session = build_session_payload(
+            attempt_number=ro_attempt,
+            head_commit=head_commit,
+            commit_message=commit_msg,
+            attempt_key=attempt_key,
+            diff_hash=diff_hash,
+            repository=env.get("repository", "unknown"),
+            branch=env.get("branch", "unknown"),
+            status="PASSED",
+            score=0,
+            changed_files=changes.get("files", []),
+            change_summary={"what_changed": "Agent/non-interactive commit; no oral defense performed."},
+            verification=verification,
+            standards_report=standards_report,
+            violations_count=len(failed_standards),
+            questions=[],
+            identity=identity,
+            evidence=evidence,
+        )
+        try:
+            save_session(project_root, ro_session)
+            ServerClient().send(ro_session)
+        except Exception:
+            pass
+        sys.exit(0)
+
     if failed_standards:
         YELLOW = "\033[93m"
         RED = "\033[91m"
@@ -245,6 +343,8 @@ def main():
                 standards_report=standards_report,
                 violations_count=len(failed_standards),
                 questions=[],
+                identity=identity,
+                evidence=evidence,
             )
             try:
                 save_session(project_root, session_data)
@@ -501,6 +601,23 @@ def main():
                 else:
                     response_time = min(time_limit, 1)
                 print(f"\n{GREEN}✓ Answer received in {response_time} seconds{RESET}")
+
+                # Pokerface P1: a suspect capture (clipped mic, ASR stutter,
+                # empty submit) gets ONE optional re-ask before it can score.
+                # Enter submits the original as-is — warning, never a veto.
+                if hygiene_enabled():
+                    suspect, reason = classify_answer(ans_text)
+                    if suspect:
+                        print(f"{YELLOW}⚠ That answer may not have come through cleanly ({reason}).{RESET}")
+                        retry_text = interaction.timed_input(
+                            f"{CYAN}Say it again or type it (Enter submits the text above as-is) ❯ {RESET}",
+                            min(time_limit, 45),
+                        )
+                        if retry_text and retry_text.strip():
+                            ans_text = retry_text
+                            resp_val = getattr(interaction, "last_response_time", None)
+                            if resp_val and resp_val > 0:
+                                response_time = min(time_limit, resp_val)
             ans_obj = {
                 "answer": ans_text,
                 "response_time_seconds": response_time,
@@ -628,6 +745,8 @@ def main():
                         standards_report=standards_report,
                         violations_count=len(failed_standards),
                         questions=final_results,
+                        identity=identity,
+                        evidence=evidence,
                     )
                     save_session(project_root, session_data)
                     ServerClient().send(session_data)
@@ -680,6 +799,8 @@ def main():
             violations_count=len(failed_standards),
             questions=final_results,
             analysis=analysis,
+            identity=identity,
+            evidence=evidence,
         )
         try:
             save_session(project_root, session_data)

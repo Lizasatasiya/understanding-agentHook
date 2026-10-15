@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="understanding-agent",
-    version="0.3.0",
+    version="0.4.0",
     packages=find_packages(),
     package_data={"understanding_agent": ["ui/*"]},
     include_package_data=True,
@@ -23,6 +23,13 @@ setup(
         "ui": [
             "fastapi",
             "uvicorn",
+            "pydantic>=2",
+        ],
+        "service": [
+            # Central ledger service (service/, Pokerface P3 / Judas)
+            "fastapi",
+            "uvicorn",
+            "sqlalchemy>=2",
             "pydantic>=2",
         ],
     },

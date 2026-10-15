@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: understanding
+      POSTGRES_PASSWORD: understanding
+      POSTGRES_DB: understanding_ledger
+    ports:
+      - "5433:5432"
+    volumes:
+      - ledger_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U understanding"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  ledger:
+    build:
+      context: ..
+      dockerfile: service/Dockerfile
+    environment:
+      SERVICE_DATABASE_URL: postgresql+psycopg://understanding:understanding@db:5432/understanding_ledger
+      SERVICE_TEAM_TOKEN: ${SERVICE_TEAM_TOKEN:-}
+      SERVICE_TEAM_SECRET: ${SERVICE_TEAM_SECRET:-}
+      SERVICE_ADMIN_TOKEN: ${SERVICE_ADMIN_TOKEN:-}
+      SERVICE_RETENTION_DAYS: ${SERVICE_RETENTION_DAYS:-90}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  ledger_pgdata:

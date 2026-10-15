@@ -40,6 +40,21 @@ class TestSessionPrune(unittest.TestCase):
         with patch_dict(os.environ, {"UNDERSTANDING_AGENT_MAX_SESSIONS": "1"}):
             self.assertEqual(len(_prune_sessions(sessions)), 9)
 
+    def test_prune_keeps_newest_timestamp_over_high_attempt_numbers(self):
+        # Regression: attempt_number resets per commit cycle — ranking by it
+        # first pruned a brand-new attempt-1 session in favor of OLD sessions
+        # with high attempt numbers. Timestamp must dominate.
+        old = [_mk_session(i) for i in range(10, 40)]  # 2026-10-0x, attempt 10..39
+        for s in old:
+            s["timestamp"] = "2026-10-01T09:00:00"
+        new = _mk_session(1)
+        new["timestamp"] = "2026-10-16T18:00:00"  # newest, attempt_number 1
+        with patch_dict(os.environ, {"UNDERSTANDING_AGENT_MAX_SESSIONS": "3"}):
+            pruned = _prune_sessions(old + [new])
+        self.assertEqual(len(pruned), 3)
+        self.assertIn("sess_1", {s["session_id"] for s in pruned},
+                      "newest session must survive the prune despite attempt_number=1")
+
     def test_update_in_place_does_not_grow_file(self):
         with tempfile.TemporaryDirectory() as d:
             os.makedirs(os.path.join(d, ".git"), exist_ok=True)

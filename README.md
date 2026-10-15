@@ -221,7 +221,7 @@ In your project root, add:
 ```yaml
 repos:
 -   repo: https://github.com/Lizasatasiya/understanding-agentHook.git
-    rev: main
+    rev: v0.4.0   # pin a released tag; `rev: main` is dev-only
     hooks:
     -   id: understanding-agent
 ```
@@ -241,6 +241,36 @@ git commit -m "Implement new feature"
 ```
 
 The understanding check will automatically run in your terminal before the commit finishes.
+
+---
+
+## 🏛️ Central Ledger & Enforcement (teams)
+
+Client-side hooks are advisory by nature (`--no-verify` skips them). For
+teams, the optional central ledger turns sessions into a proof-of-defense
+record that CI checks — making bypass an audit event, not a hole:
+
+- **Local store**: SQLite at `.git/understanding_sessions.db` (0600; answers
+  are personal data). JSON is an export format only.
+- **Central service** (`service/`, Postgres via docker-compose or SQLite for
+  dev): JIT-provisions developers/repos from zero-touch git identity, keeps
+  the org hierarchy (org → team → members; repo → team), and serves
+  `GET /api/v1/defense` for the proof-of-defense check.
+- **Hook sync** (opt-in): `UNDERSTANDING_AGENT_SYNC_URL` + optional
+  `UNDERSTANDING_AGENT_TEAM_KEY` / `UNDERSTANDING_AGENT_TEAM_SECRET` (HMAC).
+  Offline sessions queue in `.git/understanding_sync_queue.json` and drain
+  on the next run — sync never blocks or slows a commit.
+- **Bypass detection**: `scripts/verify_defense.py` runs in CI or as a
+  self-hosted pre-receive hook: a pushed commit with no PASSED session row is
+  unaudited by definition.
+- **Agent commits**: `UNDERSTANDING_AGENT_MODE=agent` (or any non-interactive
+  context) records the commit as `agent-unverified` and passes — agents are
+  first-class unverified actors, and the credential gate still blocks them.
+
+Full policy: [docs/ENFORCEMENT.md](docs/ENFORCEMENT.md) (bypass taxonomy,
+the hook-vs-centralized weighing, rejected alternatives) and
+[docs/LLM_POLICY.md](docs/LLM_POLICY.md) (where the LLM may participate).
+Service details: [service/README.md](service/README.md).
 
 ---
 

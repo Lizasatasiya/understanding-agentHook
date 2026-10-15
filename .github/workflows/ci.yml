@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install test deps (central-service extra — its tests run in the suite)
+        run: pip install -e ".[service]"
+      - name: Unit tests
+        run: python -m unittest discover -s tests
+      - name: E2E gate tests (scratch git repos)
+        run: python tests/e2e_gate_first.py
