@@ -21,6 +21,15 @@ import sys
 import time
 from pathlib import Path
 
+if sys.version_info < (3, 10):
+    sys.exit(
+        f"This tool needs Python >= 3.10 (this interpreter is "
+        f"{sys.version_info[0]}.{sys.version_info[1]}). Fix once:\n"
+        "  uv python install 3.12 --default   # puts a modern python3 on PATH\n"
+        "or use the prepared demo venv:\n"
+        "  ~/.understanding-demo-venv/bin/python <this script>"
+    )
+
 HOOK_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HOOK_ROOT))
 

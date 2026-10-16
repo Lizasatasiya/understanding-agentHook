@@ -39,17 +39,27 @@ Fixed by PR #6680 (released in 1.7.8): a 6-line change in
 
 Both demo repos are real clones — never push them; everything is local.
 
+## Interpreters (fixed once, 2026-10-16)
+
+`python3` now resolves to Python 3.12 (uv-managed, ~/.local/bin/python3 —
+verify `python3 --version` shows 3.12; if not, run
+`uv python install 3.12 --default`). All commands below use `python3`.
+The package needs >= 3.10; the old `python3` shell alias is broken
+(permission denied) — do not use it.
+The dashboard runs from the prepared venv ~/.understanding-demo-venv
+(Python 3.12 + the [ui] extras, editable hook repo installed).
+
 ## Pre-flight (T-15 minutes, in your own terminal)
 
 ```bash
 # 1. Warm + verify the live path per repo (expect ~10-15s, 2 questions)
-cd ~/demo-repos/rich-demo  && python3.14 ~/understanding-agentHook/scripts/demo_probe.py
-cd ~/demo-repos/axios-demo && python3.14 ~/understanding-agentHook/scripts/demo_probe.py
+cd ~/demo-repos/rich-demo  && python3 ~/understanding-agentHook/scripts/demo_probe.py
+cd ~/demo-repos/axios-demo && python3 ~/understanding-agentHook/scripts/demo_probe.py
 
 # 2. Start the central ledger (leave running in a side terminal)
 cd ~/understanding-agentHook && mkdir -p /tmp/demo-ledger
 SERVICE_DATABASE_URL=sqlite:////tmp/demo-ledger/ledger.db SERVICE_TEAM_TOKEN=demo-team \
-  python3.14 -m uvicorn service.app:app --port 8766
+  python3 -m uvicorn service.app:app --port 8766
 
 # 3. (Optional but authentic) wire the hook via pre-commit in the demo repo
 cd ~/demo-repos/rich-demo
@@ -69,11 +79,11 @@ pre-commit install
 ```bash
 cd ~/demo-repos/rich-demo
 git stash push -q -m fix   # hide the staged fix
-python3.14 -c "import sys, io; sys.path.insert(0,'.'); from rich.console import Console; \
+python3 -c "import sys, io; sys.path.insert(0,'.'); from rich.console import Console; \
 c=Console(file=io.StringIO()); c.print(end='!'); print('output:', repr(c.file.getvalue()))"
 # → output: '\n'   ← the bug, live
 git stash apply -q --index && git stash drop -q   # restore the staged fix
-python3.14 -c "import sys, io; sys.path.insert(0,'.'); from rich.console import Console; \
+python3 -c "import sys, io; sys.path.insert(0,'.'); from rich.console import Console; \
 c=Console(file=io.StringIO()); c.print(end='!'); print('output:', repr(c.file.getvalue()))"
 # → output: '!'
 ```
@@ -84,7 +94,7 @@ codesandbox repro needs a browser; the rich repro is fully in-terminal.)
 ## Scene 1 — the credential gate (60 seconds, either repo)
 
 ```bash
-python3.14 - <<'EOF'
+python3 - <<'EOF'
 aws = "AKIA" + "IOSFODNN7" + "EXAMPLE"
 with open("scratch_creds.py", "w") as f:
     f.write(f'import os\nAWS_ACCESS_KEY_ID = "{aws}"\n')
@@ -105,7 +115,7 @@ Manual path (identical behavior, no pre-commit needed):
 
 ```bash
 export PYTHONPATH=~/understanding-agentHook
-python3.14 -m understanding_agent.cli     # interactive: it reads your terminal
+python3 -m understanding_agent.cli     # interactive: it reads your terminal
 git commit --no-verify -m "fix: ..."     # complete the commit after passing
 ```
 
@@ -142,7 +152,7 @@ unverified".
 export UNDERSTANDING_AGENT_SYNC_URL=http://127.0.0.1:8766
 export UNDERSTANDING_AGENT_TEAM_KEY=demo-team
 export UNDERSTANDING_AGENT_MODE=agent            # = what an AI agent hits
-python3.14 -m understanding_agent.cli           # via PYTHONPATH as above
+python3 -m understanding_agent.cli           # via PYTHONPATH as above
 # → "⚠ RECORD-ONLY MODE (agent-unverified): no oral defense performed."
 git commit --no-verify -m "fix: ... (agent)"
 ```
@@ -151,10 +161,10 @@ git commit --no-verify -m "fix: ... (agent)"
 
 ```bash
 # what the team knows now (repo identity comes from the git remote — Textualize/rich)
-curl "http://127.0.0.1:8766/api/v1/defense?repo_slug=Textualize/rich" | python3.14 -m json.tool
+curl "http://127.0.0.1:8766/api/v1/defense?repo_slug=Textualize/rich" | python3 -m json.tool
 
 # CI's proof-of-defense check — default policy:
-python3.14 ~/understanding-agentHook/scripts/verify_defense.py \
+python3 ~/understanding-agentHook/scripts/verify_defense.py \
   --ledger http://127.0.0.1:8766 --repo "Textualize/rich" \
   --range "HEAD~1..HEAD" --token demo-team
 # → "UNAUDITED ...: agent-made commit (agent-unverified) — require human review"  rc=1
@@ -168,6 +178,24 @@ The closer: "--no-verify, GUI skippers, fresh clones, agents — none of them
 can be prevented client-side, and none of them can hide: a pushed commit
 with no defense record is unaudited by definition, and CI fails it. Bypass
 becomes an audit event, not a hole."
+
+## Scene 5 — the dashboard updates itself (90 seconds, great closer)
+
+The local dashboard (colleague's real-time UI: per-user metrics, user
+filtering, 8-second auto-refresh) watches the demo repo:
+
+    # terminal 2 (leave running):
+    UNDERSTANDING_AGENT_REPO_ROOT=~/demo-repos/rich-demo \
+      ~/.understanding-demo-venv/bin/python -m understanding_agent.server
+    # open http://127.0.0.1:8000/ui — leave it on the projector
+
+With the dashboard open, run any scene above (agent commit, or the live
+defense): the new commit and its attempts appear WITHIN 8 SECONDS without
+touching the browser (verified live: a fresh commit appeared with author
+attribution and attempt count; the per-user panel updated on its own).
+Speaker beat: click a user in the left panel to filter — "the team sees
+who defended what, per user, as it happens."
+
 
 ## Failure playbook (say this, then switch repo)
 
