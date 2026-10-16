@@ -39,15 +39,20 @@ Fixed by PR #6680 (released in 1.7.8): a 6-line change in
 
 Both demo repos are real clones — never push them; everything is local.
 
-## Interpreters (fixed once, 2026-10-16)
+## Interpreters — settled once and for all (no sudo anywhere)
 
-`python3` now resolves to Python 3.12 (uv-managed, ~/.local/bin/python3 —
-verify `python3 --version` shows 3.12; if not, run
-`uv python install 3.12 --default`). All commands below use `python3`.
-The package needs >= 3.10; the old `python3` shell alias is broken
-(permission denied) — do not use it.
-The dashboard runs from the prepared venv ~/.understanding-demo-venv
-(Python 3.12 + the [ui] extras, editable hook repo installed).
+ONE command: `python3`. In any NEW terminal it resolves to Python 3.12
+(uv-managed, ~/.local/bin/python3 — your .zshrc already puts that on PATH).
+If an OLD terminal still says 3.9.x, that session predates the install and
+zsh cached the old lookup: open a new tab, or run `rehash` once.
+The broken `python3.14` alias is abandoned — nothing uses it anymore.
+
+Belt AND suspenders: if any command below is accidentally launched with an
+old Python anyway, the hook CLI and demo_probe.py detect it and re-exec
+themselves under the modern interpreter automatically (verified: both run
+correctly even when explicitly invoked with Apple's 3.9). The dashboard
+runs from the prepared venv ~/.understanding-demo-venv (its private engine
+— you never type its python).
 
 ## Pre-flight (T-15 minutes, in your own terminal)
 

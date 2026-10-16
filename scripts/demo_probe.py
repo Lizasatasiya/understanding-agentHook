@@ -21,13 +21,29 @@ import sys
 import time
 from pathlib import Path
 
-if sys.version_info < (3, 10):
+if sys.version_info < (3, 10) and __name__ == "__main__":
+    # Self-heal: stale shells and clean-PATH contexts resolve python3 to
+    # Apple's 3.9. Re-exec under a modern interpreter instead of failing.
+    import os as _os
+    import subprocess as _sp
+    for _cand in (_os.path.expanduser("~/.local/bin/python3"),
+                  "/usr/local/bin/managed_python3"):
+        try:
+            if not (_os.path.isfile(_cand) and _os.access(_cand, _os.X_OK)):
+                continue
+            _r = _sp.run([_cand, "-c",
+                          "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"],
+                         capture_output=True)
+            if _r.returncode == 0:
+                _os.execve(_cand, [_cand, _os.path.abspath(__file__)] + sys.argv[1:],
+                           dict(_os.environ))
+        except Exception:
+            continue
     sys.exit(
         f"This tool needs Python >= 3.10 (this interpreter is "
         f"{sys.version_info[0]}.{sys.version_info[1]}). Fix once:\n"
         "  uv python install 3.12 --default   # puts a modern python3 on PATH\n"
-        "or use the prepared demo venv:\n"
-        "  ~/.understanding-demo-venv/bin/python <this script>"
+        "then open a NEW terminal."
     )
 
 HOOK_ROOT = Path(__file__).resolve().parent.parent
