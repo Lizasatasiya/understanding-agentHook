@@ -109,6 +109,6 @@ Hard rules, each enforced in code:
 | Findings citation-verified, advisory-only | `tests/test_change_intelligence.py` |
 | Malformed LLM output degrades to deterministic | `tests/test_change_intelligence.py` |
 | Fallback/offline marked unverified | `tests/test_session_payload.py`, e2e |
-| Multilingual answers judged on concepts | `tests/test_answer_evaluator*.py` |
+| Multilingual answers judged on concepts | tests/test_api_and_evaluator.py |
 | Answer hygiene re-ask before scoring | `tests/test_answer_hygiene.py` |
 | Agent mode: no questions, no LLM, gate still blocks | e2e scenes 4, 5 |

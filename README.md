@@ -16,8 +16,23 @@
 - [Tech Stack & Dependencies](#-tech-stack--dependencies)
 - [Installation & Setup](#-installation--setup)
 - [Integration with Any Git Repository](#-integration-with-any-git-repository)
+- [Central Ledger & Enforcement (teams)](#️-central-ledger--enforcement-teams)
 - [Audio & Voice Agent Guide](#-audio--voice-agent-guide)
 - [Design Decisions & Trade-Offs](#-design-decisions--trade-offs)
+- [Full Documentation Set](#-full-documentation-set)
+
+---
+
+## 📚 Full Documentation Set
+
+Complete, implementation-verified documentation lives in [`docs/`](docs/README.md):
+
+- [OVERVIEW](docs/OVERVIEW.md) — non-technical: what this is, what it never does
+- [ARCHITECTURE](docs/ARCHITECTURE.md) — technical: pipeline, module contracts, schemas
+- [DECISIONS](docs/DECISIONS.md) — every design decision with rejected alternatives
+- [OPERATIONS](docs/OPERATIONS.md) — install, config reference, CI, deployment, troubleshooting
+- [LLM_POLICY](docs/LLM_POLICY.md) — where the LLM may participate (security)
+- [ENFORCEMENT](docs/ENFORCEMENT.md) — bypass handling, proof of defense, delivery verdict
 
 ---
 
