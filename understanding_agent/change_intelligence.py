@@ -194,6 +194,12 @@ def build_master_prompt(context: dict, summary: dict, standards_doc: str,
     if env:
         lines.append(f"Repository Stack: {env.get('framework', 'unknown')} ({env.get('language', 'unknown')})")
         lines.append("")
+    # Deterministic ChangeKind tier (change_kind.py) — always-on even offline;
+    # the LLM classification below can refine it, this anchors the focus.
+    from .change_kind import classification_hint_lines
+    ck_lines = classification_hint_lines((context or {}).get("change_kind"))
+    if ck_lines:
+        lines += ["", *ck_lines]
     lines.append("## Change Summary")
     for k in ("what_changed", "impact"):
         v = (summary or {}).get(k)

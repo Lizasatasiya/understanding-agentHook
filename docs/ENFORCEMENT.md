@@ -15,7 +15,7 @@ hole: the central ledger (service/, see CENTRALIZED_DATABASE_ARCHITECTURE.md
 | Human, `--no-verify` | The hook never runs, so nothing is recorded — by definition the pushed commit has no session row. CI proof-of-defense check fails it. | CI required check / pre-receive |
 | Human, GUI with skip-toggle (VS Code "smart commit", Tower, Fork) | Same class as --no-verify. GUIs shell out to git, so when the hook does run it works normally; the skip path is identical to --no-verify. | Same |
 | Agent (Codex/Claude CLI/etc.) | The hook FIRES (agents use git), but no human is present. `UNDERSTANDING_AGENT_MODE=agent` — or an unreachable TTY — records the session as `agent-unverified` / `unattended-unverified` and exits 0. Zero LLM calls. The credential gate still hard-blocks (agents are unverified, not exempt). | Ledger row + CI policy on top |
-| Fresh clone / hooks never installed | No session rows at all. CI proof-of-defense flags every commit. | CI required check |
+| Fresh clone / hooks never installed | The push guard (pre-push hook id understanding-agent-push-guard) gives a loud remediation moment BEFORE the push; no session rows means CI proof-of-defense still flags every commit as the backstop. | Push guard (pre-push), CI required check |
 | Credential in the diff | Gate blocks regardless of actor class — including agent mode. | In the hook, first |
 
 ## Proof-of-defense check

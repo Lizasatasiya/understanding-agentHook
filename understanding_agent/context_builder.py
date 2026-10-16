@@ -1,5 +1,6 @@
 import subprocess
 import ast
+import re
 
 from .language_support import (
     language_for,
@@ -8,8 +9,14 @@ from .language_support import (
 
 
 class ContextBuilder:
-    def build(self, changes: dict, graph) -> dict:
 
+    # Phase 2 budgets: default per-function diff cap (unchanged historical
+    # behavior) and the total cap across all function diffs in one context.
+    _DEFAULT_DIFF_CAP = 35
+    _TOTAL_DIFF_BUDGET = 240
+
+    def build(self, changes: dict, graph) -> dict:
+        raw_diffs = []
         changed_code = changes.get("files", [])
         
         # Determine all functions that were modified in the commit
@@ -99,15 +106,30 @@ class ContextBuilder:
                     except Exception:
                         func_diff = f"New code added: {func_name}"
                 
-                if len(func_diff.splitlines()) > 35:
-                    func_diff = self._compress_diff(func_diff, max_lines=35)
-                
+                raw_diffs.append(func_diff)
+
                 structured_changes.append({
                     "file": filepath,
                     "function": func_name,
-                    "diff": func_diff,
+                    "diff": func_diff,  # replaced by the budgeted selection below
                     "dependency_summary": dep_text
                 })
+
+        # Phase 2 (PLAN_V1_COMPLETION.md): token-budgeted context selection.
+        # Two levels, deterministic: (1) a TOTAL budget across all function
+        # diffs so one giant function cannot starve the rest; (2) within a
+        # function, importance-ranked selection instead of positional
+        # truncation — the +/- changed lines ARE the change and are kept
+        # (head+tail in the extreme), structural context fills next, filler
+        # context is dropped first. Diffs within budget pass through
+        # untouched (byte-identical to the old behavior for normal sizes).
+        total_raw = sum(len(d.splitlines()) for d in raw_diffs)
+        if raw_diffs and total_raw > self._TOTAL_DIFF_BUDGET:
+            per_fn_cap = max(12, self._TOTAL_DIFF_BUDGET // len(raw_diffs))
+        else:
+            per_fn_cap = self._DEFAULT_DIFF_CAP
+        for entry, raw in zip(structured_changes, raw_diffs):
+            entry["diff"] = self._compress_diff(raw, max_lines=per_fn_cap)
         
         stats = changes.get("stats", {})
         is_large_change = stats.get("is_large_change", False) or len(structured_changes) > 3
@@ -133,37 +155,73 @@ class ContextBuilder:
         return context
 
     def _compress_diff(self, diff_text: str, max_lines: int = 35) -> str:
-        """Compress large diffs while preserving signatures, calls, returns, and edits."""
+        """Importance-ranked diff selection under a line budget.
+
+        Rank 0 — the +/- changed lines: they ARE the change; kept first
+        (head+tail truncation only in the extreme case where they alone
+        exceed the budget).
+        Rank 1 — structural context (signatures, returns, raises, control
+        flow): the lines that make the surrounding logic readable.
+        Rank 2 — filler context: dropped first.
+
+        Diffs within the budget pass through unchanged. Kept lines are
+        emitted in their original order; a trailing marker states how many
+        lines of each rank were compressed away.
+        """
         lines = diff_text.splitlines()
         if len(lines) <= max_lines:
             return diff_text
 
-        header = lines[:2]
-        body = lines[2:]
+        headers = [l for l in lines[:3] if l.startswith(("---", "+++", "@@"))]
 
-        structural = []
-        skipped = 0
-        for line in body:
+        def rank(line: str) -> int:
+            if line.startswith(("---", "+++", "@@")):
+                return -1  # header
+            if line.startswith(("+", "-")):
+                return 0  # changed — the actual diff
             stripped = line.strip()
-            if (line.startswith(('+', '-')) or 
-                stripped.startswith(('def ', 'class ', 'return ', 'raise ', 'async def ')) or
-                'try:' in stripped or 'except ' in stripped):
-                structural.append(line)
-            else:
-                if len(structural) < max_lines - 6:
-                    structural.append(line)
-                else:
-                    skipped += 1
+            if (stripped.startswith(("def ", "class ", "return ", "raise ", "async def ",
+                                     "if ", "for ", "while ", "try:", "except ", "with "))
+                    or "try:" in stripped or "except " in stripped):
+                return 1  # structural context
+            return 2  # filler context
 
-        if len(structural) > max_lines:
-            half = (max_lines - 4) // 2
-            compressed = header + structural[:half] + [f"@@ ... ({len(structural) - max_lines + skipped} lines compressed) ... @@"] + structural[-half:]
-            return "\n".join(compressed)
+        ranked = [(i, rank(l)) for i, l in enumerate(lines)]
+        body_budget = max(8, max_lines - len(headers) - 1)  # 1 slot for the marker
+
+        kept = {i for i, r in ranked if r == -1}
+        changed_idx = [i for i, r in ranked if r == 0]
+        structural_idx = [i for i, r in ranked if r == 1]
+        filler_idx = [i for i, r in ranked if r == 2]
+
+        dropped = {"changed": 0, "structural": 0, "filler": 0}
+
+        if len(changed_idx) > body_budget:
+            # Extreme: the change alone overflows — keep head+tail of it
+            half = body_budget // 2
+            keep_set = set(changed_idx[:half]) | set(changed_idx[-(body_budget - half):])
+            dropped["changed"] = len(changed_idx) - body_budget
+            dropped["structural"] = len(structural_idx)
+            dropped["filler"] = len(filler_idx)
         else:
-            compressed = header + structural
-            if skipped:
-                compressed.append(f"@@ ... ({skipped} unchanged context lines omitted) ... @@")
-            return "\n".join(compressed)
+            slots = body_budget - len(changed_idx)
+            keep_set = set(changed_idx)
+            take_struct = structural_idx[:slots]
+            keep_set |= set(take_struct)
+            dropped["structural"] = len(structural_idx) - len(take_struct)
+            slots -= len(take_struct)
+            take_filler = filler_idx[:slots] if slots > 0 else []
+            keep_set |= set(take_filler)
+            dropped["filler"] = len(filler_idx) - len(take_filler)
+
+        kept |= keep_set
+        out = [lines[i] for i in sorted(kept)]
+        compressed_n = sum(dropped.values())
+        if compressed_n:
+            out.append(f"@@ ... ({compressed_n} lines compressed: "
+                       f"{dropped['filler']} filler, {dropped['structural']} structural, "
+                       f"{dropped['changed']} changed) ... @@")
+        return "\n".join(out)
 
     def _get_function_details(self, filepath: str, func_name: str) -> dict:
         try:
@@ -222,6 +280,31 @@ class ContextBuilder:
                 lines = source.splitlines()
                 start = fn["start_line"] - 1
                 end = min(fn["end_line"], len(lines))
+                # Phase 2 (context eval finding): a NESTED definition (e.g. a
+                # React handler inside a component) gets a "next definition
+                # wins" span that excludes the enclosing function's preamble
+                # — hooks, consts — which the change's behavior depends on.
+                # Extend the slice upward to the enclosing definition, but
+                # ONLY when the nearest shallower non-blank line above is
+                # itself a definition line (function/arrow-const). Class
+                # bodies (`export class X {`) are not definition matches, so
+                # class methods do NOT over-extend.
+                if language in ("javascript", "typescript") and start > 0:
+                    def_indent = len(lines[start]) - len(lines[start].lstrip())
+                    if def_indent >= 2:
+                        for j in range(start - 1, -1, -1):
+                            prev = lines[j]
+                            if not prev.strip():
+                                continue
+                            prev_indent = len(prev) - len(prev.lstrip())
+                            if prev_indent < def_indent:
+                                if re.match(
+                                    r"\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*\w+\s*\("
+                                    r"|\s*(?:export\s+)?(?:const|let|var)\s+\w+\s*=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*=>)",
+                                    prev,
+                                ):
+                                    start = j
+                                break
                 return "\n".join(lines[start:end])
         return ""
         

@@ -302,3 +302,107 @@ gate e2e on every push/PR.
 watched main. CI is also Phase 1 of the enforcement story: once the ledger
 exists, the same CI job gains the proof-of-defense check
 (scripts/verify_defense.py).
+
+
+---
+
+# Completion-pass decisions (PLAN_V1_COMPLETION.md)
+
+## D18. Context quality is measured before it is improved
+
+**Decision.** scripts/context_eval_harness.py (+5-case corpus) replays the
+REAL detector/graph/builder on scratch repos and measures % of expected
+concepts present in the built context; CI gates it at ≥0.80 (--strict).
+
+**Alternatives.** Building token-budget selection first and "eyeballing"
+question quality after; or no measurement (the original state — context
+work was vibes).
+
+**Why.** The harness paid for itself immediately: its first run caught a
+real extraction bug — nested React handlers ("next definition wins" spans)
+excluded their component's useState preamble from every question. Without
+measurement that gap was invisible; with it, the fix was one targeted change
+and the corpus now pins it forever.
+
+## D19. Ranked selection under budgets, not positional truncation
+
+**Decision.** Over-budget diffs keep lines by importance rank (changed
+lines are the change — kept first; structural context next; filler dropped
+first), with a 35-line per-function default cap and a 240-line total budget
+across functions so one giant function cannot starve the rest.
+
+**Alternatives.** The old behavior (keep the first N structural lines,
+truncate at position); or pure token counting without rank.
+
+**Why.** Positional truncation keeps whatever is NEAR THE TOP and silently
+drops the end of the change — exactly where late returns/raises live. Rank
+0 (the +/- lines) is the only tier that can never be silently lost.
+
+## D20. Deterministic ChangeKind tier with a frozen matrix (LLM refines, never replaces)
+
+**Decision.** change_kind.py classifies every commit (even offline) from
+paths/diff-shape/symbols into typed weights over the six frozen domains +
+auditable signals; the classification prints for the developer and feeds a
+CHANGE CLASSIFICATION section in BOTH question prompts. tests/
+test_change_kind.py is the frozen matrix (like the gate matrix).
+
+**Alternatives.** LLM-only classification (exists via master analysis) —
+offline-blind and unauditable; or no classification (questions target the
+wrong dimension for UI vs schema changes).
+
+**Why.** Deterministic-first answers "how does it distinguish UI from system
+design changes" with something testable and always-on; the LLM tier remains
+a refinement on top, not the source of truth.
+
+## D21. Tiered redaction (vendor: zero chars; generic entropy: 4)
+
+**Decision.** Vendor-format, staged-key-file, and credentialed-URL findings
+show ZERO secret characters; generic high-entropy findings keep the first
+4 chars + ellipsis.
+
+**Alternative rejected.** The old uniform first-8-chars preview: eight
+characters of a high-entropy secret is a meaningful leak for a message that
+only needs to say "this one, in this file".
+
+## D22. Push guard: an install AID, not a new block
+
+**Decision.** understanding-agent-push-guard (pre-push hook id) checks that
+a pre-commit hook is actually installed where git looks, and exits 1 with
+exact remediation steps when not.
+
+**Alternatives.** Blocking pushes on missing sessions (pre-push cannot know
+about the ledger reliably); doing nothing (fresh clones stayed invisible
+until CI).
+
+**Why.** It checks INSTALLATION STATE only — never session contents — so it
+cannot false-positive on a defended commit, and it gives the developer a
+fix-it-now moment before the CI check makes the gap public.
+
+## D23. Violation wire format has ONE owner
+
+**Decision.** coding_standards.format_violation/parse_violation define and
+decode the "path:line: message (`code`)" contract; server.py consumes the
+canonical parser (its private regex is gone); tests pin the round-trip.
+
+**Why.** The format was produced in ~15 places and parsed by a side regex —
+the exact "silent semantic drift" shape. Now the producer and consumer share
+one definition.
+
+## D24. Backfill is fail-loud; the hook is fail-silent — deliberately different
+
+**Decision.** understanding-agent-sync-history exits 1 and stops at the
+first failed batch; the commit-time hook never blocks on sync problems.
+
+**Why.** An explicit operator command must tell the truth about partial
+failure (otherwise the ledger looks complete and isn't); a commit path must
+never be hostage to the network. Same system, two contexts, two policies.
+
+## D25. Retention is enforced at startup + endpoint, not just documented
+
+**Decision.** The service purges expired raw answers on every startup and
+exposes POST /api/v1/admin/purge (admin token) for cron; scores/aggregates
+are kept forever.
+
+**Why.** A retention policy that exists only as a function nobody calls is a
+policy you cannot demonstrate to an HR reviewer. Enforcement rides the
+service lifecycle so it happens even when nobody remembers the cron.

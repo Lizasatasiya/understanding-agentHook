@@ -38,10 +38,20 @@ git commit
      │                                     is_large_change (>100 LOC | >3 fns | >2 files)
      3  CodeGraph.build()                   regex per-file symbol graph
      │                                     (language_support.py: py/js/ts/…)
-     4  ContextBuilder.build()              compressed per-function diffs
-     │                                     (35-line cap, signature-aware),
-     │                                     function details, dependency summaries
-     5  SecurityLens.profile_change()       security profile → question hints
+     4  ContextBuilder.build()              BUDGETED per-function diffs:
+     │                                     ranked selection (changed lines kept
+     │                                     first, structural next, filler dropped
+     │                                     first; 35-line/fn default, 240-line
+     │                                     total), function details, dependency
+     │                                     summaries; nested JS/TS handlers pull
+     │                                     the enclosing component preamble
+     5  ChangeKind.classify_change()         deterministic classification
+     │                                     {ui, data_model, control_flow,
+     │                                     infra_config, tests, docs} weights
+     │                                     + auditable signals → attached to
+     │                                     context; printed after the audit;
+     │                                     both question paths consume it
+     5b SecurityLens.profile_change()       security profile → question hints
      │  EvidenceCollector.collect_evidence() semgrep/gitleaks/test-gaps (if tools present)
      │  PracticePacks.hint()                 stack-specific question topics
      │  IdentityDetector.resolve()          zero-touch git identity
@@ -106,10 +116,12 @@ numbers are scoped to the current HEAD commit cycle.
 
 | Module | LOC | Input → Output | Failure mode |
 |---|---|---|---|
-| cli.py | 832 | orchestrates everything | sys.exit codes: 1 block/abort, 0 pass/record-only |
+| cli.py | 783 | orchestrates everything | sys.exit codes: 1 block/abort, 0 pass/record-only |
+| hook_stages.py | 95 | gate-block/advisory printers, interactive probe (phase-9 extraction) | pure presentation |
+| change_kind.py | 190 | changes+context → typed classification {weights, dominant, signals} | no signals → dominant "" (unknown), never raises |
 | change_detector.py | 270 | git index → {files, structured_changes, is_large_change} | unknown extensions still tracked (gate invariant) |
 | code_graph.py / language_support.py | 103/191 | files → symbol graph, function extraction | regex-based; AST-quality extraction DEFERRED |
-| context_builder.py | 257 | changes+graph → compressed context | truncate-not-select (35-line cap); token-budgeted selection DEFERRED |
+| context_builder.py | 320 | changes+graph → context with BUDGETED diffs (ranked selection: changed lines kept, structural next, filler dropped; 35-line/function default cap, 240-line total budget; nested JS/TS handlers extend to the enclosing component's preamble) | truncate-with-priorities; measured by scripts/context_eval_harness.py |
 | security_lens.py | 511 | added diff lines → critical findings (gate) + profile (hints) | gate has documented exemptions; generic tiers skip test/doc paths |
 | evidence_collector.py | 168 | staged files → semgrep/gitleaks/test-gap findings | tools absent → empty evidence, hook continues |
 | coding_standards.py | 766 | changes → 15 deterministic checks; standards DOC (repo `.understanding/standards.md` or default prose) | changed-line scoped by design |
@@ -128,6 +140,8 @@ numbers are scoped to the current HEAD commit cycle.
 | session_payload.py | 92 | fields → schema-v3 session dict (single source of schema) | verification is a REQUIRED arg |
 | session_store.py | 547 | session dicts ↔ `.git/understanding_sessions.db` | sqlite unusable → legacy JSON fallback; JSON import once (`.imported` backup) |
 | server_client.py | 149 | session → central ledger / queue | any failure → queue, commit continues |
+| sync_history.py | 120 | local store → backfill batches to the ledger (understanding-agent-sync-history) | legacy rows get git-author resolution; fail-loud (operator command, not a commit path) |
+| push_guard.py | 95 | repo → install health ({healthy, reason}) | pre-push aid: exit 1 + remediation steps when the pre-commit hook is missing |
 | api_utils.py | 371 | LLM transport: retries, key loading (.env + env), JSON extraction | 200-with-null-content treated as retryable |
 | llm_manager.py | 244 | provider presets (nous/groq/openai/openrouter/together/ollama/custom) | legacy NOUS_*/GROQ_* vars honored via compat layer |
 | commit_context.py | 237 | git plumbing: head, commit msg from parent process args, diff_hash, attempt_key, attempt numbering | — |
@@ -231,13 +245,23 @@ sessions are recorded before the commit hash exists.
 - `scripts/calibration_harness.py` + 4-case corpus: precision/recall gate
   (≥0.6 strict) for master-analysis changes; first live measurement
   1.00/1.00 (qwen3-coder-30b, Nous gateway).
+- `scripts/context_eval_harness.py` + 5-case corpus: context quality gate —
+  % of expected concepts present in the built context, replaying the REAL
+  detector/graph/builder on scratch repos (CI runs it with --strict at
+  ≥0.80; first measurement 1.00 after it caught a real React-extraction
+  gap — nested handlers excluded their component's useState preamble).
 - `scripts/bench_*.py`: LLM latency/capture-anomaly benches (Nous gateway
   varies 3–15s per call; repeat ≥3 before concluding anything).
 
 ## 9. Known deferred items
 
-Token-budgeted context selection, tree-sitter/AST extraction, repo map,
-deterministic ChangeKind classifier (LLM classification exists via master
-analysis), cli.py decomposition, redaction tiering for generic-entropy
-secrets, central dashboard UI, voice backends beyond darwin. See
-PLAN_POKERFACE_JUDAS.md "Deferred" and WORKSTREAMS_ASSESSMENT.md.
+Tree-sitter/AST extraction and repo map (build only if the context eval
+harness shows the regex tier failing on real repos; a known measured gap:
+unchanged SIBLING functions are not in context — "compare with the sibling"
+questions need repo-map support), OIDC per-developer auth (D9), central
+dashboard UI (colleague), voice beyond darwin, Windows/Linux voice paths.
+Done in the completion pass (see PLAN_V1_COMPLETION.md): context eval
+harness, token-budgeted selection, deterministic ChangeKind tier + frozen
+matrix, tiered redaction, violation wire-format single-source, backfill CLI,
+retention enforcement (startup + admin endpoint), push guard, cli helper
+extraction (hook_stages.py).

@@ -21,5 +21,7 @@ jobs:
         run: pip install -e ".[service]"
       - name: Unit tests
         run: python -m unittest discover -s tests
+      - name: Context eval harness (coverage gate)
+        run: python scripts/context_eval_harness.py --strict
       - name: E2E gate tests (scratch git repos)
         run: python tests/e2e_gate_first.py

@@ -12,3 +12,11 @@
     language: python
     pass_filenames: false
 
+-   id: understanding-agent-push-guard
+    name: Understanding Install Guard (pre-push)
+    description: Verifies the understanding pre-commit hook is installed before a push.
+    entry: understanding-agent-push-guard
+    language: python
+    pass_filenames: false
+    stages: [pre-push]
+

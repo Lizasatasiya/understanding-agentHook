@@ -31,7 +31,9 @@ class TestSecurityGate(unittest.TestCase):
         self.assertEqual(findings[0]["label"], "aws-access-key")
         # Never echo the full secret
         self.assertNotIn("AKIAIOSFODNN7EXAMPLE", findings[0]["redacted"])
-        self.assertTrue(findings[0]["redacted"].startswith("AKIA"))
+        # Tiered redaction (PLAN_V1_COMPLETION.md phase 1): vendor formats
+        # show ZERO secret characters — the label names the tier.
+        self.assertEqual(findings[0]["redacted"], "***")
 
     def test_private_key_blocks(self):
         findings = self.lens.find_critical_findings(self._ctx(
@@ -277,10 +279,21 @@ class TestExpandedSecurityGate(unittest.TestCase):
         f = self.lens.find_critical_findings(self._ctx(
             '+    url = "postgres://admin:%s@db.example.com/prod"\n' % pw))
         self.assertNotIn(pw, str(f))
-        self.assertTrue(f[0]["redacted"].startswith("postgres"))
+        # Tiered redaction: credentialed URLs show zero secret characters.
+        self.assertEqual(f[0]["redacted"], "***")
 
     def test_generic_secret_redacted(self):
         f = self.lens.find_critical_findings(self._ctx(
             '+    api_key = "%s"\n' % _HIPRI))
         for finding in f:
             self.assertNotIn(_HIPRI, finding["redacted"])
+
+    def test_generic_secret_redaction_tier_keeps_4_chars(self):
+        # Tiered redaction: the generic tier keeps the FIRST 4 chars so the
+        # author can recognize their own value — and nothing more.
+        f = self.lens.find_critical_findings(self._ctx(
+            '+    api_key = "%s"\n' % _HIPRI))
+        self.assertTrue(f, "expected a generic high-entropy finding")
+        red = f[0]["redacted"]
+        self.assertTrue(red.endswith("…"))
+        self.assertTrue(_HIPRI.startswith(red[:-1]))

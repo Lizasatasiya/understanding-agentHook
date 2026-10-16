@@ -33,7 +33,7 @@ The service auto-creates its schema on startup (SQLAlchemy `create_all`).
 | SERVICE_TEAM_TOKEN | Required X-Team-Token on ingestion (empty = open, dev only) | (empty) |
 | SERVICE_TEAM_SECRET | HMAC-SHA256 secret for X-Signature verification | (empty) |
 | SERVICE_ADMIN_TOKEN | Required X-Admin-Token on org-structure endpoints | (empty) |
-| SERVICE_RETENTION_DAYS | Days raw answer text is retained before purging | 90 |
+| SERVICE_RETENTION_DAYS | Days raw answer text is retained; enforced on every startup | 90 |
 
 ## Endpoints
 
@@ -45,6 +45,7 @@ The service auto-creates its schema on startup (SQLAlchemy `create_all`).
 | GET  | /api/v1/defense?repo_slug=&from=&to= | Proof-of-defense rows for CI/pre-receive |
 | POST | /api/v1/admin/repositories | Assign a repo to an org/team |
 | POST | /api/v1/admin/members | Add a user to a team |
+| POST | /api/v1/admin/purge | Enforce raw-answer retention NOW (cron-friendly); returns purged count |
 
 All responses carry `schema_version`.
 

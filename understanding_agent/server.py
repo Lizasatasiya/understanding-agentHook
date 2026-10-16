@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSON
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
-from .coding_standards import CodingStandardsChecker
+from .coding_standards import CodingStandardsChecker, parse_violation
 from .session_store import (
     load_sessions,
     save_session,
@@ -77,25 +77,13 @@ def _parse_violations(standards_report: List[Dict[str, Any]]) -> List[Dict[str, 
             raw_violations = [rule_details]
 
         for v_str in raw_violations:
-            # Expected format: "filepath:lineno: description (`actual_code`)"
-            file_path = ""
-            line_no = None
-            description = v_str
-            actual_code = ""
-
-            m = re.match(r'^([^:]+):(\d+):\s*(.*)$', v_str)
-            if m:
-                file_path = m.group(1).strip()
-                try:
-                    line_no = int(m.group(2).strip())
-                except ValueError:
-                    line_no = None
-                description = m.group(3).strip()
-
-            # Extract actual code inside backticks if present
-            code_m = re.search(r'`([^`]+)`', description)
-            if code_m:
-                actual_code = code_m.group(1).strip()
+            # THE wire-format contract lives in coding_standards.parse_violation
+            # (produced by format_violation) — no side regexes here.
+            parsed = parse_violation(v_str)
+            file_path = parsed["file"]
+            line_no = parsed["line"]
+            description = parsed["message"]
+            actual_code = parsed["actual_code"]
 
             violations.append({
                 "standard": standard_name,

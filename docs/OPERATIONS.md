@@ -19,6 +19,8 @@ repos:
     rev: v0.4.0          # pin a tag; rev: main is dev-only
     hooks:
     -   id: understanding-agent
+    # optional: loud second chance when the hook is not installed (pre-push)
+    -   id: understanding-agent-push-guard
 ```
 
 ```bash
@@ -96,8 +98,9 @@ SERVICE_TEAM_TOKEN=... SERVICE_TEAM_SECRET=... SERVICE_ADMIN_TOKEN=... \
 Service env: `SERVICE_DATABASE_URL` (sqlite:/// or postgresql+psycopg://),
 `SERVICE_TEAM_TOKEN` (required on ingestion when set), `SERVICE_TEAM_SECRET`
 (enables HMAC verification), `SERVICE_ADMIN_TOKEN` (org-structure endpoints),
-`SERVICE_RETENTION_DAYS` (default 90; run `purge_expired_answers` from a
-cron job or the service shell to enforce it).
+`SERVICE_RETENTION_DAYS` (default 90 — enforced automatically on every
+service startup; POST /api/v1/admin/purge with X-Admin-Token enforces it on
+demand for cron).
 
 Org wiring: `POST /api/v1/admin/repositories {repo_slug, org, team}` and
 `POST /api/v1/admin/members {user_email, org, team}` with X-Admin-Token.
@@ -138,6 +141,16 @@ UNAUDITED banner + exit 0 — use for hotfixes; the bypass stays visible in
 the CI log). Matching semantics: a commit is audited iff a PASSED session
 exists with `head_commit == parent(commit)`.
 
+## 5b. Support matrix (manual checklist)
+
+Client coverage as of v0.4.x — terminal git is first-class; the rest are
+expected to work via the same mechanisms but are NOT yet exercised by an
+automated matrix. Manual checklist for GUI clients (VS Code integrated git,
+Tower, Fork): shell out to git → hook fires; the TTY prompt renders in the
+integrated terminal; skip toggles behave like --no-verify (ledger gap, CI
+flags). Voice: macOS only (mac_dictation or whisper); Windows dictation and
+Linux speech paths exist in code but are untested — prefer typing there.
+
 ## 6. Voice
 
 macOS is the first-class platform. Backends, in detection order
@@ -158,6 +171,9 @@ get one "say it again" prompt; mixed-language answers are never flagged.
 | `python tests/e2e_security_gate.py` | gate aborts a real git commit containing a live credential |
 | `python scripts/llm_smoke_test.py` | 7-step LIVE LLM pipeline check (needs a key in .env) |
 | `python scripts/calibration_harness.py [--strict]` | master-analysis precision/recall vs the 4-case corpus (bench-first before any prompt/model change) |
+| `python scripts/context_eval_harness.py --strict` | context quality gate: % of expected concepts present in the built context (CI-enforced ≥0.80; current baseline 1.00) |
+| `understanding-agent-sync-history --repo . --server URL [--dry-run]` | backfill existing local sessions into the ledger (legacy rows get git-author resolution; batches of 25; fail-loud) |
+| `understanding-agent-push-guard` | install health check used by the pre-push hook (exit 1 + remediation when the pre-commit hook is missing) |
 | `python scripts/bench_llm_latency.py` etc. | latency benches — the gateway varies 3–15s; never conclude from a single call |
 
 Use python ≥ 3.10 (macOS system python3 is 3.9 and crashes at import).

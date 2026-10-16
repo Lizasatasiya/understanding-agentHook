@@ -10,6 +10,8 @@ setup(
         "console_scripts": [
             "understanding-agent = understanding_agent.cli:main",
             "understanding-agent-ui = understanding_agent.server:run",
+            "understanding-agent-sync-history = understanding_agent.sync_history:main",
+            "understanding-agent-push-guard = understanding_agent.push_guard:main",
         ]
     },
     python_requires=">=3.10",

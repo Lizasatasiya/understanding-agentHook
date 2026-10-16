@@ -1,0 +1,11 @@
+{
+  "name": "python-large-function",
+  "expected_concepts": [
+    "ingest_report",
+    "validate_header",
+    "checksum",
+    "archive_blob",
+    "retention_days",
+    "quarantine"
+  ]
+}

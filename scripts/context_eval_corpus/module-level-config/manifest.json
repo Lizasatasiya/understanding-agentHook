@@ -1,0 +1,8 @@
+{
+  "name": "module-level-config",
+  "expected_concepts": [
+    "MAX_RETRIES",
+    "TIMEOUT_SECONDS",
+    "feature_flags"
+  ]
+}

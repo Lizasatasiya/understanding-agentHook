@@ -2,6 +2,7 @@ import os
 import json
 from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, load_groq_api_key, call_groq_api
 from .checklists import parse_checklist
+from .change_kind import classification_hint_lines
 
 
 import re
@@ -250,9 +251,13 @@ class QuestionGenerator:
                 lines.append(f"Tailor questions to idiomatic {framework} and {lang} paradigms (e.g. async/await patterns, lifecycle, component re-renders, state management, dependency injection, service isolation, error handling).")
             lines.append("")
 
+        ck_lines = classification_hint_lines((context or {}).get("change_kind"))
         lines += [
             "## Changed Functions",
         ]
+
+        if ck_lines:
+            lines += ["", *ck_lines]
 
         changes = context.get("structured_changes", [])
         if len(changes) > 6:
@@ -351,6 +356,10 @@ class QuestionGenerator:
         for file_info in context.get("file_summary", []):
             funcs = ", ".join(file_info.get("functions", [])) or "module definitions"
             lines.append(f"- {file_info['file']}: {funcs}")
+
+        ck_lines = classification_hint_lines((context or {}).get("change_kind"))
+        if ck_lines:
+            lines += ["", *ck_lines]
 
         lines.append("\n## Key Diffs (Skeleton/Highlights):")
         for f in context.get("structured_changes", [])[:6]:

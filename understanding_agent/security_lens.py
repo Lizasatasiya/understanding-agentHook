@@ -223,7 +223,14 @@ class SecurityLens:
                 "function": func,
                 "label": label,
                 "description": description,
-                "redacted": secret[:8] + "…" if len(secret) > 8 else "***",
+                # Tiered redaction: vendor-format, staged-key-file, and
+                # connection-string findings show ZERO secret characters —
+                # the format label already says what it is, and the author
+                # can see the diff. Generic high-entropy findings keep the
+                # first 4 chars + ellipsis: enough for the author to
+                # recognize their own value, not enough to matter to anyone
+                # reading the message. (Previously every tier leaked 8.)
+                "redacted": self._redact(label, secret),
             })
 
         # 0. Staged key FILES — the presence alone is the finding (PLAN.md B4)
@@ -337,6 +344,19 @@ class SecurityLens:
     def _looks_like_placeholder(value: str) -> bool:
         v = value.lower()
         return any(h in v for h in _PLACEHOLDER_HINTS)
+
+    @staticmethod
+    def _redact(label: str, secret: str) -> str:
+        """Tiered redaction (PLAN_V1_COMPLETION.md phase 1).
+
+        vendor formats / staged key files / credentialed URLs: zero secret
+        characters — the label already names the tier and the author has the
+        diff open. Generic high-entropy values: first 4 chars + ellipsis,
+        enough for the author to recognize their own value.
+        """
+        if label == "high-entropy-secret" and len(secret) > 4:
+            return secret[:4] + "…"
+        return "***"
 
     @staticmethod
     def _shannon_entropy(value: str) -> float:

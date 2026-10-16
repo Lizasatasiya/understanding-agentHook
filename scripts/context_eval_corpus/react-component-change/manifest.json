@@ -1,0 +1,10 @@
+{
+  "name": "react-component-change",
+  "expected_concepts": [
+    "usestate",
+    "setquantity",
+    "handleadd",
+    "onchange",
+    "button"
+  ]
+}

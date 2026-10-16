@@ -1,0 +1,9 @@
+{
+  "name": "cross-file-dependency",
+  "expected_concepts": [
+    "send_email",
+    "invoice",
+    "customer_email"
+  ],
+  "notes": "notify_customer (unchanged sibling) is a KNOWN GAP: unchanged sibling functions are not in the context today; 'compare with the sibling' questions need repo-map support (deferred). Deliberately not counted in expected_concepts until that lands."
+}

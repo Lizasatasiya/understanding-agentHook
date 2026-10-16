@@ -75,6 +75,11 @@ class ServiceState:
         self.team_token = os.environ.get("SERVICE_TEAM_TOKEN", "").strip()
         self.team_secret = os.environ.get("SERVICE_TEAM_SECRET", "").strip()
         self.admin_token = os.environ.get("SERVICE_ADMIN_TOKEN", "").strip()
+        try:
+            self.retention_days = int(os.environ.get("SERVICE_RETENTION_DAYS",
+                                                     str(DEFAULT_RETENTION_DAYS)))
+        except ValueError:
+            self.retention_days = DEFAULT_RETENTION_DAYS
 
 
 STATE: ServiceState | None = None
@@ -393,6 +398,38 @@ def create_app(state: ServiceState | None = None) -> FastAPI:
             db.add(TeamMember(team_id=team.id, user_id=user.id))
         db.commit()
         return JSONResponse({"status": "success", "schema_version": API_SCHEMA_VERSION})
+
+    @app.post("/api/v1/admin/purge")
+    async def purge_answers(
+        db: Session = Depends(get_db),
+        x_admin_token: str | None = Header(None),
+    ):
+        """Enforce the raw-answer retention policy NOW (also runnable from
+        cron). Raw answers older than the retention window are nulled;
+        scores/aggregates are kept forever. The service also purges
+        automatically on startup."""
+        st = get_state()
+        if st.admin_token and x_admin_token != st.admin_token:
+            raise HTTPException(status_code=401, detail="Invalid admin token")
+        purged = purge_expired_answers(db, retention_days=st.retention_days)
+        return JSONResponse({
+            "status": "success", "schema_version": API_SCHEMA_VERSION,
+            "purged": purged, "retention_days": st.retention_days,
+        })
+
+    @app.on_event("startup")
+    async def startup_purge():
+        # Retention is enforced, not just documented: every service start
+        # purges raw answers older than the window (scores kept forever).
+        st = get_state()
+        if st.retention_days > 0:
+            db = st.SessionLocal()
+            try:
+                purge_expired_answers(db, retention_days=st.retention_days)
+            except Exception:
+                pass
+            finally:
+                db.close()
 
     return app
 

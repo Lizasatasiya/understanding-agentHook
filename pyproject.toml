@@ -18,6 +18,8 @@ service = ["fastapi", "uvicorn", "sqlalchemy>=2", "pydantic>=2"]
 [project.scripts]
 understanding-agent = "understanding_agent.cli:main"
 understanding-agent-ui = "understanding_agent.server:run"
+understanding-agent-sync-history = "understanding_agent.sync_history:main"
+understanding-agent-push-guard = "understanding_agent.push_guard:main"
 
 [tool.setuptools]
 packages = ["understanding_agent"]

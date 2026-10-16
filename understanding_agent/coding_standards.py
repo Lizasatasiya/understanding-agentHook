@@ -72,6 +72,37 @@ touch. Findings must describe what the change does and the risk it carries.
 """
 
 
+def parse_violation(text: str) -> dict:
+    """Decode ONE violation string into {file, line, message, actual_code}.
+
+    THE wire format contract (single source of truth, consumed by server.py's
+    dashboard): every check in this module emits violations as
+        "<path>:<line>: <message> (`<actual code>`)"
+    The trailing backtick block is optional. Producers must use
+    format_violation(); consumers must use this — no side regexes.
+    """
+    text = text or ""
+    file_path, line_no, message = "", None, text
+    m = re.match(r"^([^:]+):(\d+):\s*(.*)$", text, re.DOTALL)
+    if m:
+        file_path = m.group(1).strip()
+        try:
+            line_no = int(m.group(2).strip())
+        except ValueError:
+            line_no = None
+        message = m.group(3).strip()
+    code_m = re.search(r"`([^`]+)`", message)
+    actual_code = code_m.group(1).strip() if code_m else ""
+    return {"file": file_path, "line": line_no, "message": message,
+            "actual_code": actual_code}
+
+
+def format_violation(path: str, line: int, message: str, code: str = "") -> str:
+    """Produce ONE violation string in the parse_violation wire format."""
+    base = f"{path}:{line}: {message}"
+    return f"{base} (`{code}`)" if code else base
+
+
 def load_standards_doc(project_root: str | None = None) -> str:
     """Load the repo's standards document, falling back to the default.
 

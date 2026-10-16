@@ -1,0 +1,10 @@
+{
+  "name": "python-small-callgraph",
+  "expected_concepts": [
+    "compute_order_total",
+    "apply_discount",
+    "order",
+    "subtotal",
+    "discount_rate"
+  ]
+}
