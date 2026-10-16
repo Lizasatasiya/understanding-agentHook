@@ -244,6 +244,233 @@ body {
   height: 16px;
 }
 
+/* -------------------------------------------------------------------------
+   User Filter Field
+------------------------------------------------------------------------- */
+.user-filter-box {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.user-filter-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.user-filter-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.user-svg {
+  width: 14px;
+  height: 14px;
+  color: var(--accent-blue);
+}
+
+.user-live-tag {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent-green);
+  background: var(--badge-green-bg);
+  padding: 1px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--badge-green-border);
+}
+
+.pulse-dot {
+  width: 6px;
+  height: 6px;
+  background-color: var(--accent-green);
+  border-radius: 50%;
+  animation: pulse-live 2s infinite ease-in-out;
+}
+
+@keyframes pulse-live {
+  0% { transform: scale(0.9); opacity: 0.7; }
+  50% { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(0.9); opacity: 0.7; }
+}
+
+.user-select-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.user-select {
+  width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 7px 32px 7px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s, background-color 0.15s;
+}
+
+.user-select:hover {
+  background-color: #ffffff;
+  border-color: var(--border-light);
+}
+
+.user-select:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+  background-color: #ffffff;
+}
+
+.select-arrow {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+}
+
+.select-arrow svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* -------------------------------------------------------------------------
+   User Flow & Defense Progression Banner
+------------------------------------------------------------------------- */
+.user-flow-card {
+  background: linear-gradient(135deg, #ffffff 0%, #f0f7ff 100%);
+  border: 1px solid #bfdbfe;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.08);
+  margin-bottom: 20px;
+  padding: 16px 20px;
+}
+
+.user-flow-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.user-flow-profile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-flow-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent-blue) 0%, #1d4ed8 100%);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.5px;
+  box-shadow: 0 2px 4px rgba(37, 99, 235, 0.25);
+  flex-shrink: 0;
+}
+
+.user-flow-identity {
+  display: flex;
+  flex-direction: column;
+}
+
+.user-flow-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.user-flow-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.user-flow-tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: var(--badge-blue-bg);
+  color: var(--accent-blue);
+  border: 1px solid var(--badge-blue-border);
+  text-transform: uppercase;
+}
+
+.user-flow-email {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.user-flow-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.user-flow-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #dbeafe;
+}
+
+.user-metric-box {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid #e0e7ff;
+  border-radius: 6px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.user-metric-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.user-metric-val {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.user-metric-val.text-green {
+  color: var(--accent-green);
+}
+
+.user-metric-val.text-blue {
+  color: var(--accent-blue);
+}
+
 .sidebar-section-title {
   display: flex;
   align-items: center;

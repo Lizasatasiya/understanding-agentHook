@@ -17,7 +17,9 @@ from .session_store import (
     save_session,
     get_sessions_for_commit,
     get_session_by_id,
-    get_sessions_file
+    get_sessions_file,
+    get_db_users,
+    get_db_commits,
 )
 
 
@@ -358,68 +360,22 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
     # API Routes
     # -------------------------------------------------------------------------
 
+    @app.get("/api/users")
+    @app.get("/users")
+    def list_users():
+        """Retrieve real-time user-wise metrics and developer identities from the database."""
+        return get_db_users(effective_repo_root)
+
     @app.get("/api/commits")
     @app.get("/commits")
-    def list_commits(limit: int = 50, include_staged: bool = False):
-        """List passed commits from git history with their pre-commit attempts count."""
-        all_sessions = load_sessions(effective_repo_root)
-        commits_list = []
-
-        if include_staged:
-            # Check for uncommitted staged changes only when explicitly requested
-            staged_info = _get_staged_changes(effective_repo_root)
-            if staged_info["files"]:
-                staged_sessions = get_sessions_for_commit(effective_repo_root, "staged")
-                latest_status = "PENDING"
-                if staged_sessions:
-                    latest_status = staged_sessions[-1].get("status", "FAILED")
-
-                current_branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], effective_repo_root) or "main"
-                commits_list.append({
-                    "id": "staged",
-                    "hash": "staged",
-                    "short_hash": "staged",
-                    "author": "Current Working Tree",
-                    "author_email": "",
-                    "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                    "message": "Pending Staged Changes (Uncommitted)",
-                    "branch": current_branch,
-                    "is_staged": True,
-                    "status": latest_status,
-                    "attempts_count": len(staged_sessions),
-                    "files_count": len(staged_info["files"])
-                })
-
-        # Real git log commits (only passed committed ones)
-        log_out = _run_git(
-            ["log", f"-n{limit}", "--pretty=format:%H|%h|%an|%ae|%aI|%s"],
-            effective_repo_root
+    def list_commits(limit: int = 50, include_staged: bool = False, user: Optional[str] = None):
+        """List commits fetched directly from the Database, optionally filtered by user."""
+        return get_db_commits(
+            effective_repo_root,
+            user=user,
+            limit=limit,
+            include_staged=include_staged
         )
-
-        for line in log_out.splitlines():
-            parts = line.split("|", 5)
-            if len(parts) == 6:
-                full_h, short_h, author, email, date_str, subject = parts
-                commit_sessions = get_sessions_for_commit(effective_repo_root, full_h)
-                
-                # Real commits in history are committed and passed
-                status = "PASSED"
-
-                commits_list.append({
-                    "id": full_h,
-                    "hash": full_h,
-                    "short_hash": short_h,
-                    "author": author,
-                    "author_email": email,
-                    "date": date_str,
-                    "message": subject,
-                    "branch": _run_git(["rev-parse", "--abbrev-ref", "HEAD"], effective_repo_root) or "main",
-                    "is_staged": False,
-                    "status": status,
-                    "attempts_count": len(commit_sessions)
-                })
-
-        return commits_list
 
     @app.get("/api/commits/{commit_id}")
     @app.get("/commits/{commit_id}")

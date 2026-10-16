@@ -28,7 +28,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     timestamp      TEXT,
     attempt_number INTEGER,
     head_commit    TEXT,
-    diff_hash      TEXT
+    diff_hash      TEXT,
+    author         TEXT,
+    author_email   TEXT,
+    commit_id      TEXT,
+    status         TEXT,
+    score          REAL DEFAULT 0
 )
 """
 
@@ -96,6 +101,109 @@ def _migrate_legacy_json(repo_root: str, conn) -> None:
             pass  # leave the JSON in place; IGNORE-dedupe makes re-import safe
 
 
+def _migrate_schema_columns(conn) -> None:
+    """Add author, commit, status, and score columns to existing DB if missing."""
+    try:
+        cursor = conn.execute("PRAGMA table_info(sessions)")
+        existing_cols = {row[1] for row in cursor.fetchall()}
+        for col_name, col_type in [
+            ("author", "TEXT"),
+            ("author_email", "TEXT"),
+            ("commit_id", "TEXT"),
+            ("status", "TEXT"),
+            ("score", "REAL DEFAULT 0"),
+        ]:
+            if col_name not in existing_cols:
+                try:
+                    conn.execute(f"ALTER TABLE sessions ADD COLUMN {col_name} {col_type}")
+                except Exception:
+                    pass
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_author_email ON sessions(author_email)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_commit_id ON sessions(commit_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_head_commit ON sessions(head_commit)")
+    except Exception:
+        pass
+
+
+def _backfill_author_data(repo_root: str, conn) -> None:
+    """Ensure existing rows have author, author_email, commit_id, status, and score populated."""
+    try:
+        rows = conn.execute(
+            "SELECT session_id, payload, head_commit, author, author_email, commit_id, status, score "
+            "FROM sessions WHERE author IS NULL OR author = '' OR commit_id IS NULL OR commit_id = ''"
+        ).fetchall()
+        if not rows:
+            return
+
+        default_author = ""
+        default_email = ""
+        try:
+            default_author = subprocess.check_output(
+                ["git", "config", "user.name"], cwd=repo_root, text=True, stderr=subprocess.DEVNULL
+            ).strip()
+            default_email = subprocess.check_output(
+                ["git", "config", "user.email"], cwd=repo_root, text=True, stderr=subprocess.DEVNULL
+            ).strip()
+        except Exception:
+            pass
+
+        updates = []
+        for sid, payload_str, head_commit, curr_author, curr_email, curr_cid, curr_status, curr_score in rows:
+            try:
+                data = json.loads(payload_str)
+            except Exception:
+                data = {}
+
+            cid = data.get("commit_id") or curr_cid or ""
+            author = data.get("author") or (data.get("identity") or {}).get("user_name") or curr_author or ""
+            email = data.get("author_email") or (data.get("identity") or {}).get("user_email") or curr_email or ""
+
+            target_commit = cid if (cid and cid != "staged") else head_commit
+            if (not author or not email) and target_commit:
+                try:
+                    git_meta = subprocess.check_output(
+                        ["git", "log", "-1", "--pretty=format:%an|%ae", target_commit],
+                        cwd=repo_root, text=True, stderr=subprocess.DEVNULL
+                    ).strip()
+                    if "|" in git_meta:
+                        g_author, g_email = git_meta.split("|", 1)
+                        author = author or g_author
+                        email = email or g_email
+                except Exception:
+                    pass
+
+            author = author or default_author or "Developer"
+            email = (email or default_email or "developer@local").lower()
+            status = data.get("status") or curr_status or "PASSED"
+            try:
+                score = float(data.get("score") if data.get("score") is not None else (curr_score or 0.0))
+            except (ValueError, TypeError):
+                score = 0.0
+
+            changed = False
+            if not data.get("author"):
+                data["author"] = author
+                changed = True
+            if not data.get("author_email"):
+                data["author_email"] = email
+                changed = True
+            if not data.get("commit_id") and cid:
+                data["commit_id"] = cid
+                changed = True
+
+            new_payload = json.dumps(data) if changed else payload_str
+            updates.append((author, email, cid, status, score, new_payload, sid))
+
+        if updates:
+            conn.executemany(
+                "UPDATE sessions SET author = ?, author_email = ?, commit_id = ?, status = ?, score = ?, payload = ? WHERE session_id = ?",
+                updates
+            )
+            conn.commit()
+    except Exception:
+        pass
+
+
 def _connect(repo_root: str):
     path = get_sessions_db(repo_root)
     parent = os.path.dirname(path)
@@ -103,7 +211,9 @@ def _connect(repo_root: str):
         os.makedirs(parent, exist_ok=True)
     conn = sqlite3.connect(path, timeout=5)
     conn.execute(_SCHEMA)
+    _migrate_schema_columns(conn)
     _migrate_legacy_json(repo_root, conn)
+    _backfill_author_data(repo_root, conn)
     try:
         os.chmod(path, 0o600)  # developer answers are personal data
     except Exception:
@@ -119,6 +229,11 @@ def _row_from_session(s: Dict[str, Any]) -> tuple:
         s.get("attempt_number", 1),
         s.get("head_commit", ""),
         s.get("diff_hash", ""),
+        s.get("author", ""),
+        s.get("author_email", ""),
+        s.get("commit_id", ""),
+        s.get("status", "PASSED"),
+        float(s.get("score", 0.0) or 0.0),
     )
 
 
@@ -232,8 +347,8 @@ def load_sessions(repo_root: str) -> List[Dict[str, Any]]:
             with conn:
                 conn.executemany(
                     "INSERT OR REPLACE INTO sessions "
-                    "(session_id, payload, timestamp, attempt_number, head_commit, diff_hash) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    "(session_id, payload, timestamp, attempt_number, head_commit, diff_hash, author, author_email, commit_id, status, score) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [_row_from_session(s) for s in sessions],
                 )
             conn.close()
@@ -415,6 +530,28 @@ def save_session(repo_root: str, session_data: Dict[str, Any]) -> Dict[str, Any]
 
     sid = session_data.get("session_id")
 
+    # Ensure author and email on session_data
+    if not session_data.get("author") or not session_data.get("author_email"):
+        ident = session_data.get("identity") or {}
+        author = ident.get("user_name") or session_data.get("author")
+        email = ident.get("user_email") or session_data.get("author_email")
+        if not author:
+            try:
+                author = subprocess.check_output(
+                    ["git", "config", "user.name"], cwd=repo_root, text=True, stderr=subprocess.DEVNULL
+                ).strip()
+            except Exception:
+                author = "Developer"
+        if not email:
+            try:
+                email = subprocess.check_output(
+                    ["git", "config", "user.email"], cwd=repo_root, text=True, stderr=subprocess.DEVNULL
+                ).strip()
+            except Exception:
+                email = "developer@local"
+        session_data["author"] = author
+        session_data["author_email"] = (email or "").lower()
+
     try:
         conn = _connect(repo_root)
         try:
@@ -438,8 +575,8 @@ def save_session(repo_root: str, session_data: Dict[str, Any]) -> Dict[str, Any]
             with conn:
                 conn.execute(
                     "INSERT OR REPLACE INTO sessions "
-                    "(session_id, payload, timestamp, attempt_number, head_commit, diff_hash) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    "(session_id, payload, timestamp, attempt_number, head_commit, diff_hash, author, author_email, commit_id, status, score) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     _row_from_session(session_data),
                 )
                 _prune_db(conn)
@@ -545,3 +682,224 @@ def get_session_by_id(repo_root: str, session_id: str) -> Optional[Dict[str, Any
         if s.get("session_id") == session_id or s.get("attempt_id") == session_id:
             return s
     return None
+
+
+def get_db_users(repo_root: str) -> List[Dict[str, Any]]:
+    """Return all unique developers/users from the DB with aggregate commit & attempt metrics."""
+    conn = _connect(repo_root)
+    try:
+        rows = conn.execute(
+            "SELECT author, author_email, commit_id, status, score, timestamp, payload FROM sessions"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    users_map: Dict[str, Dict[str, Any]] = {}
+
+    for row in rows:
+        author, email, commit_id, status, score, timestamp, payload = row
+        if not author and not email:
+            try:
+                d = json.loads(payload)
+                author = d.get("author") or (d.get("identity") or {}).get("user_name")
+                email = d.get("author_email") or (d.get("identity") or {}).get("user_email")
+            except Exception:
+                pass
+
+        email_clean = (email or "").strip().lower()
+        author_clean = (author or "").strip()
+        user_key = email_clean or author_clean.lower() or "developer@local"
+
+        if user_key not in users_map:
+            users_map[user_key] = {
+                "name": author_clean or email_clean or "Developer",
+                "email": email_clean or "developer@local",
+                "commits": set(),
+                "attempts_count": 0,
+                "passed_attempts": 0,
+                "failed_attempts": 0,
+                "scores": [],
+                "latest_activity": timestamp or "",
+            }
+
+        u = users_map[user_key]
+        u["attempts_count"] += 1
+        if status == "PASSED":
+            u["passed_attempts"] += 1
+        else:
+            u["failed_attempts"] += 1
+        if score is not None:
+            try:
+                u["scores"].append(float(score))
+            except (ValueError, TypeError):
+                pass
+        if commit_id and commit_id != "staged":
+            u["commits"].add(commit_id)
+        if timestamp and (not u["latest_activity"] or timestamp > u["latest_activity"]):
+            u["latest_activity"] = timestamp
+
+    # Augment commit counts with git log history to ensure all author commits are included
+    try:
+        git_log = subprocess.check_output(
+            ["git", "log", "-n", "100", "--pretty=format:%H|%an|%ae|%aI"],
+            cwd=repo_root, text=True, stderr=subprocess.DEVNULL
+        ).strip()
+        for line in git_log.splitlines():
+            parts = line.split("|", 3)
+            if len(parts) >= 3:
+                h, an, ae = parts[0], parts[1].strip(), parts[2].strip().lower()
+                ts = parts[3] if len(parts) > 3 else ""
+                key = ae or an.lower()
+                if key not in users_map:
+                    users_map[key] = {
+                        "name": an,
+                        "email": ae,
+                        "commits": set(),
+                        "attempts_count": 0,
+                        "passed_attempts": 0,
+                        "failed_attempts": 0,
+                        "scores": [],
+                        "latest_activity": ts,
+                    }
+                users_map[key]["commits"].add(h)
+                if ts and (not users_map[key]["latest_activity"] or ts > users_map[key]["latest_activity"]):
+                    users_map[key]["latest_activity"] = ts
+    except Exception:
+        pass
+
+    result = []
+    for u in users_map.values():
+        total_att = u["attempts_count"]
+        pass_rate = round((u["passed_attempts"] / total_att * 100), 1) if total_att > 0 else 100.0
+        avg_score = round(sum(u["scores"]) / len(u["scores"]), 1) if u["scores"] else 0.0
+        result.append({
+            "name": u["name"],
+            "email": u["email"],
+            "commit_count": len(u["commits"]),
+            "attempts_count": total_att,
+            "passed_count": u["passed_attempts"],
+            "pass_rate": pass_rate,
+            "avg_score": avg_score,
+            "latest_activity": u["latest_activity"],
+        })
+
+    result.sort(key=lambda x: (-x["commit_count"], -x["attempts_count"], x["name"]))
+    return result
+
+
+def get_db_commits(
+    repo_root: str,
+    user: Optional[str] = None,
+    limit: int = 50,
+    include_staged: bool = False
+) -> List[Dict[str, Any]]:
+    """Retrieve commits directly from the Database, optionally filtered by user."""
+    all_sessions = load_sessions(repo_root)
+    commits_list = []
+
+    # Map commit_id to sessions in DB
+    sessions_by_commit: Dict[str, List[Dict[str, Any]]] = {}
+    for s in all_sessions:
+        cid = s.get("commit_id") or "staged"
+        sessions_by_commit.setdefault(cid, []).append(s)
+
+    # Staged changes (if requested)
+    if include_staged:
+        try:
+            staged_out = subprocess.check_output(
+                ["git", "diff", "--cached", "--name-status"],
+                cwd=repo_root, text=True, stderr=subprocess.DEVNULL
+            ).strip()
+            if staged_out:
+                staged_sessions = sessions_by_commit.get("staged", [])
+                latest_status = staged_sessions[-1].get("status", "FAILED") if staged_sessions else "PENDING"
+                current_author = ""
+                current_email = ""
+                try:
+                    current_author = subprocess.check_output(
+                        ["git", "config", "user.name"], cwd=repo_root, text=True, stderr=subprocess.DEVNULL
+                    ).strip()
+                    current_email = subprocess.check_output(
+                        ["git", "config", "user.email"], cwd=repo_root, text=True, stderr=subprocess.DEVNULL
+                    ).strip()
+                except Exception:
+                    pass
+
+                include_this = True
+                if user and user.strip():
+                    u_filter = user.strip().lower()
+                    include_this = (
+                        u_filter in (current_author or "").lower() or
+                        u_filter in (current_email or "").lower()
+                    )
+
+                if include_this:
+                    branch = "main"
+                    try:
+                        branch = subprocess.check_output(
+                            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_root, text=True, stderr=subprocess.DEVNULL
+                        ).strip()
+                    except Exception:
+                        pass
+                    commits_list.append({
+                        "id": "staged",
+                        "hash": "staged",
+                        "short_hash": "staged",
+                        "author": current_author or "Current Working Tree",
+                        "author_email": current_email,
+                        "date": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        "message": "Pending Staged Changes (Uncommitted)",
+                        "branch": branch,
+                        "is_staged": True,
+                        "status": latest_status,
+                        "attempts_count": len(staged_sessions),
+                        "files_count": len(staged_out.splitlines())
+                    })
+        except Exception:
+            pass
+
+    # Historical commits backed by DB sessions and git history
+    try:
+        log_out = subprocess.check_output(
+            ["git", "log", f"-n{limit}", "--pretty=format:%H|%h|%an|%ae|%aI|%s"],
+            cwd=repo_root, text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except Exception:
+        log_out = ""
+
+    current_branch = "main"
+    try:
+        current_branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_root, text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except Exception:
+        pass
+
+    for line in log_out.splitlines():
+        parts = line.split("|", 5)
+        if len(parts) == 6:
+            full_h, short_h, author, email, date_str, subject = parts
+            commit_sessions = get_sessions_for_commit(repo_root, full_h)
+
+            # Apply user filter if present
+            if user and user.strip():
+                u_filter = user.strip().lower()
+                if u_filter not in (author or "").lower() and u_filter not in (email or "").lower():
+                    continue
+
+            commits_list.append({
+                "id": full_h,
+                "hash": full_h,
+                "short_hash": short_h,
+                "author": author,
+                "author_email": email,
+                "date": date_str,
+                "message": subject,
+                "branch": current_branch,
+                "is_staged": False,
+                "status": "PASSED",
+                "attempts_count": len(commit_sessions)
+            })
+
+    return commits_list
+

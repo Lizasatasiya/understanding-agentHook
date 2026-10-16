@@ -46,6 +46,32 @@
             </svg>
           </button>
         </div>
+
+        <!-- USER SELECTION FIELD (REAL-TIME DB FETCH) -->
+        <div class="user-filter-box">
+          <div class="user-filter-header">
+            <span class="user-filter-label">
+              <svg class="user-svg" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd" />
+              </svg>
+              <span>User</span>
+            </span>
+            <span class="user-live-tag">
+              <span class="pulse-dot"></span>
+              <span>Live DB</span>
+            </span>
+          </div>
+          <div class="user-select-wrapper">
+            <select id="user-select" class="user-select" aria-label="Select Developer / User">
+              <option value="">All Users (Real-Time)</option>
+            </select>
+            <div class="select-arrow">
+              <svg viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+              </svg>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="sidebar-section-title">
@@ -95,6 +121,43 @@
 
         <!-- VIEW 1: COMMIT OVERVIEW -->
         <div class="commit-overview-view hidden" id="commit-overview-view">
+          <!-- User-Wise Flow & Progression Summary Banner (Populated when user selected) -->
+          <section class="card user-flow-card hidden" id="user-flow-card">
+            <div class="user-flow-header">
+              <div class="user-flow-profile">
+                <div class="user-flow-avatar" id="user-flow-avatar">U</div>
+                <div class="user-flow-identity">
+                  <div class="user-flow-name-row">
+                    <h3 class="user-flow-name" id="user-flow-name">Selected User</h3>
+                    <span class="user-flow-tag">Developer Commit Flow</span>
+                  </div>
+                  <span class="user-flow-email" id="user-flow-email">user@domain.com</span>
+                </div>
+              </div>
+              <div class="user-flow-meta">
+                <span class="user-flow-activity" id="user-flow-activity">Last Activity: Just now</span>
+              </div>
+            </div>
+            <div class="user-flow-metrics">
+              <div class="user-metric-box">
+                <span class="user-metric-label">Audited Commits</span>
+                <span class="user-metric-val" id="user-metric-commits">0</span>
+              </div>
+              <div class="user-metric-box">
+                <span class="user-metric-label">Pre-Commit Attempts</span>
+                <span class="user-metric-val" id="user-metric-attempts">0</span>
+              </div>
+              <div class="user-metric-box">
+                <span class="user-metric-label">Pass Rate</span>
+                <span class="user-metric-val text-green" id="user-metric-pass-rate">100%</span>
+              </div>
+              <div class="user-metric-box">
+                <span class="user-metric-label">Avg Defense Score</span>
+                <span class="user-metric-val text-blue" id="user-metric-avg-score">0%</span>
+              </div>
+            </div>
+          </section>
+
           <!-- Commit Header Card -->
           <section class="card commit-header-card">
             <div class="commit-header-top">

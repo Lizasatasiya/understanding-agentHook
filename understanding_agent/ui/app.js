@@ -9,6 +9,8 @@
   // Application State
   const state = {
     commits: [],
+    users: [],
+    selectedUser: '', // '' for all users, or user's email/name
     selectedCommitId: null,
     selectedCommitData: null,
     selectedAttemptId: null,
@@ -29,6 +31,18 @@
     emptyState: document.getElementById('empty-state'),
     commitOverviewView: document.getElementById('commit-overview-view'),
     attemptDetailView: document.getElementById('attempt-detail-view'),
+
+    // User selection elements
+    userSelect: document.getElementById('user-select'),
+    userFlowCard: document.getElementById('user-flow-card'),
+    userFlowAvatar: document.getElementById('user-flow-avatar'),
+    userFlowName: document.getElementById('user-flow-name'),
+    userFlowEmail: document.getElementById('user-flow-email'),
+    userFlowActivity: document.getElementById('user-flow-activity'),
+    userMetricCommits: document.getElementById('user-metric-commits'),
+    userMetricAttempts: document.getElementById('user-metric-attempts'),
+    userMetricPassRate: document.getElementById('user-metric-pass-rate'),
+    userMetricAvgScore: document.getElementById('user-metric-avg-score'),
 
     // Commit Overview elements
     overviewStatusBadge: document.getElementById('overview-status-badge'),
@@ -110,9 +124,82 @@
   // API Calls
 
 
+  async function fetchUsers() {
+    try {
+      const res = await fetch('/api/users');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      state.users = Array.isArray(data) ? data : [];
+      renderUserSelect();
+      updateUserFlowBanner();
+    } catch (err) {
+      console.error('Failed to load users from DB:', err);
+    }
+  }
+
+  function renderUserSelect() {
+    if (!el.userSelect) return;
+    const currentVal = state.selectedUser;
+    const totalCommits = state.users.reduce((acc, u) => acc + (u.commit_count || 0), 0);
+    let html = `<option value="">All Users (${totalCommits} Commits)</option>`;
+
+    state.users.forEach((u) => {
+      const val = u.email || u.name;
+      const isSel = val === currentVal ? 'selected' : '';
+      html += `<option value="${escapeHtml(val)}" ${isSel}>${escapeHtml(u.name)} (${u.commit_count} commits, ${u.attempts_count} attempts)</option>`;
+    });
+
+    el.userSelect.innerHTML = html;
+  }
+
+  function updateUserFlowBanner() {
+    if (!el.userFlowCard) return;
+    if (!state.selectedUser) {
+      el.userFlowCard.classList.add('hidden');
+      return;
+    }
+
+    const u = state.users.find(
+      (user) =>
+        (user.email && user.email.toLowerCase() === state.selectedUser.toLowerCase()) ||
+        (user.name && user.name.toLowerCase() === state.selectedUser.toLowerCase())
+    );
+
+    if (!u) {
+      el.userFlowCard.classList.add('hidden');
+      return;
+    }
+
+    el.userFlowCard.classList.remove('hidden');
+    el.userFlowName.textContent = u.name;
+    el.userFlowEmail.textContent = u.email || 'developer@local';
+
+    const initials = (u.name || 'U')
+      .split(' ')
+      .map((part) => part[0])
+      .join('')
+      .substring(0, 2)
+      .toUpperCase();
+    el.userFlowAvatar.textContent = initials;
+
+    if (u.latest_activity) {
+      el.userFlowActivity.textContent = `Latest Activity: ${formatDate(u.latest_activity)}`;
+    } else {
+      el.userFlowActivity.textContent = 'Active in Repository';
+    }
+
+    el.userMetricCommits.textContent = u.commit_count;
+    el.userMetricAttempts.textContent = u.attempts_count;
+    el.userMetricPassRate.textContent = `${u.pass_rate}%`;
+    el.userMetricAvgScore.textContent = `${u.avg_score}%`;
+  }
+
   async function fetchCommits(preserveSelection = false) {
     try {
-      const res = await fetch('/api/commits');
+      const url = state.selectedUser
+        ? `/api/commits?user=${encodeURIComponent(state.selectedUser)}`
+        : '/api/commits';
+      const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const rawCommits = Array.isArray(data) ? data : [];
@@ -128,6 +215,11 @@
       if (!state.selectedCommitId || !state.commits.some((c) => c.id === state.selectedCommitId)) {
         if (state.commits.length > 0) {
           selectCommit(state.commits[0].id);
+        } else {
+          el.emptyState.classList.remove('hidden');
+          el.commitOverviewView.classList.add('hidden');
+          el.attemptDetailView.classList.add('hidden');
+          el.crumbCommitTitle.textContent = 'No commits found for selected user';
         }
         return;
       }
@@ -159,7 +251,7 @@
       console.error('Failed to load commits:', err);
       el.commitList.innerHTML = `
         <div class="sidebar-empty">
-          <span>Failed to load commits.</span>
+          <span>Failed to load commits from Database.</span>
           <button class="btn btn-secondary" onclick="window.understandingAgent.fetchCommits()">Retry</button>
         </div>
       `;
@@ -835,6 +927,7 @@
     state.currentView = 'overview';
     el.attemptDetailView.classList.add('hidden');
     el.commitOverviewView.classList.remove('hidden');
+    updateUserFlowBanner();
     if (state.selectedCommitData) {
       const fullMsg = state.selectedCommitData.message || '';
       const title = fullMsg.split('\n')[0] || 'Commit';
@@ -865,6 +958,17 @@
 
 
   function init() {
+    // User select dropdown listener
+    if (el.userSelect) {
+      el.userSelect.addEventListener('change', (e) => {
+        state.selectedUser = e.target.value;
+        updateUserFlowBanner();
+        state.selectedCommitId = null;
+        state.selectedCommitData = null;
+        fetchCommits(false);
+      });
+    }
+
     // Search filter
     el.commitSearch.addEventListener('input', (e) => {
       state.searchQuery = e.target.value;
@@ -873,6 +977,7 @@
 
     // Refresh button
     el.refreshBtn.addEventListener('click', () => {
+      fetchUsers();
       fetchCommits(true);
     });
 
@@ -890,13 +995,15 @@
     // Copy terminal audit report button
     if (el.btnCopyTerminal) el.btnCopyTerminal.addEventListener('click', copyAsciiAuditReport);
 
-    // Initial load
+    // Initial load: fetch users and commits from DB
+    fetchUsers();
     fetchCommits();
 
-    // Auto-refresh every 10 seconds to catch newly recorded sessions seamlessly
+    // Auto-refresh every 8 seconds to catch newly recorded sessions seamlessly in real time
     setInterval(() => {
+      fetchUsers();
       fetchCommits(true);
-    }, 10000);
+    }, 8000);
   }
 
   // Expose global methods
