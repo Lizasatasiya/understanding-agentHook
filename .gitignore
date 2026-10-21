@@ -9,3 +9,6 @@ build/
 !.env.example
 .DS_Store
 .hermes/
+
+# embedded throwaway demo repo (has its own .git + a real .env key)
+demo/QUICK_DEMO/shopcart/

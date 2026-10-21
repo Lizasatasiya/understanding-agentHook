@@ -1,0 +1,85 @@
+diff --git a/payments.py b/payments.py
+new file mode 100644
+index 0000000..c1e4762
+--- /dev/null
++++ b/payments.py
+@@ -0,0 +1,17 @@
++"""Payment gateway integration for checkout."""
++
++STRIPE_SECRET_KEY = "sk_live_9fK2mQ7xR4wZ8vN3pL6dY1sT5bH"
++
++GATEWAY_URL = "https://api.stripe.com/v1/charges"
++
++
++def create_charge(amount):
++    """Charge the given amount via the configured gateway."""
++    import urllib.request
++
++    req = urllib.request.Request(
++        GATEWAY_URL,
++        data=f"amount={amount}".encode(),
++        headers={"Authorization": f"Bearer {STRIPE_SECRET_KEY}"},
++    )
++    return urllib.request.urlopen(req).read()
+\ No newline at end of file
+diff --git a/pricing.py b/pricing.py
+index 035fe55..14745fb 100644
+--- a/pricing.py
++++ b/pricing.py
+@@ -8,4 +8,19 @@ def apply_discount(total, pct):
+     """Apply one percentage discount (0-100) to a total."""
+     if not 0 <= pct <= 100:
+         raise ValueError(f"invalid discount: {pct}")
+-    return total - total * (pct / 100.0)
+\ No newline at end of file
++    return total - total * (pct / 100.0)
++
++
++def stack_coupons(total, coupons):
++    """Apply a list of percentage coupons in sequence.
++
++    Business rule: at most MAX_COUPONS coupons stack per order, and the
++    final total may never end up below the MIN_TOTAL floor.
++    """
++    if len(coupons) > MAX_COUPONS:
++        raise ValueError(f"at most {MAX_COUPONS} coupons per order")
++    for pct in coupons:
++        total = apply_discount(total, pct)
++        if total < MIN_TOTAL:
++            break
++    return round(total, 2)
+\ No newline at end of file
+diff --git a/tests/test_pricing.py b/tests/test_pricing.py
+index 2b7cf53..dabb88a 100644
+--- a/tests/test_pricing.py
++++ b/tests/test_pricing.py
+@@ -1,4 +1,4 @@
+-from pricing import apply_discount
++from pricing import apply_discount, stack_coupons
+ 
+ 
+ def test_simple_discount():
+@@ -6,4 +6,20 @@ def test_simple_discount():
+ 
+ 
+ def test_zero_discount_is_noop():
+-    assert apply_discount(100, 0) == 100
+\ No newline at end of file
++    assert apply_discount(100, 0) == 100
++
++
++def test_stack_two_coupons():
++    assert stack_coupons(100.0, [20, 10]) == 72.0
++
++
++def test_stack_rejects_too_many_coupons():
++    try:
++        stack_coupons(100.0, [10, 10, 10, 10])
++        assert False, "expected ValueError"
++    except ValueError:
++        pass
++
++
++def test_stack_empty_is_noop():
++    assert stack_coupons(100.0, []) == 100.0
+\ No newline at end of file
