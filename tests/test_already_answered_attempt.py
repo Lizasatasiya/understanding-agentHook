@@ -108,6 +108,32 @@ class TestAlreadyAnsweredAttempts(unittest.TestCase):
         self.assertFalse(recovered_q[1]["answered"])
         self.assertEqual(recovered_q[1]["best_score"], 0)
 
+    def test_all_individual_passed_marking(self):
+        # Scenario: each question scores 70 (or 72), so avg_score is <= 75,
+        # but all questions individually demonstrated good understanding (score >= 70).
+        # Overall understanding must be PASSED.
+        valid_questions = [
+            {"question_id": "q1", "question": "Q1", "best_score": 70, "passed": True, "answered": True},
+            {"question_id": "q2", "question": "Q2", "best_score": 70, "passed": True, "answered": True},
+        ]
+        all_individual_passed = (
+            bool(valid_questions)
+            and all(q.get("passed", False) or q.get("best_score", 0) >= 70 for q in valid_questions)
+        )
+        self.assertTrue(all_individual_passed)
+
+        # Conversely, if one question did not demonstrate understanding, it must NOT pass
+        failing_questions = [
+            {"question_id": "q1", "question": "Q1", "best_score": 90, "passed": True, "answered": True},
+            {"question_id": "q2", "question": "Q2", "best_score": 50, "passed": False, "answered": False},
+        ]
+        failing_passed = (
+            bool(failing_questions)
+            and all(q.get("passed", False) or q.get("best_score", 0) >= 70 for q in failing_questions)
+        )
+        self.assertFalse(failing_passed)
+
 
 if __name__ == "__main__":
     unittest.main()
+

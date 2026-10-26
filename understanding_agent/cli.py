@@ -16,9 +16,25 @@ if __name__ == "__main__" and sys.version_info < (3, 10):
     import subprocess as _sp
 
     def _modern_python():
-        for cand in (_os.path.expanduser("~/.local/bin/python3"),
-                     "/usr/local/bin/managed_python3"):
-            if not (_os.path.isfile(cand) and _os.access(cand, _os.X_OK)):
+        import glob as _glob
+        candidates = [
+            _os.environ.get("VIRTUAL_ENV", "") + "/bin/python",
+            _os.path.join(_os.getcwd(), "venv", "bin", "python"),
+            _os.path.join(_os.getcwd(), ".venv", "bin", "python"),
+            "/Library/Frameworks/Python.framework/Versions/Current/bin/python3",
+            "/Library/Frameworks/Python.framework/Versions/3.14/bin/python3",
+            "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3",
+            "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3",
+            "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3",
+            "/opt/homebrew/bin/python3",
+            "/usr/local/bin/python3",
+            _os.path.expanduser("~/.local/bin/python3"),
+            "/usr/local/bin/managed_python3",
+            _os.path.expanduser("~/.pyenv/shims/python3"),
+        ] + _glob.glob(_os.path.expanduser("~/.local/share/uv/python/*/bin/python3"))
+
+        for cand in candidates:
+            if not cand or not (_os.path.isfile(cand) and _os.access(cand, _os.X_OK)):
                 continue
             try:
                 r = _sp.run([cand, "-c",
