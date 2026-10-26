@@ -172,6 +172,101 @@ def _detect_agent_execution() -> tuple[bool, str]:
     return False, ""
 
 
+def _detect_no_verify(project_root: str = None, head_commit: str = None, diff_hash: str = None) -> bool:
+    """Detect if the commit attempt is trying to bypass pre-commit via --no-verify or -n."""
+    import os
+    import sys
+    import subprocess
+    import shlex
+    import re
+
+    # 1. Direct explicit environment flag
+    if os.environ.get("UNDERSTANDING_AGENT_NO_VERIFY", "").strip().lower() in ("1", "true", "yes"):
+        return True
+
+    # 2. Inspect ancestor git commit command line
+    try:
+        from .commit_context import find_git_commit_ancestor
+        _, args = find_git_commit_ancestor()
+        if args:
+            is_commit = False
+            for i, a in enumerate(args):
+                low = a.lower()
+                if (low == "git" or low.endswith("/git")) and i + 1 < len(args) and args[i + 1].lower() == "commit":
+                    is_commit = True
+                    continue
+                if is_commit:
+                    if a == "--no-verify":
+                        return True
+                    if a == "-n":
+                        return True
+                    if a.startswith("-") and not a.startswith("--") and "n" in a:
+                        return True
+    except Exception:
+        pass
+
+    # 3. Process ancestry inspection via ps
+    try:
+        curr_pid = os.getpid()
+        for _ in range(8):
+            if curr_pid <= 1:
+                break
+            out = subprocess.check_output(
+                ["ps", "-o", "ppid,args", "-p", str(curr_pid)],
+                text=True, stderr=subprocess.DEVNULL
+            ).strip().splitlines()
+            if len(out) < 2:
+                break
+            parts = out[1].strip().split(None, 1)
+            ppid = int(parts[0])
+            cmd_line = parts[1] if len(parts) > 1 else ""
+
+            if "git" in cmd_line and "commit" in cmd_line:
+                if "--no-verify" in cmd_line:
+                    return True
+                try:
+                    tokens = shlex.split(cmd_line)
+                except Exception:
+                    tokens = cmd_line.split()
+                in_commit = False
+                for t in tokens:
+                    if t == "commit":
+                        in_commit = True
+                        continue
+                    if in_commit:
+                        if t in ("--no-verify", "-n"):
+                            return True
+                        if re.match(r"^-[a-zA-Z]*n[a-zA-Z]*$", t):
+                            return True
+            curr_pid = ppid
+    except Exception:
+        pass
+
+    # 4. Check if prepare-commit-msg hook was reached without prior pre-commit verification
+    if project_root and head_commit and diff_hash:
+        is_prepare_stage = any("COMMIT_EDITMSG" in a for a in sys.argv) or \
+                           os.environ.get("PRE_COMMIT_HOOK_TYPE") == "prepare-commit-msg"
+        if is_prepare_stage:
+            if not is_already_verified_for_commit(project_root, head_commit, diff_hash):
+                return True
+
+    return False
+
+
+def _print_no_verify_block(commit_msg: str) -> None:
+    RED = "\033[91m"
+    BOLD = "\033[1m"
+    YELLOW = "\033[93m"
+    CYAN = "\033[96m"
+    RESET = "\033[0m"
+
+    msg = commit_msg.strip() if commit_msg else "<commit message>"
+    print(f"{BOLD}{RED}  ✗ COMMIT BLOCKED: --no-verify is Prohibited               {RESET}\n")
+    print(f"  Try to commit with:")
+    print(f"    {BOLD}{CYAN}git commit -m \"{msg}\"{RESET}\n")
+    
+
+
 def _print_agent_block(agent_name: str, commit_msg: str) -> None:
     RED = "\033[91m"
     BOLD = "\033[1m"
@@ -191,6 +286,7 @@ def _print_agent_block(agent_name: str, commit_msg: str) -> None:
     print(f"  A human developer must run the commit directly in their terminal:")
     print(f"    {BOLD}{CYAN}git commit -m \"{msg}\"{RESET}\n")
     print(f"{BOLD}{RED}============================================================{RESET}\n")
+   
 
 
 

@@ -104,6 +104,8 @@ from .hook_stages import (
     _launch_gui_terminal_defense,
     _detect_agent_execution,
     _print_agent_block,
+    _detect_no_verify,
+    _print_no_verify_block,
     is_already_verified_for_commit,
     mark_verified_for_commit,
     clear_verified_for_commit,
@@ -129,8 +131,9 @@ def _write_state(state_file: str, attempt_key: str, head_commit, commit_msg,
         pass
 
 def main():
+    no_verify_early = _detect_no_verify()
     agent_mode_early = _detect_agent_execution()[0]
-    if not agent_mode_early:
+    if not agent_mode_early and not no_verify_early:
         try:
             con = 'CON' if sys.platform == 'win32' else '/dev/tty'
             sys.stdin = open(con, 'r', encoding='utf-8')
@@ -257,12 +260,50 @@ def main():
 
     failed_standards = [s for s in standards_report if not s.get("is_good", True)]
 
-    # 5d-4. Formatting and import-only commit exemption:
-    # If all staged changes are purely formatting/style or import organization
-    # (whitespace, line wrapping, quote normalization, trailing commas, semicolons,
-    # import reordering/cleanup) and there are no coding standards violations:
+    # 5d-4. --no-verify Check: Block bypass attempts
+    # Git skips pre-commit on --no-verify, but prepare-commit-msg intercepts it.
+    is_no_verify = _detect_no_verify(project_root, head_commit, diff_hash)
+    if is_no_verify:
+        _print_no_verify_block(commit_msg)
+        try:
+            from .session_store import load_sessions
+            _existing = load_sessions(project_root)
+            nv_attempt = get_next_attempt_number(
+                _existing, head_commit, diff_hash, commit_msg, state_attempts=0
+            )
+        except Exception:
+            nv_attempt = 1
+        blocked_session = build_session_payload(
+            attempt_number=nv_attempt,
+            head_commit=head_commit,
+            commit_message=commit_msg,
+            attempt_key=attempt_key,
+            diff_hash=diff_hash,
+            repository=env.get("repository", "unknown"),
+            branch=env.get("branch", "unknown"),
+            status="FAILED",
+            score=0,
+            changed_files=changes.get("files", []),
+            change_summary={"what_changed": "Blocked: Attempted to bypass pre-commit oral defense using --no-verify."},
+            verification="no-verify-blocked",
+            standards_report=standards_report,
+            violations_count=len(failed_standards),
+            questions=[],
+            identity=identity,
+            evidence=evidence,
+        )
+        try:
+            save_session(project_root, blocked_session)
+            ServerClient().send(blocked_session)
+        except Exception:
+            pass
+        sys.exit(1)
+
+    # 5d-5. Trivial change exemption (formatting, imports, comments, docs, annotations):
+    # If all staged changes are purely formatting, import organization, comments,
+    # docs, or type annotations and there are no coding standards violations:
     if is_commit_formatting_only(changes, project_root) and not failed_standards:
-        print(f"\n\033[92m✓ All staged changes are formatting/import organization (whitespace, line wrapping, quotes, imports, commas, delimiters).\033[0m")
+        print(f"\n\033[92m✓ All staged changes are trivial (formatting, imports, comments, docs, type annotations).\033[0m")
         print(f"\033[92m  No oral defense required — commit allowed.\033[0m\n")
         try:
             from .session_store import load_sessions
@@ -283,7 +324,7 @@ def main():
             status="PASSED",
             score=100,
             changed_files=changes.get("files", []),
-            change_summary={"what_changed": "Pure formatting and import organization (whitespace, quotes, imports, delimiters)."},
+            change_summary={"what_changed": "Trivial changes (formatting, imports, comments, docs, or type annotations)."},
             verification="formatting-exempt",
             standards_report=standards_report,
             violations_count=0,

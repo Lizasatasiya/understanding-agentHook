@@ -91,7 +91,62 @@ class TestGuiTerminalDefense(unittest.TestCase):
                 self.assertFalse(is_agent)
                 self.assertEqual(label, "")
 
+    def test_detect_no_verify_env_var(self):
+        from understanding_agent.hook_stages import _detect_no_verify
+        with patch.dict(os.environ, {"UNDERSTANDING_AGENT_NO_VERIFY": "1"}):
+            self.assertTrue(_detect_no_verify())
+
+    def test_detect_no_verify_ancestor_args(self):
+        from understanding_agent.hook_stages import _detect_no_verify
+        # Test --no-verify
+        with patch("understanding_agent.commit_context.find_git_commit_ancestor",
+                   return_value=(1234, ["git", "commit", "--no-verify", "-m", "bypass"])):
+            self.assertTrue(_detect_no_verify())
+        # Test -n
+        with patch("understanding_agent.commit_context.find_git_commit_ancestor",
+                   return_value=(1234, ["git", "commit", "-n", "-m", "bypass"])):
+            self.assertTrue(_detect_no_verify())
+        # Test combined -nm
+        with patch("understanding_agent.commit_context.find_git_commit_ancestor",
+                   return_value=(1234, ["git", "commit", "-nm", "bypass"])):
+            self.assertTrue(_detect_no_verify())
+        # Test clean commit (no bypass)
+        with patch("understanding_agent.commit_context.find_git_commit_ancestor",
+                   return_value=(1234, ["git", "commit", "-m", "normal commit"])):
+            with patch.dict(os.environ, {}, clear=True):
+                with patch("subprocess.check_output", return_value=""):
+                    self.assertFalse(_detect_no_verify())
+
+    def test_distinct_printing_blocks(self):
+        import io
+        from understanding_agent.hook_stages import _print_agent_block, _print_no_verify_block
+
+        # 1. Agent block output
+        buf_agent = io.StringIO()
+        with patch("sys.stdout", buf_agent):
+            _print_agent_block("Antigravity Agent", "sneaky commit test")
+        agent_out = buf_agent.getvalue()
+        self.assertIn("COMMIT BLOCKED: Autonomous AI Agent Commits Prohibited", agent_out)
+        self.assertIn("Detected Agent:", agent_out)
+        self.assertIn("Antigravity Agent", agent_out)
+        self.assertIn("AI agents are NOT permitted to commit code on behalf of developers.", agent_out)
+        self.assertIn('git commit -m "sneaky commit test"', agent_out)
+
+        # 2. No-verify block output
+        buf_nv = io.StringIO()
+        with patch("sys.stdout", buf_nv):
+            _print_no_verify_block("sneaky commit test")
+        nv_out = buf_nv.getvalue()
+        self.assertIn("COMMIT BLOCKED: --no-verify is Prohibited", nv_out)
+        self.assertIn("Try to commit with:", nv_out)
+        self.assertIn('git commit -m "sneaky commit test"', nv_out)
+        # Ensure agent-specific text is NOT in no-verify block
+        self.assertNotIn("Detected Agent", nv_out)
+        self.assertNotIn("AI agents are NOT permitted", nv_out)
+        self.assertNotIn("Autonomous AI Agent", nv_out)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

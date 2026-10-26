@@ -189,6 +189,147 @@ class TestFormattingDetector(unittest.TestCase):
         new = "import os\nimport sys\n\ndef get_cwd(): return os.name\n"
         self.assertFalse(is_formatting_change(old, new, "test.py"))
 
+    # --- Category 3: Comments, Docs & Annotations ---
+
+    # 1. Typo & Grammar Fixes
+    def test_typo_fix_in_inline_comment_python(self):
+        old = "def calculate(x):\n    # Calcluate the doulbed value\n    return x * 2\n"
+        new = "def calculate(x):\n    # Calculate the doubled value\n    return x * 2\n"
+        self.assertTrue(is_formatting_change(old, new, "calc.py"))
+
+    def test_grammar_fix_in_inline_comment_js(self):
+        old = "function getUser() {\n  // this functions are returning user\n  return api.user;\n}"
+        new = "function getUser() {\n  // this function returns the user\n  return api.user;\n}"
+        self.assertTrue(is_formatting_change(old, new, "user.js"))
+
+    def test_typo_fix_in_docstring_python(self):
+        old = 'def get_company():\n    """Return the user compnay name."""\n    return "Acme"\n'
+        new = 'def get_company():\n    """Return the user company name."""\n    return "Acme"\n'
+        self.assertTrue(is_formatting_change(old, new, "company.py"))
+
+    def test_markdown_file_typo_and_grammar_fixes(self):
+        old = "# Documentation\n\nThere is a smal eror in this documnetation.\n"
+        new = "# Documentation\n\nThere is a small error in this documentation.\n"
+        self.assertTrue(is_formatting_change(old, new, "README.md"))
+        self.assertTrue(is_formatting_change(old, new, "docs/guide.rst"))
+
+    # 2. Comment Cleanup
+    def test_comment_cleanup_removing_dead_code_python(self):
+        old = "def process(x):\n    # old_impl(x)\n    # legacy_calc = x + 1\n    return x * 2\n"
+        new = "def process(x):\n    return x * 2\n"
+        self.assertTrue(is_formatting_change(old, new, "calc.py"))
+
+    def test_comment_cleanup_removing_dead_code_js(self):
+        old = "function process(x) {\n  // let oldVal = x + 10;\n  // const deprecated = true;\n  return x * 2;\n}"
+        new = "function process(x) {\n  return x * 2;\n}"
+        self.assertTrue(is_formatting_change(old, new, "calc.js"))
+
+    def test_comment_cleanup_removing_stale_todo_notes(self):
+        old = "def fetch_data():\n    # TODO: remove this temporary workaround\n    # NOTE: verify response status\n    return http.get('/data')\n"
+        new = "def fetch_data():\n    return http.get('/data')\n"
+        self.assertTrue(is_formatting_change(old, new, "api.py"))
+
+    def test_comment_cleanup_stale_todo_js(self):
+        old = "const fetchUser = () => {\n  // TODO: completed in ticket 123\n  return api.getUser();\n};"
+        new = "const fetchUser = () => {\n  return api.getUser();\n};"
+        self.assertTrue(is_formatting_change(old, new, "api.ts"))
+
+    # 3. Pure Type Annotations
+    def test_pure_type_annotations_python(self):
+        old = "def add(a, b=1):\n    total = a + b\n    return total\n"
+        new = "def add(a: int, b: int = 1) -> int:\n    total: int = a + b\n    return total\n"
+        self.assertTrue(is_formatting_change(old, new, "calc.py"))
+
+    def test_pure_type_annotations_with_typing_imports_python(self):
+        old = "def get_items(keys):\n    res = [k.upper() for k in keys]\n    return res\n"
+        new = "from typing import List, Optional\n\ndef get_items(keys: List[str]) -> List[str]:\n    res: List[str] = [k.upper() for k in keys]\n    return res\n"
+        self.assertTrue(is_formatting_change(old, new, "items.py"))
+
+    def test_refining_type_annotations_python(self):
+        old = "from typing import Any\ndef compute(val: Any) -> Any:\n    return val * 2\n"
+        new = "def compute(val: int) -> int:\n    return val * 2\n"
+        self.assertTrue(is_formatting_change(old, new, "calc.py"))
+
+    def test_pure_type_annotations_typescript(self):
+        old = "async function fetchData(id, retries = 3) {\n  const res = await api.get(id);\n  const data = res.data;\n  return data;\n}"
+        new = "interface ApiResponse {\n  data: string;\n}\n\ntype ID = string | number;\n\nasync function fetchData(id: ID, retries: number = 3): Promise<ApiResponse> {\n  const res: ApiResponse = await api.get(id) as ApiResponse;\n  const data: string = res.data;\n  return data;\n}"
+        self.assertTrue(is_formatting_change(old, new, "service.ts"))
+
+    # 4. Documentation Formatting
+    def test_docstring_reformatting_google_to_sphinx_python(self):
+        old = '''def divide(a, b):
+    """Divide a by b.
+
+    Args:
+        a: Numerator
+        b: Denominator
+
+    Returns:
+        Result of division
+    """
+    return a / b
+'''
+        new = '''def divide(a, b):
+    """Divide a by b.
+
+    :param a: Numerator
+    :param b: Denominator
+    :return: Result of division
+    """
+    return a / b
+'''
+        self.assertTrue(is_formatting_change(old, new, "math_utils.py"))
+
+    def test_docstring_reformatting_numpy_style_python(self):
+        old = '''def divide(a, b):
+    """Divide a by b."""
+    return a / b
+'''
+        new = '''def divide(a, b):
+    """Divide a by b.
+
+    Parameters
+    ----------
+    a : float
+        Numerator
+    b : float
+        Denominator
+
+    Returns
+    -------
+    float
+        Result of division
+    """
+    return a / b
+'''
+        self.assertTrue(is_formatting_change(old, new, "math_utils.py"))
+
+    def test_jsdoc_documentation_formatting(self):
+        old = "function query(sql) {\n  // Run query\n  return db.execute(sql);\n}"
+        new = "/**\n * Executes a SQL query against the primary database.\n * @param {string} sql - SQL query string\n * @returns {Promise<any>}\n */\nfunction query(sql) {\n  return db.execute(sql);\n}"
+        self.assertTrue(is_formatting_change(old, new, "db.js"))
+
+    # 5. Negative Cases (Semantic and Logic Changes MUST NOT pass)
+    def test_negative_logic_change_with_comment_fix(self):
+        old = "def calculate(x):\n    # Calcluate the doulbed value\n    return x * 2\n"
+        new = "def calculate(x):\n    # Calculate the doubled value\n    return x * 3\n"
+        self.assertFalse(is_formatting_change(old, new, "calc.py"))
+
+    def test_negative_logic_change_with_type_annotation(self):
+        old = "def add(a, b=1):\n    return a + b\n"
+        new = "def add(a: int, b: int = 2) -> int:\n    return a + b\n"
+        self.assertFalse(is_formatting_change(old, new, "calc.py"))
+
+    def test_negative_string_change_outside_docstring(self):
+        old = 'def get_message():\n    """Docstring"""\n    return "Welcome"\n'
+        new = 'def get_message():\n    """Updated docstring"""\n    return "Goodbye"\n'
+        self.assertFalse(is_formatting_change(old, new, "msg.py"))
+
+    def test_negative_logic_change_with_ts_types(self):
+        old = "function fetchData(id) { return api.get(id); }"
+        new = "function fetchData(id: string): Promise<any> { return api.post(id); }"
+        self.assertFalse(is_formatting_change(old, new, "api.ts"))
+
 
 
 class TestGitFormattingIntegration(unittest.TestCase):
@@ -302,6 +443,45 @@ class TestGitFormattingIntegration(unittest.TestCase):
         struct_changes = context.get("structured_changes", [])
         # Since add is untouched and module only had unused import removed, structured_changes should be empty
         self.assertEqual(struct_changes, [])
+
+    def test_git_staged_comments_and_type_annotations(self):
+        py_init = "def multiply(x, y):\n    return x * y\n"
+        with open(os.path.join(self.repo, "calc.py"), "w") as f:
+            f.write(py_init)
+        subprocess.run(["git", "add", "calc.py"], cwd=self.repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init calc"], cwd=self.repo, capture_output=True)
+
+        # Stage docstring, comments, and type hints
+        py_typed = (
+            'def multiply(x: int, y: int) -> int:\n'
+            '    """Multiply two integers together."""\n'
+            '    # Return the product\n'
+            '    return x * y\n'
+        )
+        with open(os.path.join(self.repo, "calc.py"), "w") as f:
+            f.write(py_typed)
+        subprocess.run(["git", "add", "calc.py"], cwd=self.repo, capture_output=True)
+
+        os.chdir(self.repo)
+        changes = ChangeDetector().detect()
+        self.assertTrue(is_commit_formatting_only(changes, self.repo))
+
+    def test_git_staged_markdown_doc_file(self):
+        md_init = "# Title\n\nInitial draft of the documentation.\n"
+        with open(os.path.join(self.repo, "README.md"), "w") as f:
+            f.write(md_init)
+        subprocess.run(["git", "add", "README.md"], cwd=self.repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init readme"], cwd=self.repo, capture_output=True)
+
+        # Stage typo fix in markdown
+        md_fixed = "# Title\n\nCorrected version of the documentation with typo fix.\n"
+        with open(os.path.join(self.repo, "README.md"), "w") as f:
+            f.write(md_fixed)
+        subprocess.run(["git", "add", "README.md"], cwd=self.repo, capture_output=True)
+
+        os.chdir(self.repo)
+        changes = ChangeDetector().detect()
+        self.assertTrue(is_commit_formatting_only(changes, self.repo))
 
 
 if __name__ == "__main__":
