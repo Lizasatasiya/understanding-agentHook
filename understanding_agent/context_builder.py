@@ -6,6 +6,8 @@ from .language_support import (
     language_for,
     extract_functions as generic_extract_functions,
 )
+from .formatting_detector import is_formatting_change
+
 
 
 class ContextBuilder:
@@ -83,8 +85,11 @@ class ContextBuilder:
                     old_func_body = self._extract_function_source(old_source, func_name, language)
                     new_func_body = self._extract_function_source(new_source, func_name, language)
                 
-                # Skip if the function body is unchanged (hunk overlap false-positive)
-                if old_func_body == new_func_body and old_func_body != "":
+                # Skip if the function body is unchanged or only formatting changed
+                if old_func_body != "" and (
+                    old_func_body == new_func_body
+                    or is_formatting_change(old_func_body, new_func_body, filepath)
+                ):
                     continue
                 
                 import difflib

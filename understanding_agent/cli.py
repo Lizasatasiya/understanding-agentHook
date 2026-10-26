@@ -68,6 +68,7 @@ from .answer_hygiene import classify_answer, hygiene_enabled
 from .coding_standards import CodingStandardsChecker
 from .session_store import save_session
 from .session_payload import build_session_payload
+from .formatting_detector import is_commit_formatting_only
 from .api_utils import load_nous_api_key
 from .commit_context import (
     get_head_commit,
@@ -226,6 +227,47 @@ def main():
     }
 
     failed_standards = [s for s in standards_report if not s.get("is_good", True)]
+
+    # 5d-4. Formatting and import-only commit exemption:
+    # If all staged changes are purely formatting/style or import organization
+    # (whitespace, line wrapping, quote normalization, trailing commas, semicolons,
+    # import reordering/cleanup) and there are no coding standards violations:
+    if is_commit_formatting_only(changes, project_root) and not failed_standards:
+        print(f"\n\033[92m✓ All staged changes are formatting/import organization (whitespace, line wrapping, quotes, imports, commas, delimiters).\033[0m")
+        print(f"\033[92m  No oral defense required — commit allowed.\033[0m\n")
+        try:
+            from .session_store import load_sessions
+            _existing = load_sessions(project_root)
+            fmt_attempt = get_next_attempt_number(
+                _existing, head_commit, diff_hash, commit_msg, state_attempts=0
+            )
+        except Exception:
+            fmt_attempt = 1
+        fmt_session = build_session_payload(
+            attempt_number=fmt_attempt,
+            head_commit=head_commit,
+            commit_message=commit_msg,
+            attempt_key=attempt_key,
+            diff_hash=diff_hash,
+            repository=env.get("repository", "unknown"),
+            branch=env.get("branch", "unknown"),
+            status="PASSED",
+            score=100,
+            changed_files=changes.get("files", []),
+            change_summary={"what_changed": "Pure formatting and import organization (whitespace, quotes, imports, delimiters)."},
+            verification="formatting-exempt",
+            standards_report=standards_report,
+            violations_count=0,
+            questions=[],
+            identity=identity,
+            evidence=evidence,
+        )
+        try:
+            save_session(project_root, fmt_session)
+            ServerClient().send(fmt_session)
+        except Exception:
+            pass
+        sys.exit(0)
 
     # 5e. Judas J2 — agent / non-interactive record-only mode.
     # Agents (Codex/Claude CLI/etc.) commit via git, so the hook fires — but
@@ -541,6 +583,8 @@ def main():
                     print(f"{GREEN}✓ Already Answered (Attempt #{origin_att}){RESET}\n")
                 else:
                     print(f"{GREEN}✓ Already Answered{RESET}\n")
+                q["answered"] = True
+                q["passed"] = True
                 total_score += q.get('best_score', 0)
                 final_results.append({
                     "question_id": q_id,
@@ -763,10 +807,21 @@ def main():
             and all(bool((r.get("answer") or "").strip()) and r.get("status") != "timeout" for r in final_results)
         )
 
-        if fallback_questions_asked and api_not_working and all_answers_given:
+        # If all individual questions demonstrated understanding (score >= 70%),
+        # overall understanding is passed.
+        all_individual_passed = (
+            bool(valid_questions)
+            and all(q.get("passed", False) or q.get("best_score", 0) >= 70 for q in valid_questions)
+        )
+
+        if not valid_questions:
+            is_passed = True
+        elif fallback_questions_asked and api_not_working and all_answers_given:
+            is_passed = True
+        elif all_individual_passed:
             is_passed = True
         else:
-            is_passed = avg_score > 75
+            is_passed = False
 
         attempt_status = "PASSED" if is_passed else "FAILED"
         if is_passed:
