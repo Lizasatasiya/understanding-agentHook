@@ -33,6 +33,26 @@ Category 3: Comments, Docs & Annotations
 13. Documentation formatting: Reformatting docstrings (e.g., Google docstring to Sphinx/NumPy
     style) without modifying the documented behavior.
 
+Category 4: Non-Code & Metadata Files
+14. Git metadata & commit message tweaks: tag updates, .gitattributes adjustments.
+15. Ignore files: .gitignore, .dockerignore, .eslintignore, .prettierignore.
+16. License / Header copyright updates: Bumping copyright years or adding license headers.
+17. Project documentation files: README.md, CHANGELOG.md, CONTRIBUTING.md, or doc assets.
+
+Category 5: Local Variable & Cosmetic Refactoring (Within Local Scope)
+18. Local variable renaming for clarity: Renaming local variables inside function scope.
+19. Inlining / extracting trivial locals: Inlining single-use locals or extracting expressions.
+20. Syntactic sugar / Pythonic idioms: Minor idiom upgrades (x is None, not items, etc.).
+
+Category 6: Logging, Print & Debug Cleanup
+21. Debug artifact cleanup: Deleting stray print(), console.log(), or debugger statements.
+22. Log message text polish: Fixing typos, casing, or punctuation in log message strings.
+23. Log level downgrades: Downgrading high-frequency verbose logs (e.g., INFO -> DEBUG).
+
+Category 7: Dependency & Config Bumps
+24. Lockfile-only updates: Routine lockfile changes (package-lock.json, poetry.lock, Cargo.lock).
+25. Patch version bumps: Single-line version bumps in metadata files (package.json, pyproject.toml).
+
 Such changes carry no semantic risk and do not require developer questioning
 during pre-commit.
 """
@@ -353,20 +373,113 @@ def is_import_organization_change(old_content: str, new_content: str, filepath: 
 # Category 3: Comments, Docs & Annotations
 # ============================================================================
 
+# ============================================================================
+# Category 4: Non-Code & Metadata Files
+# ============================================================================
+
+METADATA_IGNORE_PATTERNS = (
+    '.gitignore', '.dockerignore', '.eslintignore', '.prettierignore',
+    '.npmignore', '.stylelintignore', '.helmignore', '.gitattributes',
+    '.mailmap', '.editorconfig',
+)
+
 DOCS_EXTENSIONS = ('.md', '.markdown', '.rst', '.txt', '.adoc', '.rdoc', '.docs')
 
+DOCS_SPECIAL_FILES = (
+    'license', 'licence', 'copying', 'notice', 'authors',
+    'readme', 'changelog', 'contributing', 'code_of_conduct',
+    'security', 'pull_request_template',
+)
 
-def is_docs_file(filepath: str) -> bool:
-    """Check if filepath is a pure documentation or markdown file."""
+DOCS_ASSET_EXTENSIONS = ('.svg', '.png', '.jpg', '.jpeg', '.gif', '.ico', '.webp')
+
+
+def is_metadata_or_non_code_file(filepath: str) -> bool:
+    """
+    Check if filepath belongs to Category 4:
+    - Ignore files (.gitignore, .dockerignore, .eslintignore, etc.)
+    - Git metadata & attributes (.gitattributes, .mailmap)
+    - Licenses & notices (LICENSE, LICENCE, NOTICE, AUTHORS)
+    - Project documentation files (README, CHANGELOG, CONTRIBUTING, etc.)
+    - Documentation assets in docs/ or assets/
+    """
     if not filepath:
         return False
     norm = filepath.lower().replace('\\', '/')
+    base = os.path.basename(norm)
+
+    # 1. Ignore files & git attributes
+    if base.startswith('.') and (base.endswith('ignore') or base in ('.gitattributes', '.mailmap', '.editorconfig')):
+        return True
+    if base in METADATA_IGNORE_PATTERNS:
+        return True
+
+    # 2. Markdown and documentation text files
     if norm.endswith(DOCS_EXTENSIONS):
         return True
-    if norm.startswith(('docs/', 'doc/')) or '/docs/' in norm or '/doc/' in norm:
+
+    # 3. Dedicated project documentation / license files (e.g. LICENSE, README, CHANGELOG)
+    name_no_ext = os.path.splitext(base)[0]
+    if name_no_ext in DOCS_SPECIAL_FILES:
         return True
+
+    # 4. Files strictly inside docs/ or doc/ directory
+    if norm.startswith(('docs/', 'doc/')) or '/docs/' in norm or '/doc/' in norm:
+        if norm.endswith(DOCS_EXTENSIONS) or norm.endswith(DOCS_ASSET_EXTENSIONS):
+            return True
+
     return False
 
+
+# Compatibility alias
+is_docs_file = is_metadata_or_non_code_file
+
+
+# ============================================================================
+# Category 7: Dependency & Config Bumps
+# ============================================================================
+
+LOCKFILES = (
+    'package-lock.json', 'poetry.lock', 'cargo.lock', 'yarn.lock',
+    'pnpm-lock.yaml', 'pipfile.lock', 'composer.lock', 'gemfile.lock',
+)
+
+VERSION_REGEX = re.compile(
+    r'([\"\']?version[\"\']?\s*[:=]\s*[\"\']\d+\.\d+\.)\d+([\"\'])'
+)
+
+
+def is_lockfile(filepath: str) -> bool:
+    """Check if filepath is an auto-generated package lockfile."""
+    if not filepath:
+        return False
+    base = os.path.basename(filepath).lower()
+    return base in LOCKFILES
+
+
+def is_patch_version_bump(old_content: str, new_content: str, filepath: str = "") -> bool:
+    """
+    Check if the change between old_content and new_content is strictly a single-line
+    patch version bump in metadata files (package.json, pyproject.toml, Cargo.toml, etc.).
+    """
+    if not filepath:
+        return False
+    base = os.path.basename(filepath).lower()
+    meta_files = (
+        'package.json', 'pyproject.toml', 'setup.cfg', 'cargo.toml',
+        'version.py', '__version__.py', 'pom.xml', 'build.gradle'
+    )
+    if base not in meta_files:
+        return False
+
+    old_norm = VERSION_REGEX.sub(r'\g<1>__PATCH__\g<2>', old_content)
+    new_norm = VERSION_REGEX.sub(r'\g<1>__PATCH__\g<2>', new_content)
+    return old_norm == new_norm
+
+
+# ============================================================================
+# Categories 3, 5, 6: Comments, Docs, Types, Local Refactoring, Logging & Debug
+# ============================================================================
 
 def strip_comments(code: str) -> str:
     """Strip all comments (//, /* */, #, <!-- -->) while preserving string literals."""
@@ -399,7 +512,10 @@ def strip_comments(code: str) -> str:
 def _strip_python_docs_and_types(code: str):
     """
     Parse Python code and return (imports_set, stripped_body_dump).
-    Docstrings, type annotations, and typing imports are stripped from the AST.
+    Applies AST transformations for:
+    - Category 3: Docstrings & type annotations stripped
+    - Category 5: Local variable canonicalization, inlined/extracted return locals, idioms
+    - Category 6: Debug artifact cleanup (print, breakpoint, pdb) & logging polish/downgrades
     """
     try:
         tree = ast.parse(code)
@@ -418,6 +534,108 @@ def _strip_python_docs_and_types(code: str):
                         node.body = [ast.Pass()]
             return node
 
+        def visit_Expr(self, node):
+            # Category 6: Debug artifact cleanup (print, breakpoint, pdb.set_trace)
+            if isinstance(node.value, ast.Call):
+                func = node.value.func
+                if isinstance(func, ast.Name) and func.id in ('print', 'breakpoint'):
+                    return None
+                if isinstance(func, ast.Attribute) and func.attr == 'set_trace':
+                    if isinstance(func.value, ast.Name) and func.value.id == 'pdb':
+                        return None
+            return self.generic_visit(node)
+
+        def visit_Call(self, node):
+            self.generic_visit(node)
+            func = node.func
+            # Category 6: Logging polish & log level downgrade
+            if isinstance(func, ast.Attribute) and func.attr in ('debug', 'info', 'warning', 'warn'):
+                func.attr = '__log__'
+                if node.args and isinstance(node.args[0], (ast.Constant, getattr(ast, 'Str', ()))) :
+                    node.args[0] = ast.Constant(value='__LOG_MSG__')
+            return node
+
+        def visit_Compare(self, node):
+            self.generic_visit(node)
+            # Category 5: Syntactic sugar / Pythonic idioms
+            if len(node.ops) == 1 and len(node.comparators) == 1:
+                op = node.ops[0]
+                comp = node.comparators[0]
+                # x == None -> x is None
+                if isinstance(op, ast.Eq) and isinstance(comp, ast.Constant) and comp.value is None:
+                    return ast.copy_location(ast.Compare(left=node.left, ops=[ast.Is()], comparators=[comp]), node)
+                # x != None -> x is not None
+                if isinstance(op, ast.NotEq) and isinstance(comp, ast.Constant) and comp.value is None:
+                    return ast.copy_location(ast.Compare(left=node.left, ops=[ast.IsNot()], comparators=[comp]), node)
+                # len(x) == 0 -> not x
+                if isinstance(op, ast.Eq) and isinstance(comp, ast.Constant) and comp.value == 0:
+                    if isinstance(node.left, ast.Call) and isinstance(node.left.func, ast.Name) and node.left.func.id == 'len' and len(node.left.args) == 1:
+                        return ast.copy_location(ast.UnaryOp(op=ast.Not(), operand=node.left.args[0]), node)
+            return node
+
+        def visit_UnaryOp(self, node):
+            self.generic_visit(node)
+            # Category 5: not len(x) -> not x
+            if isinstance(node.op, ast.Not):
+                if isinstance(node.operand, ast.Call) and isinstance(node.operand.func, ast.Name) and node.operand.func.id == 'len' and len(node.operand.args) == 1:
+                    return ast.copy_location(ast.UnaryOp(op=ast.Not(), operand=node.operand.args[0]), node)
+            return node
+
+        def _canonicalize_locals(self, func_node):
+            param_names = set()
+            for arg in (func_node.args.args + getattr(func_node.args, 'posonlyargs', []) +
+                        func_node.args.kwonlyargs):
+                param_names.add(arg.arg)
+            if func_node.args.vararg:
+                param_names.add(func_node.args.vararg.arg)
+            if func_node.args.kwarg:
+                param_names.add(func_node.args.kwarg.arg)
+
+            explicit_nonlocals = set()
+            for node in ast.walk(func_node):
+                if isinstance(node, (ast.Global, ast.Nonlocal)):
+                    explicit_nonlocals.update(node.names)
+
+            local_names = []
+            for node in ast.walk(func_node):
+                if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                    if node.id not in param_names and node.id not in explicit_nonlocals:
+                        if node.id not in local_names:
+                            local_names.append(node.id)
+
+            rename_map = {name: f'__loc_{i}__' for i, name in enumerate(local_names)}
+
+            class LocalRenamer(ast.NodeTransformer):
+                def visit_Name(self, node):
+                    if node.id in rename_map:
+                        node.id = rename_map[node.id]
+                    return node
+
+            LocalRenamer().visit(func_node)
+
+        def _inline_return_locals(self, func_node):
+            new_body = []
+            i = 0
+            while i < len(func_node.body):
+                stmt = func_node.body[i]
+                if i + 1 < len(func_node.body):
+                    next_stmt = func_node.body[i + 1]
+                    if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+                        loc_name = stmt.targets[0].id
+                        if isinstance(next_stmt, ast.Return) and isinstance(next_stmt.value, ast.Name) and next_stmt.value.id == loc_name:
+                            new_body.append(ast.copy_location(ast.Return(value=stmt.value), next_stmt))
+                            i += 2
+                            continue
+                    if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name) and stmt.value is not None:
+                        loc_name = stmt.target.id
+                        if isinstance(next_stmt, ast.Return) and isinstance(next_stmt.value, ast.Name) and next_stmt.value.id == loc_name:
+                            new_body.append(ast.copy_location(ast.Return(value=stmt.value), next_stmt))
+                            i += 2
+                            continue
+                new_body.append(stmt)
+                i += 1
+            func_node.body = new_body
+
         def visit_FunctionDef(self, node):
             node.returns = None
             for arg_group in (node.args.args, getattr(node.args, 'posonlyargs', []),
@@ -428,8 +646,11 @@ def _strip_python_docs_and_types(code: str):
                 node.args.vararg.annotation = None
             if node.args.kwarg:
                 node.args.kwarg.annotation = None
+            self._strip_doc(node)
             self.generic_visit(node)
-            return self._strip_doc(node)
+            self._inline_return_locals(node)
+            self._canonicalize_locals(node)
+            return node
 
         def visit_AsyncFunctionDef(self, node):
             node.returns = None
@@ -441,8 +662,11 @@ def _strip_python_docs_and_types(code: str):
                 node.args.vararg.annotation = None
             if node.args.kwarg:
                 node.args.kwarg.annotation = None
+            self._strip_doc(node)
             self.generic_visit(node)
-            return self._strip_doc(node)
+            self._inline_return_locals(node)
+            self._canonicalize_locals(node)
+            return node
 
         def visit_AnnAssign(self, node):
             self.generic_visit(node)
@@ -456,6 +680,12 @@ def _strip_python_docs_and_types(code: str):
             return self._strip_doc(node)
 
     transformed = PythonTrivialTransformer().visit(tree)
+    for n in ast.walk(transformed):
+        if hasattr(n, 'body') and isinstance(n.body, list):
+            n.body = [stmt for stmt in n.body if stmt is not None]
+            if not n.body:
+                n.body = [ast.Pass()]
+
     imports = set()
     body = []
     for node in transformed.body:
@@ -507,25 +737,95 @@ def strip_ts_type_annotations(code: str) -> str:
     return code
 
 
+def _normalize_js_trivia(code: str) -> str:
+    """Normalize JavaScript/TypeScript for Categories 3, 5, and 6."""
+    # 1. Comments & TypeScript types
+    code = strip_ts_type_annotations(strip_comments(code))
+
+    # 2. Category 6: Debug artifact cleanup (console.log, debugger)
+    code = re.sub(r'\bconsole\.(?:log|debug|info|warn|error)\s*\([^)]*\)\s*;?', '', code)
+    code = re.sub(r'\bdebugger\s*;?', '', code)
+
+    # 3. Category 6: Logging polish & log level downgrade
+    code = re.sub(r'\blogger\.(?:debug|info|warning|warn)\s*\([\"\'][^\"\']*[\"\']', 'logger.__log__("__LOG_MSG__"', code)
+
+    # 4. Category 5: Syntactic sugar / idioms
+    code = re.sub(r'([\w$]+)\s*===\s*null\s*\|\|\s*\1\s*===\s*undefined', r'\1 == null', code)
+    code = re.sub(r'([\w$]+)\s*!==\s*null\s*&&\s*\1\s*!==\s*undefined', r'\1 != null', code)
+
+    # 5. Category 5: Inlining / extracting single-use return locals
+    code = re.sub(r'\b(?:const|let|var)\s+([\w$]+)\s*=\s*([^;]+);\s*return\s+\1;?', r'return \2;', code)
+
+    # 6. Category 5: Canonicalize function locals using balanced brace scanning
+    func_pattern = re.compile(r'(?:function\s*[\w$]*\s*\(([^)]*)\)|(?:\(([^)]*)\)|([\w$]+))\s*=>)\s*\{')
+    pos = 0
+    result = []
+    while pos < len(code):
+        m = func_pattern.search(code, pos)
+        if not m:
+            result.append(code[pos:])
+            break
+        result.append(code[pos:m.end()])
+
+        param_str = m.group(1) or m.group(2) or m.group(3) or ""
+        params = {p.strip().split('=')[0].strip() for p in param_str.split(',') if p.strip()}
+
+        depth = 1
+        i = m.end()
+        in_str = None
+        while i < len(code) and depth > 0:
+            ch = code[i]
+            if in_str:
+                if ch == '\\':
+                    i += 2
+                    continue
+                elif ch == in_str:
+                    in_str = None
+            else:
+                if ch in ('"', "'", '`'):
+                    in_str = ch
+                elif ch == '{':
+                    depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        break
+            i += 1
+
+        body = code[m.end():i]
+        locals_found = []
+        for decl in re.finditer(r'\b(?:const|let|var)\s+([\w$]+)\b', body):
+            name = decl.group(1)
+            if name not in params and name not in locals_found:
+                locals_found.append(name)
+        new_body = body
+        for idx, name in enumerate(locals_found):
+            new_body = re.sub(r'\b' + re.escape(name) + r'\b', f'__loc_{idx}__', new_body)
+        result.append(new_body)
+        pos = i
+
+    code = ''.join(result)
+    return code
+
+
 def is_comments_docs_or_annotations_change(old_content: str, new_content: str, filepath: str = "") -> bool:
     """
-    Check Category 3:
-    - Typo & grammar fixes in inline comments, docstrings, or markdown files
-    - Comment cleanup (removing commented-out dead code, temporary notes, stale TODOs)
-    - Pure type annotations (adding/refining type hints in Python or TS)
-    - Documentation formatting (docstring style reformatting, JSDoc formatting)
+    Check Categories 3, 5, 6:
+    - Category 3: Comments, docs, markdown, pure type annotations
+    - Category 5: Local variable renaming, inlining/extracting, idioms
+    - Category 6: Debug prints/console.log, log text polish, log downgrades
     """
-    # 1. Markdown / Documentation files
-    if is_docs_file(filepath):
+    # 1. Non-code & Markdown / Documentation files (Category 4)
+    if is_metadata_or_non_code_file(filepath):
         return True
 
-    # 2. Universal comment stripping (applies to all languages: Python, JS, TS, Go, Rust, Java, etc.)
+    # 2. Universal comment stripping (all languages)
     stripped_old = strip_comments(old_content)
     stripped_new = strip_comments(new_content)
     if normalize_code(stripped_old, filepath) == normalize_code(stripped_new, filepath):
         return True
 
-    # 3. Python docstrings, comments, typing imports & type annotations via AST
+    # 3. Python AST: docstrings, type annotations, local renames, idioms, debug prints & logs
     is_python = filepath.endswith('.py') or ('def ' in old_content and 'import ' in old_content)
     if is_python:
         old_imp, old_dump = _strip_python_docs_and_types(old_content)
@@ -567,13 +867,13 @@ def is_comments_docs_or_annotations_change(old_content: str, new_content: str, f
                     except Exception:
                         pass
 
-    # 4. JavaScript / TypeScript comments, JSDoc & type annotations
+    # 4. JavaScript / TypeScript comments, JSDoc, types, local renames, debug & logs
     is_js = any(filepath.endswith(ext) for ext in ('.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs')) or (
         'function ' in old_content or 'const ' in old_content or 'let ' in old_content or 'import ' in old_content
     )
     if is_js:
-        norm_ts_old = normalize_code(strip_ts_type_annotations(strip_comments(old_content)), filepath)
-        norm_ts_new = normalize_code(strip_ts_type_annotations(strip_comments(new_content)), filepath)
+        norm_ts_old = normalize_code(_normalize_js_trivia(old_content), filepath)
+        norm_ts_new = normalize_code(_normalize_js_trivia(new_content), filepath)
         if norm_ts_old == norm_ts_new:
             return True
 
@@ -587,24 +887,34 @@ def is_trivial_change(old_content: str, new_content: str, filepath: str = "") ->
     - Category 2: Imports & module organization (reordering, single/multiline, dead removal, aliasing).
     - Category 3: Comments, Docs & Annotations (typos in comments/docs/markdown, comment cleanup,
                   docstring reformatting, pure type annotations).
+    - Category 4: Non-Code & Metadata Files (ignore files, git attributes, licenses, docs).
+    - Category 5: Local Variable & Cosmetic Refactoring (local renaming, inlining/extracting, idioms).
+    - Category 6: Logging, Print & Debug Cleanup (debug prints, log text polish, log level downgrades).
+    - Category 7: Dependency & Config Bumps (lockfiles, patch version bumps).
     """
     if old_content == new_content:
         return True
 
+    # Category 4 & Category 7: Non-code metadata or lockfile
+    if is_metadata_or_non_code_file(filepath) or is_lockfile(filepath):
+        return True
+
+    # Category 7: Patch version bump
+    if is_patch_version_bump(old_content, new_content, filepath):
+        return True
+
     if not old_content or not new_content:
-        if is_docs_file(filepath):
-            return True
         return False
 
-    # Check Category 1 (Pure formatting)
+    # Category 1 (Pure formatting)
     if is_pure_formatting_change(old_content, new_content, filepath):
         return True
 
-    # Check Category 2 (Imports & module organization)
+    # Category 2 (Imports & module organization)
     if is_import_organization_change(old_content, new_content, filepath):
         return True
 
-    # Check Category 3 (Comments, Docs & Annotations)
+    # Categories 3, 5, 6 (Comments, Docs, Types, Local Refactoring, Logging & Debug)
     if is_comments_docs_or_annotations_change(old_content, new_content, filepath):
         return True
 
@@ -617,18 +927,19 @@ is_formatting_change = is_trivial_change
 
 def is_file_formatting_only(filepath: str, project_root: str = "") -> bool:
     """
-    Check if a staged file's differences relative to HEAD are strictly formatting,
-    import organization, comments, docs, or type annotations.
+    Check if a staged file's differences relative to HEAD are strictly trivial
+    (formatting, imports, comments, metadata, local refactoring, logging, dependencies).
     """
     cwd = project_root or os.getcwd()
+    if is_metadata_or_non_code_file(filepath) or is_lockfile(filepath):
+        return True
+
     try:
         old_content = subprocess.check_output(
             ["git", "show", f"HEAD:{filepath}"],
             text=True, stderr=subprocess.DEVNULL, cwd=cwd
         )
     except subprocess.CalledProcessError:
-        if is_docs_file(filepath):
-            return True
         return False  # Newly added code file or unborn HEAD
 
     try:
@@ -647,12 +958,30 @@ is_file_trivial_only = is_file_formatting_only
 
 def is_commit_formatting_only(changes: Dict[str, Any], project_root: str = "") -> bool:
     """
-    Check if ALL staged changes across the commit are purely formatting, import
-    organization, comments, docs, or type annotations.
+    Check if ALL staged changes across the commit are purely trivial (Categories 1-7).
     """
     files = (changes or {}).get("files", [])
     if not files:
-        return False
+        # Check if git diff --cached has staged files filtered out by ChangeDetector (e.g. lockfiles)
+        cwd = project_root or os.getcwd()
+        try:
+            diff_names = subprocess.check_output(
+                ["git", "diff", "--cached", "--name-status"],
+                text=True, stderr=subprocess.DEVNULL, cwd=cwd
+            ).strip()
+        except Exception:
+            return False
+        if not diff_names:
+            return False
+        for line in diff_names.split('\n'):
+            if not line:
+                continue
+            parts = line.split('\t')
+            path = parts[-1]
+            if is_metadata_or_non_code_file(path) or is_lockfile(path):
+                continue
+            return False
+        return True
 
     for f in files:
         status = f.get("status")
@@ -663,8 +992,10 @@ def is_commit_formatting_only(changes: Dict[str, Any], project_root: str = "") -
         if status in ("modified", "M"):
             if not is_file_formatting_only(path, project_root):
                 return False
-        elif status in ("added", "A", "untracked") and is_docs_file(path):
-            continue
+        elif status in ("added", "A", "untracked"):
+            if is_metadata_or_non_code_file(path) or is_lockfile(path):
+                continue
+            return False
         else:
             return False
 

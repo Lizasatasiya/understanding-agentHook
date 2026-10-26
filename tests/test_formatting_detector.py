@@ -330,6 +330,199 @@ class TestFormattingDetector(unittest.TestCase):
         new = "function fetchData(id: string): Promise<any> { return api.post(id); }"
         self.assertFalse(is_formatting_change(old, new, "api.ts"))
 
+    # ========================================================================
+    # Category 4: Non-Code & Metadata Files
+    # ========================================================================
+    def test_git_metadata_and_ignore_files(self):
+        old_ignore = "# Ignore node_modules\nnode_modules/\n"
+        new_ignore = "# Ignore node_modules and cache\nnode_modules/\n.cache/\n.eslintcache\n"
+        self.assertTrue(is_formatting_change(old_ignore, new_ignore, ".gitignore"))
+        self.assertTrue(is_formatting_change("*.log\n", "*.log\n.env\n", ".dockerignore"))
+        self.assertTrue(is_formatting_change("dist/\n", "dist/\nbuild/\n", ".eslintignore"))
+        self.assertTrue(is_formatting_change("* text=auto\n", "* text=auto\n*.png binary\n", ".gitattributes"))
+        self.assertTrue(is_formatting_change("John Doe <j@ex.com>\n", "John Doe <j@example.com>\n", ".mailmap"))
+
+    def test_license_and_copyright_headers(self):
+        # Dedicated license file
+        old_lic = "MIT License\nCopyright (c) 2025 Acme Corp\n"
+        new_lic = "MIT License\nCopyright (c) 2026 Acme Corp\n"
+        self.assertTrue(is_formatting_change(old_lic, new_lic, "LICENSE"))
+        self.assertTrue(is_formatting_change(old_lic, new_lic, "NOTICE"))
+
+        # Header copyright year bump in Python source file
+        old_py = "# Copyright (c) 2025 Acme Corp\n# All rights reserved.\n\ndef run():\n    return 42\n"
+        new_py = "# Copyright (c) 2025-2026 Acme Corp\n# All rights reserved.\n\ndef run():\n    return 42\n"
+        self.assertTrue(is_formatting_change(old_py, new_py, "main.py"))
+
+        # Header copyright year bump in JS source file
+        old_js = "// Copyright (c) 2025 Acme Corp\nexport const run = () => 42;\n"
+        new_js = "// Copyright (c) 2026 Acme Corp\nexport const run = () => 42;\n"
+        self.assertTrue(is_formatting_change(old_js, new_js, "main.js"))
+
+    def test_project_documentation_files(self):
+        old_readme = "# Project\n\nWelcome to our library.\n"
+        new_readme = "# Project\n\nWelcome to our awesome library! Check docs below.\n"
+        self.assertTrue(is_formatting_change(old_readme, new_readme, "README.md"))
+        self.assertTrue(is_formatting_change("## v1.0.0\n- Init", "## v1.0.1\n- Bug fix", "CHANGELOG.md"))
+        self.assertTrue(is_formatting_change("# Contributing Guide", "# Contributing Guidelines", "CONTRIBUTING.md"))
+        self.assertTrue(is_formatting_change("Detailed architecture info", "Detailed architecture flow", "docs/architecture.md"))
+
+    # ========================================================================
+    # Category 5: Local Variable & Cosmetic Refactoring (Within Local Scope)
+    # ========================================================================
+    def test_local_variable_renaming_python(self):
+        old = "def process(payload):\n    tmp = sanitize(payload)\n    res = compute(tmp)\n    return res\n"
+        new = "def process(payload):\n    user_payload = sanitize(payload)\n    result = compute(user_payload)\n    return result\n"
+        self.assertTrue(is_formatting_change(old, new, "process.py"))
+
+        # Loop index renaming: i -> idx
+        old_loop = "def iterate(items):\n    for i in range(len(items)):\n        items[i] = items[i] * 2\n"
+        new_loop = "def iterate(items):\n    for idx in range(len(items)):\n        items[idx] = items[idx] * 2\n"
+        self.assertTrue(is_formatting_change(old_loop, new_loop, "iter.py"))
+
+    def test_local_variable_renaming_javascript(self):
+        old = "function calculate(items) {\n  const tmp = items.length;\n  if (tmp > 0) {\n    return tmp * 2;\n  }\n  return 0;\n}"
+        new = "function calculate(items) {\n  const count = items.length;\n  if (count > 0) {\n    return count * 2;\n  }\n  return 0;\n}"
+        self.assertTrue(is_formatting_change(old, new, "calc.js"))
+
+    def test_inlining_and_extracting_return_locals_python(self):
+        # Inlining local return: loc = expr; return loc -> return expr
+        old_extracted = "def get_discount(total):\n    val = total * 0.1\n    return val\n"
+        new_inlined = "def get_discount(total):\n    return total * 0.1\n"
+        self.assertTrue(is_formatting_change(old_extracted, new_inlined, "discount.py"))
+        # Extracting return expression into local
+        self.assertTrue(is_formatting_change(new_inlined, old_extracted, "discount.py"))
+
+    def test_inlining_and_extracting_return_locals_javascript(self):
+        old_extracted = "function sum(a, b) {\n  const res = a + b;\n  return res;\n}"
+        new_inlined = "function sum(a, b) {\n  return a + b;\n}"
+        self.assertTrue(is_formatting_change(old_extracted, new_inlined, "sum.js"))
+        self.assertTrue(is_formatting_change(new_inlined, old_extracted, "sum.js"))
+
+    def test_syntactic_sugar_and_idioms_python(self):
+        # == None -> is None
+        c1 = "def check(x):\n    if x == None:\n        return True\n"
+        c2 = "def check(x):\n    if x is None:\n        return True\n"
+        self.assertTrue(is_formatting_change(c1, c2, "check.py"))
+
+        # != None -> is not None
+        c3 = "def check(x):\n    if x != None:\n        return True\n"
+        c4 = "def check(x):\n    if x is not None:\n        return True\n"
+        self.assertTrue(is_formatting_change(c3, c4, "check.py"))
+
+        # not len(arr) -> not arr
+        c5 = "def check(arr):\n    if not len(arr):\n        return True\n"
+        c6 = "def check(arr):\n    if not arr:\n        return True\n"
+        self.assertTrue(is_formatting_change(c5, c6, "check.py"))
+
+        # len(arr) == 0 -> not arr
+        c7 = "def check(arr):\n    if len(arr) == 0:\n        return True\n"
+        c8 = "def check(arr):\n    if not arr:\n        return True\n"
+        self.assertTrue(is_formatting_change(c7, c8, "check.py"))
+
+    def test_syntactic_sugar_and_idioms_javascript(self):
+        # val === null || val === undefined -> val == null
+        old_null = "function isNil(val) {\n  return val === null || val === undefined;\n}"
+        new_null = "function isNil(val) {\n  return val == null;\n}"
+        self.assertTrue(is_formatting_change(old_null, new_null, "nil.js"))
+
+    def test_negative_parameter_rename_not_trivial(self):
+        # Public parameter rename changes caller interface
+        old = "def compute(x):\n    return x * 2\n"
+        new = "def compute(y):\n    return y * 2\n"
+        self.assertFalse(is_formatting_change(old, new, "calc.py"))
+
+    def test_negative_module_level_var_rename(self):
+        # Top-level variables might be exported or imported elsewhere
+        old = "API_KEY = 'secret'\n"
+        new = "TOKEN = 'secret'\n"
+        self.assertFalse(is_formatting_change(old, new, "constants.py"))
+
+    def test_negative_logic_change_in_inlined_expression(self):
+        old = "def calc(a, b):\n    val = a + b\n    return val\n"
+        new = "def calc(a, b):\n    return a * b\n"
+        self.assertFalse(is_formatting_change(old, new, "calc.py"))
+
+    # ========================================================================
+    # Category 6: Logging, Print & Debug Cleanup
+    # ========================================================================
+    def test_debug_artifact_cleanup_python(self):
+        old = "def compute(x):\n    print('DEBUG: x is', x)\n    breakpoint()\n    return x * 2\n"
+        new = "def compute(x):\n    return x * 2\n"
+        self.assertTrue(is_formatting_change(old, new, "calc.py"))
+
+    def test_debug_artifact_cleanup_javascript(self):
+        old = "function compute(x) {\n  console.log('DEBUG', x);\n  debugger;\n  return x * 2;\n}"
+        new = "function compute(x) {\n  return x * 2;\n}"
+        self.assertTrue(is_formatting_change(old, new, "calc.js"))
+
+    def test_log_message_text_polish_python(self):
+        old = "def login(user):\n    logger.info('user authenication started')\n    return user.id\n"
+        new = "def login(user):\n    logger.info('User authentication started.')\n    return user.id\n"
+        self.assertTrue(is_formatting_change(old, new, "auth.py"))
+
+    def test_log_level_downgrade_python(self):
+        old = "def sync(event):\n    logger.info('Received sync event', event)\n    return True\n"
+        new = "def sync(event):\n    logger.debug('Received sync event', event)\n    return True\n"
+        self.assertTrue(is_formatting_change(old, new, "sync.py"))
+
+    def test_log_level_downgrade_javascript(self):
+        old = "function sync(event) {\n  logger.info('processing event');\n  return true;\n}"
+        new = "function sync(event) {\n  logger.debug('processing event');\n  return true;\n}"
+        self.assertTrue(is_formatting_change(old, new, "sync.js"))
+
+    def test_negative_log_arguments_change_not_trivial(self):
+        old = "def notify(user):\n    logger.info('User login', user.id)\n"
+        new = "def notify(user):\n    logger.info('User login', user.email)\n"
+        self.assertFalse(is_formatting_change(old, new, "notify.py"))
+
+    def test_negative_non_log_string_change(self):
+        old = "def status():\n    return 'pending'\n"
+        new = "def status():\n    return 'completed'\n"
+        self.assertFalse(is_formatting_change(old, new, "status.py"))
+
+    # ========================================================================
+    # Category 7: Dependency & Config Bumps
+    # ========================================================================
+    def test_lockfile_updates_trivial(self):
+        self.assertTrue(is_formatting_change('{"lock": 1}', '{"lock": 2}', "package-lock.json"))
+        self.assertTrue(is_formatting_change('lock = 1', 'lock = 2', "poetry.lock"))
+        self.assertTrue(is_formatting_change('version = 3', 'version = 4', "Cargo.lock"))
+        self.assertTrue(is_formatting_change('lockfile', 'lockfile updated', "yarn.lock"))
+        self.assertTrue(is_formatting_change('lockfile: 5.4', 'lockfile: 5.5', "pnpm-lock.yaml"))
+        self.assertTrue(is_formatting_change('{"_meta": {}}', '{"_meta": {"hash": "abc"}}', "Pipfile.lock"))
+
+    def test_patch_version_bumps(self):
+        # package.json patch bump
+        old_pkg = '{\n  "name": "my-lib",\n  "version": "1.0.2",\n  "dependencies": {}\n}'
+        new_pkg = '{\n  "name": "my-lib",\n  "version": "1.0.3",\n  "dependencies": {}\n}'
+        self.assertTrue(is_formatting_change(old_pkg, new_pkg, "package.json"))
+
+        # pyproject.toml patch bump
+        old_toml = '[project]\nname = "my-pkg"\nversion = "0.4.1"\n'
+        new_toml = '[project]\nname = "my-pkg"\nversion = "0.4.2"\n'
+        self.assertTrue(is_formatting_change(old_toml, new_toml, "pyproject.toml"))
+
+        # Cargo.toml patch bump
+        old_cargo = '[package]\nname = "my-crate"\nversion = "2.1.0"\n'
+        new_cargo = '[package]\nname = "my-crate"\nversion = "2.1.1"\n'
+        self.assertTrue(is_formatting_change(old_cargo, new_cargo, "Cargo.toml"))
+
+    def test_negative_package_json_dependency_change(self):
+        old_pkg = '{\n  "name": "my-lib",\n  "version": "1.0.2",\n  "dependencies": {\n    "express": "^4.17.1"\n  }\n}'
+        new_pkg = '{\n  "name": "my-lib",\n  "version": "1.0.3",\n  "dependencies": {\n    "express": "^4.18.2"\n  }\n}'
+        self.assertFalse(is_formatting_change(old_pkg, new_pkg, "package.json"))
+
+    def test_negative_non_patch_version_bump(self):
+        # Minor bump: 1.0.2 -> 1.1.0
+        old_pkg = '{\n  "name": "my-lib",\n  "version": "1.0.2"\n}'
+        new_pkg = '{\n  "name": "my-lib",\n  "version": "1.1.0"\n}'
+        self.assertFalse(is_formatting_change(old_pkg, new_pkg, "package.json"))
+
+        # Major bump: 1.0.2 -> 2.0.0
+        major_pkg = '{\n  "name": "my-lib",\n  "version": "2.0.0"\n}'
+        self.assertFalse(is_formatting_change(old_pkg, major_pkg, "package.json"))
+
 
 
 class TestGitFormattingIntegration(unittest.TestCase):
@@ -478,6 +671,66 @@ class TestGitFormattingIntegration(unittest.TestCase):
         with open(os.path.join(self.repo, "README.md"), "w") as f:
             f.write(md_fixed)
         subprocess.run(["git", "add", "README.md"], cwd=self.repo, capture_output=True)
+
+        os.chdir(self.repo)
+        changes = ChangeDetector().detect()
+    def test_git_staged_ignore_file_commit_exempt(self):
+        # Adding a cache folder to .gitignore
+        with open(os.path.join(self.repo, ".gitignore"), "w") as f:
+            f.write(".cache/\nnode_modules/\n")
+        subprocess.run(["git", "add", ".gitignore"], cwd=self.repo, capture_output=True)
+
+        os.chdir(self.repo)
+        changes = ChangeDetector().detect()
+        self.assertTrue(is_commit_formatting_only(changes, self.repo))
+
+    def test_git_staged_lockfile_commit_exempt(self):
+        # Adding a lockfile update
+        with open(os.path.join(self.repo, "package-lock.json"), "w") as f:
+            f.write('{\n  "name": "demo",\n  "lockfileVersion": 3\n}\n')
+        subprocess.run(["git", "add", "package-lock.json"], cwd=self.repo, capture_output=True)
+
+        os.chdir(self.repo)
+        changes = ChangeDetector().detect()
+        self.assertTrue(is_commit_formatting_only(changes, self.repo))
+
+    def test_git_staged_patch_version_bump_commit_exempt(self):
+        pkg_init = '{\n  "name": "app",\n  "version": "1.0.2",\n  "dependencies": {}\n}\n'
+        with open(os.path.join(self.repo, "package.json"), "w") as f:
+            f.write(pkg_init)
+        subprocess.run(["git", "add", "package.json"], cwd=self.repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init package"], cwd=self.repo, capture_output=True)
+
+        pkg_bump = '{\n  "name": "app",\n  "version": "1.0.3",\n  "dependencies": {}\n}\n'
+        with open(os.path.join(self.repo, "package.json"), "w") as f:
+            f.write(pkg_bump)
+        subprocess.run(["git", "add", "package.json"], cwd=self.repo, capture_output=True)
+
+        os.chdir(self.repo)
+        changes = ChangeDetector().detect()
+        self.assertTrue(is_commit_formatting_only(changes, self.repo))
+
+    def test_git_staged_local_rename_and_debug_cleanup_commit_exempt(self):
+        py_init = (
+            "def calculate(items):\n"
+            "    print('debug items:', items)\n"
+            "    tmp = len(items)\n"
+            "    return tmp * 2\n"
+        )
+        with open(os.path.join(self.repo, "calc.py"), "w") as f:
+            f.write(py_init)
+        subprocess.run(["git", "add", "calc.py"], cwd=self.repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init calc with debug"], cwd=self.repo, capture_output=True)
+
+        # Remove print and rename local tmp -> count
+        py_clean = (
+            "def calculate(items):\n"
+            "    count = len(items)\n"
+            "    return count * 2\n"
+        )
+        with open(os.path.join(self.repo, "calc.py"), "w") as f:
+            f.write(py_clean)
+        subprocess.run(["git", "add", "calc.py"], cwd=self.repo, capture_output=True)
 
         os.chdir(self.repo)
         changes = ChangeDetector().detect()
