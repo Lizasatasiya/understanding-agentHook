@@ -41,6 +41,57 @@ class TestGuiTerminalDefense(unittest.TestCase):
         with patch.dict(os.environ, {"UNDERSTANDING_AGENT_DELEGATED_TERMINAL": "1"}):
             self.assertEqual(os.environ.get("UNDERSTANDING_AGENT_DELEGATED_TERMINAL"), "1")
 
+    def test_detect_agent_antigravity(self):
+        from understanding_agent.hook_stages import _detect_agent_execution
+        with patch.dict(os.environ, {"ANTIGRAVITY_AGENT": "true"}, clear=True):
+            is_agent, label = _detect_agent_execution()
+            self.assertTrue(is_agent)
+            self.assertIn("Antigravity", label)
+
+    def test_detect_agent_cursor(self):
+        from understanding_agent.hook_stages import _detect_agent_execution
+        with patch.dict(os.environ, {"CURSOR_AGENT": "1"}, clear=True):
+            is_agent, label = _detect_agent_execution()
+            self.assertTrue(is_agent)
+            self.assertIn("Cursor", label)
+
+    def test_detect_agent_claude(self):
+        from understanding_agent.hook_stages import _detect_agent_execution
+        with patch.dict(os.environ, {"CLAUDE_CODE": "1"}, clear=True):
+            is_agent, label = _detect_agent_execution()
+            self.assertTrue(is_agent)
+            self.assertIn("Claude", label)
+
+    def test_detect_agent_cline(self):
+        from understanding_agent.hook_stages import _detect_agent_execution
+        with patch.dict(os.environ, {"CLINE_ACTIVE": "true"}, clear=True):
+            is_agent, label = _detect_agent_execution()
+            self.assertTrue(is_agent)
+            self.assertIn("Cline", label)
+
+    def test_detect_agent_copilot(self):
+        from understanding_agent.hook_stages import _detect_agent_execution
+        with patch.dict(os.environ, {"COPILOT_AGENT": "1"}, clear=True):
+            is_agent, label = _detect_agent_execution()
+            self.assertTrue(is_agent)
+            self.assertIn("Copilot", label)
+
+    def test_detect_agent_explicit_mode(self):
+        from understanding_agent.hook_stages import _detect_agent_execution
+        with patch.dict(os.environ, {"UNDERSTANDING_AGENT_MODE": "agent"}, clear=True):
+            is_agent, label = _detect_agent_execution()
+            self.assertTrue(is_agent)
+            self.assertIn("Autonomous Agent", label)
+
+    def test_detect_agent_clean_env(self):
+        from understanding_agent.hook_stages import _detect_agent_execution
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("os.getppid", return_value=1):
+                is_agent, label = _detect_agent_execution()
+                self.assertFalse(is_agent)
+                self.assertEqual(label, "")
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -102,6 +102,8 @@ from .hook_stages import (
     _print_advisory_findings,
     _print_gate_block,
     _launch_gui_terminal_defense,
+    _detect_agent_execution,
+    _print_agent_block,
 )
 
 def _write_state(state_file: str, attempt_key: str, head_commit, commit_msg,
@@ -123,9 +125,8 @@ def _write_state(state_file: str, attempt_key: str, head_commit, commit_msg,
     except Exception:
         pass
 
-
 def main():
-    agent_mode_early = os.environ.get("UNDERSTANDING_AGENT_MODE", "").strip().lower() == "agent"
+    agent_mode_early = _detect_agent_execution()[0]
     if not agent_mode_early:
         try:
             con = 'CON' if sys.platform == 'win32' else '/dev/tty'
@@ -297,18 +298,13 @@ def main():
     #   - explicit: UNDERSTANDING_AGENT_MODE=agent (preferred, predictable)
     #   - auto: no interactive stdin reachable (no TTY and no /dev/tty)
     # The deterministic gate ABOVE still hard-blocks on live credentials, and
-    # the standards audit still ran — only the interactive parts are skipped.
-    # Zero LLM calls; the session is recorded loudly as unverified so the
-    # central ledger (and the CI proof-of-defense check) can require human
-    # review on top of agent commits.
-    agent_mode = os.environ.get("UNDERSTANDING_AGENT_MODE", "").strip().lower() == "agent"
-    if agent_mode:
-        verification = "agent-unverified"
-        reason = "UNDERSTANDING_AGENT_MODE=agent"
-        print(f"\033[93m⚠ RECORD-ONLY MODE ({verification}): no oral defense performed.\033[0m")
-        print(f"\033[93m  Trigger: {reason}.\033[0m")
-        print(f"\033[93m  The deterministic credential gate and standards audit still ran;\033[0m")
-        print(f"\033[93m  this commit is recorded as UNVERIFIED for the central ledger.\033[0m")
+    # 5e. AI Agent Check: Block autonomous AI agents from committing.
+    # When an AI agent (Antigravity, Cursor, Copilot, Claude, Cline, Aider, etc.)
+    # runs git commit, the commit is hard-blocked: pre-commit requires a human
+    # oral defense to verify comprehension and ownership of the staged code.
+    is_agent, agent_name = _detect_agent_execution()
+    if is_agent:
+        _print_agent_block(agent_name, commit_msg)
         try:
             from .session_store import load_sessions
             _existing = load_sessions(project_root)
@@ -317,7 +313,7 @@ def main():
             )
         except Exception:
             ro_attempt = 1
-        ro_session = build_session_payload(
+        blocked_session = build_session_payload(
             attempt_number=ro_attempt,
             head_commit=head_commit,
             commit_message=commit_msg,
@@ -325,11 +321,11 @@ def main():
             diff_hash=diff_hash,
             repository=env.get("repository", "unknown"),
             branch=env.get("branch", "unknown"),
-            status="PASSED",
+            status="FAILED",
             score=0,
             changed_files=changes.get("files", []),
-            change_summary={"what_changed": "Agent commit; no oral defense performed."},
-            verification=verification,
+            change_summary={"what_changed": f"Blocked: {agent_name} attempted to commit staged code without human oral defense."},
+            verification="agent-blocked",
             standards_report=standards_report,
             violations_count=len(failed_standards),
             questions=[],
@@ -337,11 +333,11 @@ def main():
             evidence=evidence,
         )
         try:
-            save_session(project_root, ro_session)
-            ServerClient().send(ro_session)
+            save_session(project_root, blocked_session)
+            ServerClient().send(blocked_session)
         except Exception:
             pass
-        sys.exit(0)
+        sys.exit(1)
 
     # When committing via GUI (e.g. IDE Source Control button), no TTY is attached.
     # Launch an interactive terminal on macOS to conduct the oral defense.

@@ -144,11 +144,10 @@ kept = {s["session_id"] for s in loaded}
 expect("scene3: most recent sessions kept", "sess_e2e_39" in kept and "sess_e2e_0" not in kept,
        f"kept={sorted(kept)[:3]}...{sorted(kept)[-3:]}")
 
-# ------------------------------------------- scene 4: agent mode records and passes
-# Judas J2: UNDERSTANDING_AGENT_MODE=agent must skip the interactive defense,
-# record the session as agent-unverified, and exit 0 — an agent literally
-# cannot perform an oral defense, so it must be a first-class unverified
-# actor instead of a hard abort.
+# ------------------------------------------- scene 4: agent mode is strictly blocked
+# Autonomous AI agents (Antigravity, Cursor, Copilot, Claude, Cline, etc.) cannot commit
+# staged code without a human performing the oral defense. The hook must trigger and
+# hard-block agent commits (exit 1) and record verification="agent-blocked".
 import json as _json
 hook_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 env4 = dict(os.environ)
@@ -158,16 +157,16 @@ proc = subprocess.run(
     [sys.executable, "-m", "understanding_agent.cli"],
     cwd=tmp, env=env4, capture_output=True, text=True, stdin=subprocess.DEVNULL,
 )
-expect("scene4: agent mode exits 0", proc.returncode == 0,
+expect("scene4: agent mode is blocked (exits 1)", proc.returncode == 1,
        f"rc={proc.returncode} out={proc.stdout[-400:]} err={proc.stderr[-200:]}")
-expect("scene4: agent mode prints the unverified marker",
-       "agent-unverified" in proc.stdout, f"out={proc.stdout[-400:]}")
+expect("scene4: agent mode prints the blocked banner",
+       "COMMIT BLOCKED" in proc.stdout, f"out={proc.stdout[-400:]}")
 expect("scene4: agent mode asks no questions",
        "Question 1/" not in proc.stdout, f"out={proc.stdout[-400:]}")
 sess_path = os.path.join(tmp, ".git", "understanding_sessions.json")
 sessions = load_sessions(tmp)
-agent_rows = [s for s in sessions if s.get("verification") == "agent-unverified"]
-expect("scene4: session recorded as agent-unverified", len(agent_rows) == 1,
+agent_rows = [s for s in sessions if s.get("verification") == "agent-blocked"]
+expect("scene4: session recorded as agent-blocked", len(agent_rows) == 1,
        f"rows={[s.get('verification') for s in sessions]}")
 expect("scene4: local store is SQLite (not plaintext JSON)",
        os.path.exists(os.path.join(tmp, ".git", "understanding_sessions.db")),

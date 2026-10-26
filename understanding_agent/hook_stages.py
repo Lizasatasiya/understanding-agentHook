@@ -90,6 +90,110 @@ def _print_gate_block(critical: list, env: dict, project_root: str) -> None:
 """)
 
 
+def _detect_agent_execution() -> tuple[bool, str]:
+    """Detect if the current commit is being executed by an autonomous AI agent.
+    
+    Identifies agent-driven execution across:
+    - Antigravity IDE (ANTIGRAVITY_AGENT, ANTIGRAVITY_SOURCE_METADATA, process tree)
+    - Cursor Composer / Cursor Agent (CURSOR_AGENT, CURSOR_TRACE_ID, process tree)
+    - Claude Code (CLAUDE_CODE, CLAUDE_CLI, process tree)
+    - Cline / Roo Code / Roo Clinic (CLINE_ACTIVE, ROO_CODE, process tree)
+    - GitHub Copilot Agent / Workspace (COPILOT_AGENT, GITHUB_COPILOT, process tree)
+    - Aider AI and generic agent runtimes
+    - Explicit UNDERSTANDING_AGENT_MODE=agent
+    """
+    import os
+    import sys
+    import subprocess
+
+    # 1. Direct explicit agent mode
+    mode = os.environ.get("UNDERSTANDING_AGENT_MODE", "").strip().lower()
+    if mode == "agent":
+        return True, "Autonomous Agent (UNDERSTANDING_AGENT_MODE=agent)"
+
+    # 2. Environment signatures from known AI coding agents
+    env_signatures = [
+        ("ANTIGRAVITY_AGENT", "Antigravity Agent"),
+        ("ANTIGRAVITY_SOURCE_METADATA", "Antigravity Agent"),
+        ("ANTIGRAVITY_CONVERSATION_ID", "Antigravity Agent"),
+        ("ANTIGRAVITY_TRAJECTORY_ID", "Antigravity Agent"),
+        ("CURSOR_AGENT", "Cursor Agent"),
+        ("CURSOR_TRACE_ID", "Cursor Agent"),
+        ("CURSOR_COMPOSER", "Cursor Composer"),
+        ("CURSOR_EXECUTION_ID", "Cursor Agent"),
+        ("CLAUDE_CODE", "Claude Code"),
+        ("CLAUDE_CLI", "Claude Code"),
+        ("CLAUDE_AGENT", "Claude Code"),
+        ("CLINE_ACTIVE", "Cline Agent"),
+        ("ROO_CODE", "Roo Code Agent"),
+        ("COPILOT_AGENT", "GitHub Copilot Agent"),
+        ("GITHUB_COPILOT", "GitHub Copilot Agent"),
+        ("AIDER", "Aider AI"),
+        ("AI_AGENT", "AI Agent"),
+        ("AGENT_MODE", "AI Agent"),
+        ("AUTONOMOUS_AGENT", "Autonomous Agent"),
+    ]
+    for env_var, label in env_signatures:
+        val = os.environ.get(env_var)
+        if val is not None and val.strip().lower() not in ("0", "false", "no"):
+            return True, label
+
+    # 3. Process ancestor hierarchy inspection (check parent processes)
+    try:
+        curr_pid = os.getppid()
+        agent_keywords = [
+            ("antigravity", "Antigravity Agent"),
+            ("language_server_macos", "Antigravity Agent"),
+            ("cursor-agent", "Cursor Agent"),
+            ("cursor_agent", "Cursor Agent"),
+            ("claude", "Claude Code"),
+            ("cline", "Cline Agent"),
+            ("copilot-agent", "GitHub Copilot Agent"),
+            ("aider", "Aider AI"),
+        ]
+        for _ in range(6):
+            if curr_pid <= 1:
+                break
+            out = subprocess.check_output(
+                ["ps", "-o", "ppid,comm", "-p", str(curr_pid)],
+                text=True, stderr=subprocess.DEVNULL
+            ).strip().splitlines()
+            if len(out) < 2:
+                break
+            parts = out[1].strip().split(None, 1)
+            comm_lower = (parts[1] if len(parts) > 1 else "").lower()
+            for kw, label in agent_keywords:
+                if kw in comm_lower:
+                    return True, label
+            curr_pid = int(parts[0])
+    except Exception:
+        pass
+
+    return False, ""
+
+
+def _print_agent_block(agent_name: str, commit_msg: str) -> None:
+    RED = "\033[91m"
+    BOLD = "\033[1m"
+    YELLOW = "\033[93m"
+    CYAN = "\033[96m"
+    RESET = "\033[0m"
+
+    msg = commit_msg.strip() if commit_msg else "<commit message>"
+    print(f"\n{BOLD}{RED}============================================================{RESET}")
+    print(f"{BOLD}{RED}  ✗ COMMIT BLOCKED: Autonomous AI Agent Commits Prohibited  {RESET}")
+    print(f"{BOLD}{RED}============================================================{RESET}\n")
+    print(f"  {BOLD}Detected Agent:{RESET} {CYAN}{agent_name}{RESET}")
+    print(f"  {YELLOW}The Code Understanding Agent requires a human oral defense to{RESET}")
+    print(f"  {YELLOW}verify comprehension before changes can be committed to git.{RESET}")
+    print(f"  {YELLOW}AI agents are NOT permitted to commit code on behalf of developers.{RESET}\n")
+    print(f"{BOLD}{YELLOW}👉 Action Required:{RESET}")
+    print(f"  A human developer must run the commit directly in their terminal:")
+    print(f"    {BOLD}{CYAN}git commit -m \"{msg}\"{RESET}\n")
+    print(f"{BOLD}{RED}============================================================{RESET}\n")
+
+
+
 def _cleanup_temp_files(paths: list) -> None:
     import os
     for p in paths:
