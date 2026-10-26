@@ -101,6 +101,7 @@ from .hook_stages import (
     _interactive_input_available,
     _print_advisory_findings,
     _print_gate_block,
+    _launch_gui_terminal_defense,
 )
 
 def _write_state(state_file: str, attempt_key: str, head_commit, commit_msg,
@@ -124,15 +125,18 @@ def _write_state(state_file: str, attempt_key: str, head_commit, commit_msg,
 
 
 def main():
-    try:
-        con = 'CON' if sys.platform == 'win32' else '/dev/tty'
-        sys.stdin = open(con, 'r', encoding='utf-8')
-        sys.stdout = open(con, 'w', encoding='utf-8')
-    except Exception:
+    agent_mode_early = os.environ.get("UNDERSTANDING_AGENT_MODE", "").strip().lower() == "agent"
+    if not agent_mode_early:
         try:
-            sys.stdout.reconfigure(encoding='utf-8')
+            con = 'CON' if sys.platform == 'win32' else '/dev/tty'
+            sys.stdin = open(con, 'r', encoding='utf-8')
+            sys.stdout = open(con, 'w', encoding='utf-8')
         except Exception:
             pass
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
     
     # 1. Environment Detection
     env_detector = EnvironmentDetector()
@@ -298,10 +302,9 @@ def main():
     # central ledger (and the CI proof-of-defense check) can require human
     # review on top of agent commits.
     agent_mode = os.environ.get("UNDERSTANDING_AGENT_MODE", "").strip().lower() == "agent"
-    if agent_mode or not _interactive_input_available():
-        verification = "agent-unverified" if agent_mode else "unattended-unverified"
-        reason = ("UNDERSTANDING_AGENT_MODE=agent" if agent_mode
-                  else "no interactive terminal reachable (no TTY, /dev/tty unavailable)")
+    if agent_mode:
+        verification = "agent-unverified"
+        reason = "UNDERSTANDING_AGENT_MODE=agent"
         print(f"\033[93m⚠ RECORD-ONLY MODE ({verification}): no oral defense performed.\033[0m")
         print(f"\033[93m  Trigger: {reason}.\033[0m")
         print(f"\033[93m  The deterministic credential gate and standards audit still ran;\033[0m")
@@ -325,7 +328,7 @@ def main():
             status="PASSED",
             score=0,
             changed_files=changes.get("files", []),
-            change_summary={"what_changed": "Agent/non-interactive commit; no oral defense performed."},
+            change_summary={"what_changed": "Agent commit; no oral defense performed."},
             verification=verification,
             standards_report=standards_report,
             violations_count=len(failed_standards),
@@ -339,6 +342,23 @@ def main():
         except Exception:
             pass
         sys.exit(0)
+
+    # When committing via GUI (e.g. IDE Source Control button), no TTY is attached.
+    # Launch an interactive terminal on macOS to conduct the oral defense.
+    if not _interactive_input_available() and not os.environ.get("UNDERSTANDING_AGENT_DELEGATED_TERMINAL"):
+        if sys.platform == "darwin":
+            launched_ok, exit_code = _launch_gui_terminal_defense(project_root)
+            if launched_ok:
+                sys.exit(exit_code)
+
+        RED = "\033[91m"
+        BOLD = "\033[1m"
+        RESET = "\033[0m"
+        print(f"\n{BOLD}{RED}✗ Interactive oral defense required:{RESET}")
+        print(f"  Cannot conduct code understanding defense from GUI without an interactive terminal.")
+        print(f"  Please run your commit from the integrated terminal:")
+        print(f"    {BOLD}git commit{RESET}\n")
+        sys.exit(1)
 
     if failed_standards:
         YELLOW = "\033[93m"
