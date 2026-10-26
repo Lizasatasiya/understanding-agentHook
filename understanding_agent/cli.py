@@ -104,6 +104,9 @@ from .hook_stages import (
     _launch_gui_terminal_defense,
     _detect_agent_execution,
     _print_agent_block,
+    is_already_verified_for_commit,
+    mark_verified_for_commit,
+    clear_verified_for_commit,
 )
 
 def _write_state(state_file: str, attempt_key: str, head_commit, commit_msg,
@@ -166,6 +169,11 @@ def main():
     commit_msg = get_current_commit_message(project_root)
     diff_hash = hashlib.sha256(json.dumps(changes, sort_keys=True).encode()).hexdigest()
     attempt_key = compute_attempt_key(head_commit, diff_hash, commit_msg)
+
+    # Check if pre-commit already verified and defended this exact staged change
+    if is_already_verified_for_commit(project_root, head_commit, diff_hash):
+        clear_verified_for_commit(project_root)
+        sys.exit(0)
         
     # 3. Stack Detection (languages, frameworks, domains — keys all downstream hints)
     stack = StackDetector().detect(project_root)
@@ -288,6 +296,7 @@ def main():
             ServerClient().send(fmt_session)
         except Exception:
             pass
+        mark_verified_for_commit(project_root, head_commit, diff_hash)
         sys.exit(0)
 
     # 5e. Judas J2 — agent / non-interactive record-only mode.
@@ -345,6 +354,8 @@ def main():
         if sys.platform == "darwin":
             launched_ok, exit_code = _launch_gui_terminal_defense(project_root)
             if launched_ok:
+                if exit_code == 0:
+                    mark_verified_for_commit(project_root, head_commit, diff_hash)
                 sys.exit(exit_code)
 
         RED = "\033[91m"
@@ -906,6 +917,7 @@ def main():
             # Cleanup state on success
             if os.path.exists(state_file):
                 os.remove(state_file)
+            mark_verified_for_commit(project_root, head_commit, diff_hash)
             sys.exit(0)
 
 if __name__ == "__main__":

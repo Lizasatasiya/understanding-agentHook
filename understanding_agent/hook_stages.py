@@ -320,3 +320,57 @@ exit $EXIT_CODE
     _cleanup_temp_files([runner_path, pid_file, status_file])
     return True, exit_code
 
+
+def is_already_verified_for_commit(project_root: str, head_commit: str, diff_hash: str) -> bool:
+    """Check if the current staged diff was already defended and passed in pre-commit.
+    
+    Prevents prepare-commit-msg from asking questions again when a normal (verified)
+    commit is in progress. Returns False if pre-commit was skipped (e.g. via --no-verify).
+    """
+    import os
+    import json
+    import time
+
+    state_file = os.path.join(project_root, ".git", "understanding_agent_verified.json")
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, "r") as f:
+                data = json.load(f)
+                if (data.get("head_commit") == head_commit and
+                    data.get("diff_hash") == diff_hash and
+                    time.time() - data.get("timestamp", 0) < 120):
+                    return True
+        except Exception:
+            pass
+    return False
+
+
+def mark_verified_for_commit(project_root: str, head_commit: str, diff_hash: str) -> None:
+    """Mark the current staged diff as verified in pre-commit."""
+    import os
+    import json
+    import time
+
+    state_file = os.path.join(project_root, ".git", "understanding_agent_verified.json")
+    try:
+        with open(state_file, "w") as f:
+            json.dump({
+                "head_commit": head_commit,
+                "diff_hash": diff_hash,
+                "timestamp": time.time(),
+            }, f)
+    except Exception:
+        pass
+
+
+def clear_verified_for_commit(project_root: str) -> None:
+    """Clean up verified diff state after a commit is finalized."""
+    import os
+    state_file = os.path.join(project_root, ".git", "understanding_agent_verified.json")
+    try:
+        if os.path.exists(state_file):
+            os.remove(state_file)
+    except Exception:
+        pass
+
+

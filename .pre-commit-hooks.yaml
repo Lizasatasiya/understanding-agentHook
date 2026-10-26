@@ -4,6 +4,7 @@
     entry: understanding-agent
     language: python
     pass_filenames: false
+    stages: [pre-commit, prepare-commit-msg]
 
 -   id: understanding-agentHook
     name: Code Understanding Check (alias)
@@ -11,6 +12,7 @@
     entry: understanding-agent
     language: python
     pass_filenames: false
+    stages: [pre-commit, prepare-commit-msg]
 
 -   id: understanding-agent-push-guard
     name: Understanding Install Guard (pre-push)
