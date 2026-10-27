@@ -90,67 +90,72 @@ def _print_gate_block(critical: list, env: dict, project_root: str) -> None:
 """)
 
 
-def _detect_agent_execution() -> tuple[bool, str]:
-    """Detect if the current commit is being executed by an autonomous AI agent.
-    
-    Identifies agent-driven execution across:
-    - Antigravity IDE (ANTIGRAVITY_AGENT, ANTIGRAVITY_SOURCE_METADATA, process tree)
-    - Cursor Composer / Cursor Agent (CURSOR_AGENT, CURSOR_TRACE_ID, process tree)
-    - Claude Code (CLAUDE_CODE, CLAUDE_CLI, process tree)
-    - Cline / Roo Code / Roo Clinic (CLINE_ACTIVE, ROO_CODE, process tree)
-    - GitHub Copilot Agent / Workspace (COPILOT_AGENT, GITHUB_COPILOT, process tree)
-    - Aider AI and generic agent runtimes
-    - Explicit UNDERSTANDING_AGENT_MODE=agent
-    """
-    import os
-    import sys
-    import subprocess
+_AGENT_ENV_SIGNATURES = (
+    ("ANTIGRAVITY_AGENT", "Antigravity Agent"),
+    ("ANTIGRAVITY_SOURCE_METADATA", "Antigravity Agent"),
+    ("ANTIGRAVITY_CONVERSATION_ID", "Antigravity Agent"),
+    ("ANTIGRAVITY_TRAJECTORY_ID", "Antigravity Agent"),
+    ("CURSOR_AGENT", "Cursor Agent"),
+    ("CURSOR_TRACE_ID", "Cursor Agent"),
+    ("CURSOR_COMPOSER", "Cursor Composer"),
+    ("CURSOR_EXECUTION_ID", "Cursor Agent"),
+    ("CLAUDE_CODE", "Claude Code"),
+    ("CLAUDE_CLI", "Claude Code"),
+    ("CLAUDE_AGENT", "Claude Code"),
+    ("CLINE_ACTIVE", "Cline Agent"),
+    ("ROO_CODE", "Roo Code Agent"),
+    ("COPILOT_AGENT", "GitHub Copilot Agent"),
+    ("GITHUB_COPILOT", "GitHub Copilot Agent"),
+    ("AIDER", "Aider AI"),
+    ("AI_AGENT", "AI Agent"),
+    ("AGENT_MODE", "AI Agent"),
+    ("AUTONOMOUS_AGENT", "Autonomous Agent"),
+)
 
-    # 1. Direct explicit agent mode
+_AGENT_PROCESS_KEYWORDS = (
+    ("language_server_macos", "Antigravity Agent"),
+    ("antigravity-agent", "Antigravity Agent"),
+    ("antigravity_agent", "Antigravity Agent"),
+    ("cursor-agent", "Cursor Agent"),
+    ("cursor_agent", "Cursor Agent"),
+    ("claude", "Claude Code"),
+    ("cline", "Cline Agent"),
+    ("copilot-agent", "GitHub Copilot Agent"),
+    ("aider", "Aider AI"),
+)
+
+
+def _check_agent_env() -> tuple[bool, str]:
+    """Check explicit environment variables for agent runtime signatures."""
+    import os
+
     mode = os.environ.get("UNDERSTANDING_AGENT_MODE", "").strip().lower()
     if mode == "agent":
         return True, "Autonomous Agent (UNDERSTANDING_AGENT_MODE=agent)"
 
-    # 2. Environment signatures from known AI coding agents
-    env_signatures = [
-        ("ANTIGRAVITY_AGENT", "Antigravity Agent"),
-        ("ANTIGRAVITY_SOURCE_METADATA", "Antigravity Agent"),
-        ("ANTIGRAVITY_CONVERSATION_ID", "Antigravity Agent"),
-        ("ANTIGRAVITY_TRAJECTORY_ID", "Antigravity Agent"),
-        ("CURSOR_AGENT", "Cursor Agent"),
-        ("CURSOR_TRACE_ID", "Cursor Agent"),
-        ("CURSOR_COMPOSER", "Cursor Composer"),
-        ("CURSOR_EXECUTION_ID", "Cursor Agent"),
-        ("CLAUDE_CODE", "Claude Code"),
-        ("CLAUDE_CLI", "Claude Code"),
-        ("CLAUDE_AGENT", "Claude Code"),
-        ("CLINE_ACTIVE", "Cline Agent"),
-        ("ROO_CODE", "Roo Code Agent"),
-        ("COPILOT_AGENT", "GitHub Copilot Agent"),
-        ("GITHUB_COPILOT", "GitHub Copilot Agent"),
-        ("AIDER", "Aider AI"),
-        ("AI_AGENT", "AI Agent"),
-        ("AGENT_MODE", "AI Agent"),
-        ("AUTONOMOUS_AGENT", "Autonomous Agent"),
-    ]
-    for env_var, label in env_signatures:
+    for env_var, label in _AGENT_ENV_SIGNATURES:
         val = os.environ.get(env_var)
         if val is not None and val.strip().lower() not in ("0", "false", "no"):
             return True, label
 
-    # 3. Process ancestor hierarchy inspection (check parent processes)
+    return False, ""
+
+
+def _match_agent_keyword(comm: str) -> tuple[bool, str]:
+    """Match a process command path against known agent keywords."""
+    for kw, label in _AGENT_PROCESS_KEYWORDS:
+        if kw in comm:
+            return True, label
+    return False, ""
+
+
+def _check_agent_process() -> tuple[bool, str]:
+    """Inspect ancestor process hierarchy up to 6 levels for agent processes."""
+    import os
+    import subprocess
+
     try:
         curr_pid = os.getppid()
-        agent_keywords = [
-            ("antigravity", "Antigravity Agent"),
-            ("language_server_macos", "Antigravity Agent"),
-            ("cursor-agent", "Cursor Agent"),
-            ("cursor_agent", "Cursor Agent"),
-            ("claude", "Claude Code"),
-            ("cline", "Cline Agent"),
-            ("copilot-agent", "GitHub Copilot Agent"),
-            ("aider", "Aider AI"),
-        ]
         for _ in range(6):
             if curr_pid <= 1:
                 break
@@ -160,16 +165,39 @@ def _detect_agent_execution() -> tuple[bool, str]:
             ).strip().splitlines()
             if len(out) < 2:
                 break
+
             parts = out[1].strip().split(None, 1)
             comm_lower = (parts[1] if len(parts) > 1 else "").lower()
-            for kw, label in agent_keywords:
-                if kw in comm_lower:
-                    return True, label
+
+            # Skip IDE GUI editor and terminal helper processes
+            if "electron" in comm_lower or "helper" in comm_lower:
+                curr_pid = int(parts[0])
+                continue
+
+            matched, label = _match_agent_keyword(comm_lower)
+            if matched:
+                return True, label
+
             curr_pid = int(parts[0])
     except Exception:
         pass
 
     return False, ""
+
+
+def _detect_agent_execution() -> tuple[bool, str]:
+    """Detect if the current commit is being executed by an autonomous AI agent."""
+    import os
+
+    # Delegated interactive terminal launched for human defense is exempt
+    if os.environ.get("UNDERSTANDING_AGENT_DELEGATED_TERMINAL") == "1":
+        return False, ""
+
+    is_agent, label = _check_agent_env()
+    if is_agent:
+        return True, label
+
+    return _check_agent_process()
 
 
 def _detect_no_verify(project_root: str = None, head_commit: str = None, diff_hash: str = None) -> bool:
@@ -300,18 +328,34 @@ def _cleanup_temp_files(paths: list) -> None:
             pass
 
 
-def _launch_gui_terminal_defense(project_root: str) -> tuple[bool, int]:
-    """Launch an interactive macOS Terminal window to conduct the oral defense when committed via GUI."""
-    if sys.platform != "darwin":
-        return False, 1
-
+def _read_int_file(path: str):
+    """Read an integer from file, returning None on error or missing."""
     import os
-    import shutil
-    import tempfile
-    import time
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r") as f:
+            raw = f.read().strip()
+            return int(raw) if raw else None
+    except Exception:
+        return None
 
-    if not shutil.which("osascript"):
-        return False, 1
+
+def _is_pid_alive(pid: int) -> bool:
+    """Check if process is still running."""
+    import os
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _write_gui_defense_runner(project_root: str) -> tuple[str, str, str]:
+    """Create the executable bash runner script for delegated terminal defense."""
+    import os
+    import sys
+    import tempfile
 
     hook_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     python_bin = sys.executable
@@ -325,6 +369,10 @@ def _launch_gui_terminal_defense(project_root: str) -> tuple[bool, int]:
 echo $$ > "{pid_file}"
 cd "{project_root}"
 export PYTHONPATH="{hook_dir}:$PYTHONPATH"
+unset ANTIGRAVITY_AGENT
+unset ANTIGRAVITY_SOURCE_METADATA
+unset ANTIGRAVITY_CONVERSATION_ID
+unset ANTIGRAVITY_TRAJECTORY_ID
 export UNDERSTANDING_AGENT_DELEGATED_TERMINAL=1
 
 echo ""
@@ -352,6 +400,49 @@ exit $EXIT_CODE
 """)
 
     os.chmod(runner_path, 0o755)
+    return runner_path, pid_file, status_file
+
+
+def _poll_gui_defense_result(pid_file: str, status_file: str, timeout: int = 600) -> int:
+    """Wait for runner script to finish and return exit code."""
+    import time
+
+    start_time = time.time()
+    pid = None
+
+    while time.time() - start_time < 5:
+        pid = _read_int_file(pid_file)
+        if pid is not None:
+            break
+        time.sleep(0.2)
+
+    while time.time() - start_time < timeout:
+        code = _read_int_file(status_file)
+        if code is not None:
+            return code
+
+        if pid is not None and not _is_pid_alive(pid):
+            time.sleep(0.5)
+            final_code = _read_int_file(status_file)
+            return final_code if final_code is not None else 1
+
+        time.sleep(0.3)
+
+    return 1
+
+
+def _launch_gui_terminal_defense(project_root: str) -> tuple[bool, int]:
+    """Launch an interactive macOS Terminal window to conduct the oral defense when committed via GUI."""
+    if sys.platform != "darwin":
+        return False, 1
+
+    import shutil
+    import subprocess
+
+    if not shutil.which("osascript"):
+        return False, 1
+
+    runner_path, pid_file, status_file = _write_gui_defense_runner(project_root)
 
     apple_script = f'''
     tell application "Terminal"
@@ -368,51 +459,7 @@ exit $EXIT_CODE
         _cleanup_temp_files([runner_path, pid_file, status_file])
         return False, 1
 
-    pid = None
-    start_time = time.time()
-    # Wait up to 5s for runner to start and write pid
-    while time.time() - start_time < 5:
-        if os.path.exists(pid_file):
-            try:
-                with open(pid_file, "r") as pf:
-                    raw = pf.read().strip()
-                    if raw:
-                        pid = int(raw)
-                        break
-            except Exception:
-                pass
-        time.sleep(0.2)
-
-    # Poll status or process exit for up to 10 minutes
-    exit_code = 1
-    while time.time() - start_time < 600:
-        if os.path.exists(status_file):
-            try:
-                with open(status_file, "r") as sf:
-                    raw = sf.read().strip()
-                    if raw:
-                        exit_code = int(raw)
-                        break
-            except Exception:
-                pass
-
-        if pid is not None:
-            try:
-                os.kill(pid, 0)
-            except OSError:
-                time.sleep(0.5)
-                if os.path.exists(status_file):
-                    try:
-                        with open(status_file, "r") as sf:
-                            raw = sf.read().strip()
-                            if raw:
-                                exit_code = int(raw)
-                    except Exception:
-                        pass
-                break
-
-        time.sleep(0.3)
-
+    exit_code = _poll_gui_defense_result(pid_file, status_file)
     _cleanup_temp_files([runner_path, pid_file, status_file])
     return True, exit_code
 
