@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# ==============================================================================
+ 
 # 🧠 Understanding Agent — 1-Command Global Installer
-# ==============================================================================
+ 
 # Installs the Code Understanding Agent globally across all Git repositories
 # on this device with zero repository cloning needed on developer machines.
 #
@@ -14,7 +14,7 @@
 #   --base-url <URL>      Custom central relay endpoint (no API key on client)
 #   --uninstall           Remove global hooks and restore standard git behavior
 #   --status              Check current installation and hook health
-# ==============================================================================
+ 
 
 set -e
 
@@ -62,9 +62,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# ------------------------------------------------------------------------------
 # STATUS CHECK
-# ------------------------------------------------------------------------------
 if [ "$DO_STATUS" = true ]; then
     say "Understanding Agent Status"
     CURRENT_HOOKS="$(git config --global --get core.hooksPath 2>/dev/null || true)"
@@ -90,9 +88,7 @@ if [ "$DO_STATUS" = true ]; then
     exit 0
 fi
 
-# ------------------------------------------------------------------------------
 # UNINSTALL
-# ------------------------------------------------------------------------------
 if [ "$DO_UNINSTALL" = true ]; then
     say "Uninstalling Understanding Agent Global Hooks..."
     CURRENT_HOOKS="$(git config --global --get core.hooksPath 2>/dev/null || true)"
@@ -106,9 +102,9 @@ if [ "$DO_UNINSTALL" = true ]; then
     exit 0
 fi
 
-# ==============================================================================
+ 
 # INSTALLATION
-# ==============================================================================
+ 
 printf "\n${BOLD}${CYAN}🧠 Code Understanding Agent — Global Setup${RESET}\n"
 printf "${DIM}Protecting all Git repositories on this machine with oral defense.${RESET}\n\n"
 

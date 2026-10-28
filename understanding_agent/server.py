@@ -627,9 +627,39 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
 
 def run():
     """CLI runner for understanding-agent-ui."""
+    import argparse
     import uvicorn
-    app = create_app()
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+
+    parser = argparse.ArgumentParser(description="Understanding Agent Dashboard UI Server")
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("UNDERSTANDING_AGENT_UI_HOST", "127.0.0.1"),
+        help="Host address to bind (default: 127.0.0.1; use 0.0.0.0 for LAN/remote access)"
+    )
+    parser.add_argument(
+        "--port",
+        "-p",
+        type=int,
+        default=int(os.environ.get("UNDERSTANDING_AGENT_UI_PORT", "8000")),
+        help="Port to bind (default: 8000)"
+    )
+    parser.add_argument(
+        "--repo-root",
+        "-r",
+        default=os.environ.get("UNDERSTANDING_AGENT_REPO_ROOT"),
+        help="Path to repository root (defaults to auto-detecting current git repo)"
+    )
+    parser.add_argument(
+        "--reload",
+        action="store_true",
+        help="Enable auto-reload on code changes"
+    )
+
+    args = parser.parse_args()
+
+    repo_root = os.path.abspath(args.repo_root) if args.repo_root else None
+    app = create_app(repo_root=repo_root)
+    uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
 
 
 if __name__ == "__main__":
