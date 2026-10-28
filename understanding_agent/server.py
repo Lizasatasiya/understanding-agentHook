@@ -338,10 +338,7 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
     # UI Web Routes
     # -------------------------------------------------------------------------
 
-    @app.get("/", include_in_schema=False)
-    def root():
-        return RedirectResponse(url="/ui")
-
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     @app.get("/ui", response_class=HTMLResponse)
     def serve_ui():
         index_file = os.path.join(ui_dir, "index.html")
@@ -355,6 +352,10 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
                 }
             )
         return HTMLResponse("<h2>UI index.html not found</h2>", status_code=404)
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon():
+        return HTMLResponse("", status_code=204)
 
     # -------------------------------------------------------------------------
     # API Routes
@@ -659,6 +660,11 @@ def run():
 
     repo_root = os.path.abspath(args.repo_root) if args.repo_root else None
     app = create_app(repo_root=repo_root)
+    if args.host == "0.0.0.0":
+        print(f"\n[Dashboard UI] Listening on all network interfaces (0.0.0.0:{args.port})")
+        print(f"👉 Local:   http://localhost:{args.port}")
+        print(f"👉 Network: http://<LAN_IP>:{args.port} (use your device's Wi-Fi/LAN IP)")
+        print(f"⚠  Note: Browsers block '0.0.0.0' for security; always open localhost or your LAN IP.\n")
     uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
 
 
