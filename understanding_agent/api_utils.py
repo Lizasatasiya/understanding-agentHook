@@ -360,8 +360,6 @@ def _format_anthropic_payload(payload_dict: dict) -> dict:
         "model": payload_dict.get("model") or "",
         "max_tokens": payload_dict.get("max_tokens", 1024),
     }
-    if "temperature" in payload_dict:
-        anthropic_payload["temperature"] = payload_dict["temperature"]
 
     raw_messages = payload_dict.get("messages", [])
     system_parts = []
