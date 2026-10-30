@@ -214,7 +214,7 @@ class TestJudgeModel(unittest.TestCase):
             "UNDERSTANDING_AGENT_JUDGE_MODEL": "test-judge-1",
             "UNDERSTANDING_AGENT_IGNORE_DOTENV": "1",
         }):
-            self.assertEqual(get_judge_model(), "claude-3-5-haiku-20241022")
+            self.assertEqual(get_judge_model(), "claude-haiku-5-5")
 
     def test_judge_model_defaults_to_normal_model(self):
         with patch.dict(os.environ, {}, clear=False):

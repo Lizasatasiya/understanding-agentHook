@@ -231,13 +231,13 @@ class TestFollowUpGenerator(unittest.TestCase):
     def test_offline_fallback_question(self):
         from understanding_agent.followup_generator import FollowUpGenerator
         gen = FollowUpGenerator()
-        result = gen.generate(
-            {"question": "What happens on failure?"},
-            {"answer": "it retries"},
-            {"missing_concepts": ["max retry attempts"]}
-        )
-        self.assertTrue(len(result) > 0)
-        self.assertIsInstance(result, str)
+        with patch("understanding_agent.followup_generator.load_nous_api_key", return_value=""):
+            result = gen.generate(
+                {"question": "What happens on failure?"},
+                {"answer": "it retries"},
+                {"missing_concepts": ["max retry attempts"]}
+            )
+        self.assertEqual(result, "")
 
 
 if __name__ == "__main__":

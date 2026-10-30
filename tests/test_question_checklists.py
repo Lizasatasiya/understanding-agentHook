@@ -20,25 +20,11 @@ class TestGeneratorChecklists(unittest.TestCase):
             "evidence": {"evidence_findings": []},
         }
 
-    def test_fallback_questions_carry_valid_checklists(self):
+    def test_missing_key_asks_no_questions(self):
         with patch("understanding_agent.question_generator.load_nous_api_key",
                    return_value=""):
             qs = self.gen.generate(self.context, {}, hints=self.hints)
-        self.assertGreaterEqual(len(qs), 2)
-        for q in qs:
-            cl = parse_checklist(q.get("checklist"))
-            self.assertIsNotNone(cl, f"question missing valid checklist: {q.get('question')}")
-            self.assertTrue(2 <= len(cl.items) <= 4)
-
-    def test_security_fallback_checklist_grounded_in_focus_areas(self):
-        with patch("understanding_agent.question_generator.load_nous_api_key",
-                   return_value=""):
-            qs = self.gen.generate(self.context, {}, hints=self.hints)
-        sec_q = qs[0]
-        cl = parse_checklist(sec_q["checklist"])
-        kp_text = " ".join(cl.key_points()).lower()
-        self.assertIn("sql", kp_text)
-        self.assertIn("injection", kp_text)
+        self.assertEqual(qs, [])
 
     def test_llm_checklist_kept_when_valid(self):
         llm_q = {

@@ -20,7 +20,7 @@ SUPPORTED_MODELS = {
     },
     "sonnet": {
         "provider": "anthropic",
-        "model": "claude-3-5-sonnet-20241022",
+        "model": "claude-sonnet-5-5",
         "base_url": "https://api.anthropic.com/v1",
     },
     "haiku": {

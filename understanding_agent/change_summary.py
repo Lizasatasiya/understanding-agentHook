@@ -1,6 +1,6 @@
 import os
 import json
-from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model
+from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, log_llm_error
 
 
 class ChangeSummary:
@@ -15,6 +15,10 @@ class ChangeSummary:
         # For multi-component or large changes, perform a single unified summary call
         if is_large or len(changes) > 1:
             if not api_key:
+                log_llm_error(
+                    "No API key configured. Set UNDERSTANDING_AGENT_API_KEY. "
+                    "The change summary was not written by the model."
+                )
                 summary = self._unified_fallback(context)
             else:
                 prompt = self._build_unified_prompt(context)
@@ -31,6 +35,10 @@ class ChangeSummary:
         # Single small change
         f = changes[0]
         if not api_key:
+            log_llm_error(
+                "No API key configured. Set UNDERSTANDING_AGENT_API_KEY. "
+                "The change summary was not written by the model."
+            )
             single_sum = self._fallback(f)
         else:
             prompt = self._build_prompt_for_single(f)
@@ -109,8 +117,11 @@ class ChangeSummary:
             parsed = extract_json(text)
             if isinstance(parsed, dict) and "what_changed" in parsed:
                 return parsed
+            if text:
+                log_llm_error("Change summary failed: the model reply was not a summary object.")
             return {}
-        except Exception:
+        except Exception as exc:
+            log_llm_error(f"Change summary failed: could not read the model reply ({exc}).")
             return {}
 
     def _call_groq(self, api_key: str, prompt: str, max_tokens: int = 300) -> dict:

@@ -424,44 +424,10 @@ class TestQuestionGeneratorHints(unittest.TestCase):
         self.assertIn("parameterized", prompt)
         self.assertIn("parameterized queries", prompt)
 
-    def test_fallback_security_aware(self):
-        gen = QuestionGenerator()
-        hints = {
-            "security": {
-                "include_security_question": True,
-                "focus_areas": ["sql-injection-risk", "input-boundary"],
-                "ask_about": ["whether the query is parameterized"],
-                "top_file": "db.py",
-            },
-            "evidence": {"evidence_findings": []},
-        }
-        qs = gen._fallback({}, hints)
-        self.assertEqual(len(qs), 2)
-        self.assertIn("sql-injection-risk", qs[0]["question"])
-        self.assertTrue(qs[0]["is_fallback"])
-
-    def test_fallback_with_evidence(self):
-        gen = QuestionGenerator()
-        hints = {
-            "security": {
-                "include_security_question": True,
-                "focus_areas": ["xss-risk"],
-                "ask_about": ["what sanitization happens"],
-                "top_file": "ui.tsx",
-            },
-            "evidence": {"evidence_findings": [
-                {"source": "semgrep", "detail": "xss at ui.tsx:10", "message": "dangerous HTML"}
-            ]},
-        }
-        qs = gen._fallback({}, hints)
-        self.assertIn("xss at ui.tsx:10", qs[1]["question"])
-
     def test_no_hints_backward_compatible(self):
         gen = QuestionGenerator()
         prompt = gen._build_prompt({"structured_changes": [], "is_large_change": False}, {}, None)
         self.assertIn("Changed Functions", prompt)
-        qs = gen._fallback({})
-        self.assertGreaterEqual(len(qs), 2)
 
 
 if __name__ == "__main__":

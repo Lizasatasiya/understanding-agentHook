@@ -80,8 +80,15 @@ class TestLargeChangesPipeline(unittest.TestCase):
         }
         summary = {"what_changed": "Refactored checkout", "impact": "Faster checkout", "key_risks": "Edge case on empty"}
         
-        # Fallback questions when GROQ_API_KEY is not set or offline
-        questions = q_gen.generate(context, summary)
+        from unittest.mock import patch
+        model_questions = [
+            {"question": f"What does checkout change {i} do?", "type": "System Architecture",
+             "expected_concepts": ["checkout"], "evaluation_criteria": ["impact"]}
+            for i in range(9)
+        ]
+        with patch("understanding_agent.question_generator.load_nous_api_key", return_value="k"), \
+             patch.object(QuestionGenerator, "_call_groq", return_value=model_questions):
+            questions = q_gen.generate(context, summary)
         self.assertGreater(len(questions), 5)
         self.assertLess(len(questions), 10)
         for q in questions:

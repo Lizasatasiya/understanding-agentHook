@@ -70,8 +70,8 @@ class TestThinkingControl(unittest.TestCase):
                  "UNDERSTANDING_AGENT_IGNORE_DOTENV": "1",
              }), \
              redirect_stdout(buf):
-            call_nous_api("k", {"model": "claude-3-5-haiku-20241022"})
-        self.assertIn("[LLM] model=claude-3-5-haiku-20241022 -> https://api.anthropic.com/v1", buf.getvalue())
+            call_nous_api("k", {"model": "claude-haiku-5-5"})
+        self.assertIn("[LLM] model=claude-haiku-5-5 -> https://api.anthropic.com/v1/messages", buf.getvalue())
 
 
 class TestEmptyContentRetry(unittest.TestCase):

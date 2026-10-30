@@ -85,7 +85,7 @@ from .coding_standards import CodingStandardsChecker
 from .session_store import save_session
 from .session_payload import build_session_payload
 from .formatting_detector import is_commit_formatting_only
-from .api_utils import load_nous_api_key
+from .api_utils import fail_open_enabled, log_llm_error
 from .commit_context import (
     get_head_commit,
     get_current_commit_message,
@@ -583,26 +583,6 @@ def main():
             else:
                 q["answered"] = False
                 q["passed"] = False
-                # Modernize any legacy or robotic cached standards questions
-                raw_q = q.get("question", "")
-                if "coding audit flagged" in raw_q.lower() or "(changed)" in raw_q:
-                    q_gen = QuestionGenerator()
-                    name_m = re.search(r"flagged '([^']+)'", raw_q)
-                    rule_name = name_m.group(1) if name_m else "Nesting Depth"
-                    matching_fs = None
-                    for fs in failed_standards:
-                        if rule_name in fs.get("name", ""):
-                            matching_fs = fs
-                            break
-                    if not matching_fs:
-                        matching_fs = {"name": rule_name, "details": raw_q}
-                    modern_q = q_gen._build_proper_standard_question(matching_fs, context)
-                    q["question"] = modern_q["question"]
-                    q["type"] = modern_q["type"]
-                    q["time_limit"] = modern_q["time_limit"]
-                    q["expected_concepts"] = modern_q["expected_concepts"]
-                    q["evaluation_criteria"] = modern_q["evaluation_criteria"]
-                    q["is_standards_violation"] = True
     else:
         # Generate fresh questions for new diff
         question_generator = QuestionGenerator()
@@ -626,9 +606,17 @@ def main():
             q["answered"] = False
             q["best_score"] = 0
 
+    hardcoded = [q for q in valid_questions if q.get("is_fallback")]
+    if hardcoded:
+        log_llm_error(
+            f"Skipped {len(hardcoded)} hardcoded question(s). "
+            "Only questions written by the model are asked."
+        )
+    valid_questions = [q for q in valid_questions if not q.get("is_fallback")]
+
     # An attempt is LLM-verified only when questions were LLM-generated AND
     # every evaluation came from the LLM (not the offline fallback).
-    questions_llm_generated = not all(q.get("is_fallback", False) for q in valid_questions) if valid_questions else True
+    questions_llm_generated = bool(valid_questions)
 
     interaction = Interaction()
     evaluator = AnswerEvaluator()
@@ -641,6 +629,46 @@ def main():
     RED = "\033[91m"
     BOLD = "\033[1m"
     RESET = "\033[0m"
+
+    if not valid_questions:
+        if fail_open_enabled():
+            print(f"\n{YELLOW}No questions were asked because the model did not return any.{RESET}")
+            print(f"{YELLOW}Commit allowed. This attempt is recorded as not checked by the model.{RESET}\n")
+            attempt_status = "PASSED"
+            exit_code = 0
+        else:
+            print(f"\n{RED}No questions were asked because the model did not return any.{RESET}")
+            print(f"{RED}Commit aborted (UNDERSTANDING_AGENT_FAIL_MODE=closed).{RESET}\n")
+            attempt_status = "FAILED"
+            exit_code = 1
+        try:
+            session_data = build_session_payload(
+                attempt_number=attempts,
+                head_commit=head_commit,
+                commit_message=commit_msg,
+                attempt_key=attempt_key,
+                diff_hash=diff_hash,
+                repository=env.get("repository", "unknown"),
+                branch=env.get("branch", "unknown"),
+                status=attempt_status,
+                verification="llm-unverified",
+                score=0,
+                changed_files=changes.get("files", []),
+                change_summary=summary,
+                standards_report=standards_report,
+                violations_count=len(failed_standards),
+                questions=[],
+                analysis=analysis,
+                identity=identity,
+                evidence=evidence,
+            )
+            save_session(project_root, session_data)
+            ServerClient().send(session_data)
+        except Exception:
+            pass
+        if exit_code == 0:
+            mark_verified_for_commit(project_root, head_commit, diff_hash)
+        sys.exit(exit_code)
 
     while True:
         # Persist state so attempt number and questions are tracked even if interrupted
@@ -755,6 +783,7 @@ def main():
             if 25 <= final_score < 70 and eval_res.follow_up_required and (ans_text or "").strip():
                 missing = ", ".join(eval_res.missing_concepts) or "the missing concept"
                 followup_q = followup_generator.generate(q, ans_obj, eval_res.to_dict())
+            if followup_q and followup_q.strip() and 25 <= final_score < 70 and eval_res.follow_up_required and (ans_text or "").strip():
                 print(f"\n{YELLOW}Partial understanding. Follow-up on: {missing}{RESET}\n")
                 print(f"{BOLD}{followup_q}{RESET}\n")
 
@@ -881,31 +910,11 @@ def main():
         # fell back to the offline scorer.
         verification = "llm-verified" if (questions_llm_generated and not any_eval_unverified) else "llm-unverified"
 
-        # When API is not working and fallback questions are being asked,
-        # if all answers have been given, do not check score and allow commit.
-        fallback_questions_asked = (not questions_llm_generated) or any(q.get("is_fallback", False) for q in valid_questions)
-        api_not_working = (not load_nous_api_key()) or (verification == "llm-unverified") or any_eval_unverified or (not questions_llm_generated)
-        all_answers_given = (
-            bool(valid_questions)
-            and all(bool((q.get("answer") or "").strip()) for q in valid_questions)
-            and all(bool((r.get("answer") or "").strip()) and r.get("status") != "timeout" for r in final_results)
-        )
-
-        # If all individual questions demonstrated understanding (score >= 70%),
-        # overall understanding is passed.
         all_individual_passed = (
             bool(valid_questions)
             and all(q.get("passed", False) or q.get("best_score", 0) >= 70 for q in valid_questions)
         )
-
-        if not valid_questions:
-            is_passed = True
-        elif fallback_questions_asked and api_not_working and all_answers_given:
-            is_passed = True
-        elif all_individual_passed:
-            is_passed = True
-        else:
-            is_passed = False
+        is_passed = all_individual_passed
 
         attempt_status = "PASSED" if is_passed else "FAILED"
         if is_passed:

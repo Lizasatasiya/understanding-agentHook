@@ -33,6 +33,63 @@ def get_judge_model() -> str:
     return resolve_judge_model()
 
 
+def log_llm_error(message: str) -> None:
+    """Print an LLM failure for the developer. Never includes the API key."""
+    text = (message or "").strip() or "unknown LLM error"
+    if len(text) > 2000:
+        text = text[:2000] + "...(truncated)"
+    print(f"\n  \033[91m[LLM] ERROR: {text}\033[0m\n", flush=True)
+
+
+def llm_request_target() -> tuple[str, str, str, str]:
+    """Return scheme, host, path, and the exact URL the next call will use."""
+    base_url = get_base_url().rstrip("/")
+    provider = get_provider()
+    parsed = urlparse(base_url)
+    scheme = parsed.scheme or "https"
+    host = parsed.netloc or "inference-api.nousresearch.com"
+    base_path = parsed.path or "/v1"
+    if _is_anthropic(base_url, provider):
+        if base_path.endswith("/messages"):
+            endpoint_path = base_path
+        else:
+            endpoint_path = f"{base_path}/messages" if base_path else "/v1/messages"
+    else:
+        if base_path.endswith("/chat/completions"):
+            endpoint_path = base_path
+        else:
+            endpoint_path = f"{base_path}/chat/completions"
+    return scheme, host, endpoint_path, f"{scheme}://{host}{endpoint_path}"
+
+
+def _llm_failure_detail(status: int, body: str, model_id: str) -> str | None:
+    """None when the response is a successful assistant message."""
+    url = llm_request_target()[3]
+    if status == 200:
+        try:
+            data = json.loads(body)
+        except Exception:
+            return None
+        if _extract_message_text(data):
+            return None
+        snippet = (body or "").strip()
+        if len(snippet) > 1500:
+            snippet = snippet[:1500] + "...(truncated)"
+        return (
+            f"model={model_id} at {url} returned HTTP 200 with no assistant text. "
+            f"Body: {snippet or '(empty)'}"
+        )
+    snippet = (body or "").strip()
+    if len(snippet) > 1500:
+        snippet = snippet[:1500] + "...(truncated)"
+    if status == 0:
+        return f"could not connect to {url} for model={model_id}. {snippet or 'connection failed'}"
+    return (
+        f"model={model_id} at {url} returned HTTP {status}. "
+        f"{snippet or '(empty body)'}"
+    )
+
+
 def fail_open_enabled() -> bool:
     """When the LLM service is unreachable, allow the commit (default) or block it.
 
@@ -333,7 +390,7 @@ def call_llm_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: i
         return 0, "No API key configured (set UNDERSTANDING_AGENT_API_KEY)"
 
     model_id = payload_dict.get("model") or "(none)"
-    print(f"  [LLM] model={model_id} -> {get_base_url()}", flush=True)
+    print(f"  [LLM] model={model_id} -> {llm_request_target()[3]}", flush=True)
 
     # Suppress model thinking for providers that support it (bench-measured:
     # deepseek-v4-flash 51s -> 10s per call). Kill switch:
@@ -345,10 +402,16 @@ def call_llm_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: i
     for attempt in range(retries + 1):
         status, body = _groq_request_once(api_key, payload_dict, timeout)
         if _is_meaningful_response(status, body):
+            detail = _llm_failure_detail(status, body, model_id)
+            if detail:
+                log_llm_error(detail)
             return status, body
         last_status, last_body = status, body
         if attempt < retries:
             time.sleep(1.5 * (attempt + 1))
+    detail = _llm_failure_detail(last_status, last_body, model_id)
+    if detail:
+        log_llm_error(detail)
     return last_status, last_body
 
 
@@ -385,7 +448,7 @@ def _is_anthropic(base_url: str, provider: str) -> bool:
 
 def _format_anthropic_payload(payload_dict: dict) -> dict:
     anthropic_payload = {
-        "model": payload_dict.get("model", "claude-3-5-sonnet-20241022"),
+        "model": payload_dict.get("model", "claude-sonnet-5-5"),
         "max_tokens": payload_dict.get("max_tokens", 1024),
     }
     if "temperature" in payload_dict:
@@ -412,17 +475,9 @@ def _format_anthropic_payload(payload_dict: dict) -> dict:
 def _nous_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[int, str]:
     base_url = get_base_url().rstrip("/")
     provider = get_provider()
-
-    parsed = urlparse(base_url)
-    scheme = parsed.scheme or "https"
-    host = parsed.netloc or "inference-api.nousresearch.com"
-    base_path = parsed.path or "/v1"
+    scheme, host, endpoint_path, _full_url = llm_request_target()
 
     if _is_anthropic(base_url, provider):
-        if base_path.endswith("/messages"):
-            endpoint_path = base_path
-        else:
-            endpoint_path = f"{base_path}/messages" if base_path else "/v1/messages"
         payload_data = _format_anthropic_payload(payload_dict)
         headers = {
             "Content-Type": "application/json",
@@ -431,11 +486,6 @@ def _nous_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[
             "User-Agent": "understanding-agent/0.3.0",
         }
     else:
-        # Standard OpenAI-compatible format
-        if base_path.endswith("/chat/completions"):
-            endpoint_path = base_path
-        else:
-            endpoint_path = f"{base_path}/chat/completions"
         payload_data = payload_dict
         headers = {
             "Content-Type": "application/json",

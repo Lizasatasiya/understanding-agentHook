@@ -220,14 +220,13 @@ assert hints["practice_topics"][0].startswith("security:"), "security topic not 
 print("  PASS")
 
 print("=" * 70)
-print("STAGE 7: QuestionGenerator prompt (hints embedded, offline fallback)")
+print("STAGE 7: QuestionGenerator prompt (hints embedded, no hardcoded questions)")
 gen = QuestionGenerator()
 full_hints = {"stack": stack, "security": sec_hint, "evidence": ev_hint, "practices": hints}
-qs = gen.generate(context, {}, full_hints)  # no GROQ_API_KEY -> fallback path
-for q in qs:
-    print(f"  [{q['type']}] {q['question'][:100]}")
-assert any("sql-injection" in q["question"] or "security" in q["question"].lower() for q in qs), \
-    "fallback questions not security-aware"
+os.environ["UNDERSTANDING_AGENT_IGNORE_DOTENV"] = "1"
+os.environ.pop("UNDERSTANDING_AGENT_API_KEY", None)
+qs = gen.generate(context, {}, full_hints)
+assert qs == [], "missing key must not ask hardcoded questions"
 prompt = gen._build_prompt(context, {}, full_hints)
 assert "nestjs" in prompt.lower(), "stack hint missing from prompt"
 assert "MANDATORY" in prompt or "security" in prompt.lower(), "security hint missing from prompt"

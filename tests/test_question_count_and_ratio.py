@@ -87,18 +87,21 @@ class TestQuestionCountAndRatio(unittest.TestCase):
                 {"name": "Function Length", "is_good": False, "details": "106 lines"}
             ]
         }
-        questions = self.generator.generate(ctx, {}, hints)
+        from unittest.mock import patch
+        model_questions = [
+            {"question": f"What does change {i} do in UserProfileBadge?", "type": "Code Logic",
+             "expected_concepts": ["behavior"], "evaluation_criteria": ["impact"]}
+            for i in range(8)
+        ]
+        with patch("understanding_agent.question_generator.load_nous_api_key", return_value="k"), \
+             patch.object(QuestionGenerator, "_call_groq", return_value=model_questions):
+            questions = self.generator.generate(ctx, {}, hints)
 
-        # Question count must be > 5 and < 10
+        # The model list is capped to the diff scale. No template questions are added.
         self.assertGreater(len(questions), 5)
         self.assertLess(len(questions), 10)
-
-        # At most 20% standards questions (1 out of 6, or 1-2 out of 7/8)
-        std_keywords = {"immutability", "closure", "cleanup", "virtual", "scoping", "equality", "resilience", "length"}
-        std_q_count = sum(1 for q in questions if any(kw in q["question"].lower() for kw in std_keywords))
-        self.assertLessEqual(std_q_count, 2)
-        diff_q_count = len(questions) - std_q_count
-        self.assertGreaterEqual(diff_q_count, 4)
+        self.assertEqual(len(questions), 6)
+        self.assertTrue(all(not q.get("is_fallback") for q in questions))
 
 
     def test_standards_violation_question_not_hardcoded_or_robotic(self):
@@ -111,24 +114,11 @@ class TestQuestionCountAndRatio(unittest.TestCase):
             "is_good": False,
             "details": "src/components/ProductCard.jsx: ProductCard() nests 5 levels deep (>4) — flatten with early returns or extract helpers"
         }
-        # 1. Test fallback/programmatic builder
-        proper_q = self.generator._build_proper_standard_question(std_finding, ctx)
-        self.assertNotIn("Coding audit flagged", proper_q["question"])
-        self.assertNotIn("(changed)", proper_q["question"])
-        self.assertNotIn("What are the runtime risks of this approach?", proper_q["question"])
-        self.assertIn("ProductCard()", proper_q["question"])
-        self.assertIn("nesting depth", proper_q["question"].lower())
-
-        # 2. Test overall generator output
+        from unittest.mock import patch
         hints = {"standards": [std_finding]}
-        questions = self.generator.generate(ctx, {}, hints)
-        self.assertEqual(len(questions), 3)
-
-        for q in questions:
-            text = q["question"]
-            self.assertNotIn("Coding audit flagged", text)
-            self.assertNotIn("(changed)", text)
-            self.assertNotIn("What are the runtime risks of this approach?", text)
+        with patch("understanding_agent.question_generator.load_nous_api_key", return_value=""):
+            questions = self.generator.generate(ctx, {}, hints)
+        self.assertEqual(questions, [])
 
 
 if __name__ == "__main__":

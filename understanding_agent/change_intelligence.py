@@ -28,7 +28,7 @@ default: the default path is byte-identical to the pre-existing behavior).
 import json
 import os
 
-from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model
+from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, log_llm_error
 from .checklists import parse_checklist
 from .coding_standards import load_standards_doc
 
@@ -270,13 +270,17 @@ def run_master_analysis(context: dict, summary: dict, hints: dict | None = None,
             text = (choices[0].get("text") or "").strip()
         parsed = extract_json(text)
         if not isinstance(parsed, dict):
+            if text:
+                log_llm_error("Master analysis failed: the model reply was not a JSON object.")
             return None
-    except Exception:
+    except Exception as exc:
+        log_llm_error(f"Master analysis failed: could not read the model reply ({exc}).")
         return None
 
     questions = _validate_questions(parsed.get("questions"), target_count, gen)
     if not questions:
-        return None  # nothing usable -> deterministic path
+        log_llm_error("Master analysis failed: the model reply did not include usable questions.")
+        return None
 
     diff_files = _diff_files(context)
     return {

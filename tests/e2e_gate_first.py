@@ -4,7 +4,7 @@ Run: python3.14 tests/e2e_gate_first.py
 Creates a temp git repo, stages a real-shaped credential, runs the real
 SecurityLens gate + CLI ordering logic, and asserts:
   1. Credential gate blocks with ZERO LLM calls and ZERO prompts.
-  2. No-key fallback path: security question present in offline questions.
+  2. No-key path: no hardcoded questions are asked.
   3. Sessions prune keeps the most recent records.
 Exits non-zero on the first failed assertion.
 """
@@ -99,7 +99,7 @@ run(tmp, "git", "restore", "--staged", "config.py")
 os.remove("config.py")
 api_utils._nous_request_once = orig_request
 
-# ------------------------------------- scene 2: no-key fallback, no prompts wasted
+# ------------------------------------- scene 2: no key, no hardcoded questions
 with open("app.py", "w") as f:
     f.write("import os\n\ndef handle(req):\n"
             "    query = 'SELECT * FROM users WHERE name = ' + req['name']\n"
@@ -112,20 +112,18 @@ profile = lens.profile_change(context)
 expect("scene2: SQL injection surface detected", profile["is_security_relevant"],
       f"profile={profile}")
 
+os.environ["UNDERSTANDING_AGENT_IGNORE_DOTENV"] = "1"
 gen = QuestionGenerator()
 questions = gen.generate(context, {}, hints={"security": None, "standards": []}, env=None)
-# No API key anywhere: questions must come from the offline fallback pool
-expect("scene2: fallback questions generated without any key", len(questions) >= 2,
+expect("scene2: no questions when the model key is missing", len(questions) == 0,
        f"count={len(questions)}")
 
-# Re-run with the real security hint wired (as cli.py does)
 from understanding_agent.security_lens import security_question_hint
 sec_hint = security_question_hint(profile)
 hints = {"security": sec_hint, "standards": []}
 questions2 = gen.generate(context, {}, hints=hints, env=None)
-q_texts = [q["question"].lower() for q in questions2]
-expect("scene2: offline path includes the security question",
-       any("security" in t for t in q_texts), f"questions={q_texts}")
+expect("scene2: security hint does not invent a hardcoded question",
+       questions2 == [], f"questions={questions2}")
 
 # ------------------------------------------------- scene 3: sessions prune
 from understanding_agent.session_store import save_session, load_sessions

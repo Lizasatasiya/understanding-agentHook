@@ -1,29 +1,33 @@
 import json
-from .api_utils import load_nous_api_key, call_nous_api, get_model
+from .api_utils import load_nous_api_key, call_nous_api, get_model, log_llm_error
 
 class FollowUpGenerator:
     def generate(self, question: dict, answer: dict, evaluation: dict) -> str:
         api_key = load_nous_api_key()
         if not api_key:
-            return "Could you elaborate on what happens when the validation fails?"
-            
+            log_llm_error(
+                "No API key configured. Set UNDERSTANDING_AGENT_API_KEY. "
+                "No follow-up question will be asked."
+            )
+            return ""
+
         prompt = self._build_prompt(question, answer, evaluation)
         result = self._call_groq(api_key, prompt)
-        if result:
-            return result
-        return "Could you provide more specific details?"
+        return result or ""
 
     def rephrase_failed_question(self, question: dict) -> str:
-        """Return a lightly reworded version of a previously-failed question.
+        """Return a model rephrase of a previously failed question.
 
-        Keeps the same concept but changes the phrasing so the developer gets
-        a fresh angle rather than the identical text they already saw.
-        Falls back to simple angle-shifts when the LLM is unavailable.
+        The original wording is kept when the model does not return one.
         """
         api_key = load_nous_api_key()
         original = question.get("question", "")
         if not api_key:
-            return self._fallback_rephrase(original)
+            log_llm_error(
+                "No API key configured. Set UNDERSTANDING_AGENT_API_KEY. "
+                "The original question will be asked again."
+            )
+            return ""
 
         prompt = (
             "You are rephrasing a code-understanding question for a developer.\n"
@@ -35,23 +39,7 @@ class FollowUpGenerator:
             "3. Keep it short \u2014 one sentence, plain English, no jargon.\n"
             "4. Return ONLY the rephrased question. No quotes, no markdown, no intros.\n"
         )
-        result = self._call_groq(api_key, prompt)
-        return result if result else self._fallback_rephrase(original)
-
-    def _fallback_rephrase(self, original: str) -> str:
-        """Simple heuristic rephrase when the LLM is unavailable."""
-        q = original.strip().rstrip("?")
-        replacements = [
-            ("How does", "Can you describe how"),
-            ("What happens", "What is the result when"),
-            ("Why does", "What is the reason"),
-            ("What is", "Could you explain"),
-            ("Explain", "Describe in your own words"),
-        ]
-        for src, dst in replacements:
-            if q.startswith(src):
-                return dst + q[len(src):] + "?"
-        return q[0].lower() + q[1:] + "?"
+        return self._call_groq(api_key, prompt) or ""
 
     def _build_prompt(self, question: dict, answer: dict, evaluation: dict) -> str:
         missing = ", ".join(evaluation.get('missing_concepts', []))
@@ -82,7 +70,14 @@ RULES:
 
         try:
             result = json.loads(body)
-            text = result["choices"][0]["message"]["content"].strip()
+            choices = result.get("choices") or []
+            if not choices:
+                log_llm_error("The model response for a follow-up question had no choices.")
+                return ""
+            text = (choices[0].get("message") or {}).get("content") or ""
+            text = text.strip()
+            if not text:
+                return ""
             
             # Clean think tags if any
             if "<think>" in text and "</think>" in text:
@@ -95,7 +90,8 @@ RULES:
                 text = text.strip('`')
                 
             return text.strip()
-        except Exception:
+        except Exception as exc:
+            log_llm_error(f"Could not read the model response for a follow-up question: {exc}")
             return ""
 
     def _call_groq(self, api_key: str, prompt: str) -> str:

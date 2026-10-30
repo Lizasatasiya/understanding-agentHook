@@ -51,9 +51,9 @@ class TestSupportedModels(unittest.TestCase):
     @_clean_env
     def test_sonnet_and_haiku_switch_questions_and_answers(self):
         expected = {
-            "sonnet": ("anthropic", "claude-3-5-sonnet-20241022",
+            "sonnet": ("anthropic", "claude-sonnet-5-5",
                        "https://api.anthropic.com/v1"),
-            "haiku": ("anthropic", "claude-3-5-haiku-20241022",
+            "haiku": ("anthropic", "claude-haiku-5-5",
                       "https://api.anthropic.com/v1"),
             "nous": ("nous", "qwen/qwen3-coder-30b-a3b-instruct",
                      "https://inference-api.nousresearch.com/v1"),
@@ -86,11 +86,11 @@ class TestSupportedModels(unittest.TestCase):
     def test_manager_caches_until_reset(self):
         m = LLMManager()
         os.environ["UNDERSTANDING_AGENT_MODEL"] = "haiku"
-        self.assertEqual(m.model, "claude-3-5-haiku-20241022")
+        self.assertEqual(m.model, "claude-haiku-5-5")
         os.environ["UNDERSTANDING_AGENT_MODEL"] = "sonnet"
-        self.assertEqual(m.model, "claude-3-5-haiku-20241022")
+        self.assertEqual(m.model, "claude-haiku-5-5")
         m.reset()
-        self.assertEqual(m.model, "claude-3-5-sonnet-20241022")
+        self.assertEqual(m.model, "claude-sonnet-5-5")
 
 
 class TestResponseNormalization(unittest.TestCase):
