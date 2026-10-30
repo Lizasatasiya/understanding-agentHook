@@ -25,7 +25,7 @@ SUPPORTED_MODELS = {
     },
     "haiku": {
         "provider": "anthropic",
-        "model": "claude-3-5-haiku-20241022",
+        "model": "claude-haiku-5-5",
         "base_url": "https://api.anthropic.com/v1",
     },
 }
