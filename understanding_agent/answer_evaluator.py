@@ -38,7 +38,7 @@ class AnswerEvaluator:
                 return self._evaluate_fallback(question, answer, is_offline=True)
             return EvaluationResult({
                 "score": 0,
-                "evaluation": "Cannot verify understanding: NOUS_API_KEY is not configured and UNDERSTANDING_AGENT_FAIL_MODE=closed.",
+                "evaluation": "Cannot verify understanding: UNDERSTANDING_AGENT_API_KEY is not configured and UNDERSTANDING_AGENT_FAIL_MODE=closed.",
                 "follow_up_required": False,
                 "missing_concepts": [],
                 "llm_verified": False,
@@ -79,7 +79,7 @@ class AnswerEvaluator:
         import re
         text = (answer.get("answer") or "").strip().lower()
         status_prefix = (
-            "Offline evaluation (no NOUS_API_KEY configured)."
+            "Offline evaluation (no API key configured)."
             if is_offline
             else "LLM evaluation unavailable (API error or timeout); failing open."
         )
@@ -175,7 +175,7 @@ class AnswerEvaluator:
             score = 76
             follow_up = False
 
-        status_prefix = "Offline evaluation (no NOUS_API_KEY configured)." if is_offline else "LLM evaluation unavailable (API error or timeout); failing open."
+        status_prefix = "Offline evaluation (no API key configured)." if is_offline else "LLM evaluation unavailable (API error or timeout); failing open."
         eval_text = f"{status_prefix} Semantic fallback: covered {len(covered)}/{len(expected)} expected concepts."
         if covered:
             eval_text += f" Recognized: {', '.join(covered)}."

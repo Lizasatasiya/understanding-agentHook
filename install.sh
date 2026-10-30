@@ -11,7 +11,7 @@
 #
 # Options:
 #   --key <API_KEY>       API key for the selected model
-#   --model <NAME>        sonnet, haiku, or nous (default: nous)
+#   --model <NAME>        sonnet, haiku, or nous. Required the first time; later installs keep the saved model.
 #   --ref <BRANCH>        Git branch or tag to install (or set REF). Required for a curl install.
 #   --uninstall           Remove global hooks and restore standard git behavior
 #   --status              Check current installation and hook health
@@ -70,14 +70,13 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ -z "$ARG_MODEL" ]; then
-    ARG_MODEL="nous"
+if [ -n "$ARG_MODEL" ]; then
+    ARG_MODEL="$(printf '%s' "$ARG_MODEL" | tr '[:upper:]' '[:lower:]')"
+    case "$ARG_MODEL" in
+        sonnet|haiku|nous) ;;
+        *) err "Unsupported model '$ARG_MODEL'. Choose one of: sonnet, haiku, nous." ;;
+    esac
 fi
-ARG_MODEL="$(printf '%s' "$ARG_MODEL" | tr '[:upper:]' '[:lower:]')"
-case "$ARG_MODEL" in
-    sonnet|haiku|nous) ;;
-    *) err "Unsupported model '$ARG_MODEL'. Choose one of: sonnet, haiku, nous." ;;
-esac
 
 # STATUS CHECK
 if [ "$DO_STATUS" = true ]; then
@@ -213,8 +212,10 @@ if [ -n "$ARG_KEY" ]; then
     ok "Saved API key to $ENV_FILE"
 fi
 
-upsert_env "UNDERSTANDING_AGENT_MODEL" "$ARG_MODEL"
-ok "Selected model: $ARG_MODEL (questions and answer checks)"
+if [ -n "$ARG_MODEL" ]; then
+    upsert_env "UNDERSTANDING_AGENT_MODEL" "$ARG_MODEL"
+    ok "Selected model: $ARG_MODEL (questions and answer checks)"
+fi
 
 # If file is empty, write a friendly template with notes
 if [ ! -s "$ENV_FILE" ]; then
@@ -222,7 +223,7 @@ if [ ! -s "$ENV_FILE" ]; then
 # Understanding Agent Global Configuration
 # Optional: If your team uses a central relay server or shared key, configure it here:
 # UNDERSTANDING_AGENT_API_KEY=
-# UNDERSTANDING_AGENT_MODEL=nous
+# UNDERSTANDING_AGENT_MODEL=
 EOF
     chmod 600 "$ENV_FILE"
 fi

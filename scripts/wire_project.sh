@@ -55,16 +55,7 @@ if [ -n "$ENV_SRC" ]; then
 elif [ -f .env ]; then
     echo ".env already present — left untouched"
 else
-    cat > .env <<'ENV'
-# Fill the key from the team vault, then save. (This file is gitignored —
-# never commit it.)
-NOUS_API_KEY=
-# Optional overrides — see .env.example in the hook repo:
-# UNDERSTANDING_AGENT_MODEL=
-# UNDERSTANDING_AGENT_PROVIDER=
-ENV
-    chmod 600 .env
-    printf '\033[93mTODO: edit %s/.env and set NOUS_API_KEY (from the team vault)\033[0m\n' "$PWD"
+    printf '\033[93mNo project .env created. The hook uses only the key and model in ~/.config/understanding-agent/.env (install.sh --key --model).\033[0m\n'
 fi
 grep -q "^\.env$" .gitignore 2>/dev/null || echo ".env" >> .gitignore
 

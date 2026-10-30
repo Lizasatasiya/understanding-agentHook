@@ -1,11 +1,12 @@
-"""LLM configuration for the three supported models: nous, sonnet, and haiku.
+"""LLM configuration for the model and key saved by install.sh.
 
-UNDERSTANDING_AGENT_MODEL selects one of those names. Questions and answer
-checks both use it. The API key is UNDERSTANDING_AGENT_API_KEY.
+Both values live in ~/.config/understanding-agent/.env:
+UNDERSTANDING_AGENT_MODEL is sonnet, haiku, or nous.
+UNDERSTANDING_AGENT_API_KEY is the key for that model.
+Questions and answer checks use that same pair. Nothing else is consulted.
 """
 
 import os
-import subprocess
 
 # ---------------------------------------------------------------------------
 # Supported models
@@ -33,72 +34,6 @@ SUPPORTED_MODELS = {
 
 def _env(name: str) -> str:
     return os.environ.get(name, "").strip()
-
-
-def _env_search_dirs():
-    """Directories searched for .env: the repository being committed.
-
-    The hook package directory is not searched. An editable install lives in
-    a checkout with its own .env, and that file was being sent on every
-    commit on the machine.
-    """
-    search_dirs = []
-
-    def add(path: str) -> None:
-        if path and path not in search_dirs:
-            search_dirs.append(path)
-
-    try:
-        repo_root = subprocess.check_output(
-            ["git", "rev-parse", "--show-toplevel"],
-            text=True, stderr=subprocess.DEVNULL
-        ).strip()
-        add(repo_root)
-    except Exception:
-        pass
-
-    cur = os.path.abspath(os.getcwd())
-    for _ in range(4):
-        add(cur)
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            break
-        cur = parent
-    return search_dirs
-
-
-def _dotenv_values() -> dict:
-    """Parse key-value pairs from .env files in search_dirs (first file found wins)."""
-    if _env("UNDERSTANDING_AGENT_IGNORE_DOTENV") == "1":
-        return {}
-    for directory in _env_search_dirs():
-        for fname in (".env", ".env.local"):
-            path = os.path.join(directory, fname)
-            if not os.path.isfile(path):
-                continue
-            try:
-                with open(path, "r", encoding="utf-8", errors="ignore") as fh:
-                    file_found = {}
-                    for line in fh:
-                        line = line.strip()
-                        if not line or line.startswith("#"):
-                            continue
-                        if line.startswith("export "):
-                            line = line[7:].strip()
-                        if "=" not in line:
-                            continue
-                        key, val = line.split("=", 1)
-                        key = key.strip()
-                        val = val.strip()
-                        if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
-                            val = val[1:-1].strip()
-                        if val:
-                            file_found[key] = val
-                    if file_found:
-                        return file_found
-            except Exception:
-                continue
-    return {}
 
 
 _GLOBAL_CONFIG = os.path.expanduser("~/.config/understanding-agent/.env")
@@ -146,121 +81,55 @@ def _parse_env_file(path: str) -> dict:
     return found
 
 
-def _configured(name: str) -> str:
-    """Process env wins, then .env."""
-    return _env(name) or _dotenv_values().get(name, "")
-
-
-def _global_model_choice() -> str:
-    """Model name written by install.sh into ~/.config/understanding-agent/.env."""
-    if _env("UNDERSTANDING_AGENT_IGNORE_DOTENV") == "1":
-        return ""
-    path = os.path.expanduser("~/.config/understanding-agent/.env")
-    if not os.path.isfile(path):
-        return ""
-    try:
-        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith("#") or line.startswith("export "):
-                    if line.startswith("export "):
-                        line = line[7:].strip()
-                    else:
-                        continue
-                if "=" not in line:
-                    continue
-                key, val = line.split("=", 1)
-                if key.strip() != "UNDERSTANDING_AGENT_MODEL":
-                    continue
-                val = val.strip()
-                if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
-                    val = val[1:-1].strip()
-                return val.lower()
-    except Exception:
-        return ""
-    return ""
+def _installed() -> dict:
+    """Values written by install.sh. This file is the only LLM configuration."""
+    return _parse_env_file(_GLOBAL_CONFIG)
 
 
 def installed_model_choice() -> str | None:
-    """Return sonnet, haiku, or nous when that is the configured model."""
-    raw = (
-        _env("UNDERSTANDING_AGENT_MODEL")
-        or _env("LLM_MODEL")
-        or _env("MODEL")
-        or _global_model_choice()
-        or _dotenv_values().get("UNDERSTANDING_AGENT_MODEL", "")
-    ).lower()
+    """Return sonnet, haiku, or nous from the install file. No other source."""
+    raw = (_installed().get("UNDERSTANDING_AGENT_MODEL") or "").strip().lower()
     if raw in SUPPORTED_MODELS:
         return raw
     return None
 
 
-def _active_choice() -> str:
-    """sonnet, haiku, or nous. Anything else falls back to nous."""
-    return installed_model_choice() or "nous"
+def _active_spec() -> dict:
+    choice = installed_model_choice()
+    if not choice:
+        return {}
+    return SUPPORTED_MODELS[choice]
 
 
 def get_provider() -> str:
-    """nous or anthropic, from the selected model."""
-    return SUPPORTED_MODELS[_active_choice()]["provider"]
+    """nous or anthropic, from the installed model. Empty when none is installed."""
+    return _active_spec().get("provider", "")
 
 
 def resolve_base_url() -> str:
-    """Endpoint for the selected model."""
-    return SUPPORTED_MODELS[_active_choice()]["base_url"]
+    """Endpoint for the installed model. Empty when none is installed."""
+    return _active_spec().get("base_url", "")
 
 
 def resolve_model() -> str:
-    """Model id for questions and answer checks."""
-    return SUPPORTED_MODELS[_active_choice()]["model"]
+    """Model id for questions and answer checks. Empty when none is installed."""
+    return _active_spec().get("model", "")
 
 
 def resolve_judge_model() -> str:
-    """Answer checks use the same model as question generation."""
+    """Answer checks use the same installed model as question generation."""
     return resolve_model()
-
-
-_KEY_ENVS = {
-    "nous": ("NOUS_API_KEY", "NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY"),
-    "anthropic": ("ANTHROPIC_API_KEY", "CLAUDE_API_KEY"),
-}
-
-
-def _key_names() -> tuple:
-    return ("UNDERSTANDING_AGENT_API_KEY", "LLM_API_KEY", "API_KEY", *_KEY_ENVS[get_provider()])
 
 
 def resolve_api_key_info() -> tuple[str, str]:
     """Return (api_key, where it was read from).
 
-    Process environment wins. Then the key saved by install.sh. Then a .env
-    in the repository being committed. Placeholder text such as YOUR_API_KEY
-    is ignored.
+    Only UNDERSTANDING_AGENT_API_KEY in the install file is used.
+    Placeholder text such as YOUR_API_KEY is ignored.
     """
-    for name in _key_names():
-        value = _usable_secret(_env(name))
-        if value:
-            return value, f"environment variable {name}"
-
-    if _env("UNDERSTANDING_AGENT_IGNORE_DOTENV") == "1":
-        return "", "none"
-
-    global_values = _parse_env_file(_GLOBAL_CONFIG)
-    for name in _key_names():
-        value = _usable_secret(global_values.get(name, ""))
-        if value:
-            return value, _GLOBAL_CONFIG
-
-    for directory in _env_search_dirs():
-        for fname in (".env", ".env.local"):
-            path = os.path.join(directory, fname)
-            if os.path.abspath(path) == os.path.abspath(_GLOBAL_CONFIG):
-                continue
-            values = _parse_env_file(path)
-            for name in _key_names():
-                value = _usable_secret(values.get(name, ""))
-                if value:
-                    return value, path
+    value = _usable_secret(_installed().get("UNDERSTANDING_AGENT_API_KEY", ""))
+    if value:
+        return value, _GLOBAL_CONFIG
     return "", "none"
 
 

@@ -34,8 +34,8 @@ wire_project.sh (in the TARGET project):
 - .pre-commit-config.yaml → local hook repo at rev: main, and pre-commit
   install. The mutable-rev warning is expected for local-path dev wiring;
   for team adoption pin the git URL + release tag (the file says how).
-- .env (0600, gitignored): copied from --env or scaffolded with a TODO for
-  NOUS_API_KEY. The key NEVER travels through the repo or this script.
+- The API key and model come from `install.sh` and live in
+  `~/.config/understanding-agent/.env`. A project `.env` is not read.
 - warns if no git user.email (needed for session attribution).
 
 ## Verify (each new machine, 2 minutes)
@@ -86,7 +86,7 @@ UNDERSTANDING_AGENT_REPO_ROOT=/path/to/their/project \
 |---|---|
 | `python3` says 3.9.x | Stale terminal session (zsh caches lookups) — open a NEW terminal. The tools also self-heal: they re-exec under the modern python automatically. |
 | Hook output looks stale after pulling hook-repo changes | pre-commit snapshots the hook repo at its recorded rev — in each project: `pre-commit clean && pre-commit install-hooks` (or `pre-commit autoupdate --repo <path>`) |
-| "NOUS_API_KEY is not set" warning | .env missing in the TARGET project root or key empty — offline fallback ran (by design); fill .env for live questions |
+| No API key configured | Re-run `install.sh --key "..." --model haiku` (or sonnet / nous). The hook does not read a project `.env` |
 | `zsh: permission denied: python3.14` | A broken leftover alias on some machines — ignore it; only `python3` is used anywhere |
 
 ## What a demo project needs (for the management-demo format)

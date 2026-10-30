@@ -544,7 +544,8 @@ If the developer failed a previous attempt and retries without changing the stag
 | `UNDERSTANDING_AGENT_SECURITY_GATE` | `on` (default), `off` | Emergency killswitch to bypass the deterministic credential blocker. |
 | `UNDERSTANDING_AGENT_MASTER_ANALYSIS` | `1`, `0` (default) | Opts into the unified single-call LLM Master Analysis pass. |
 | `UNDERSTANDING_AGENT_ANSWER_HYGIENE` | `on` (default), `off` | Enables or disables detection of clipped speech / mic stutters. |
-| `NOUS_API_KEY` / `OPENAI_API_KEY` | string | API key for LLM inference (loaded from shell or local `.env`). |
+| `UNDERSTANDING_AGENT_API_KEY` | string | API key saved by `install.sh --key` in `~/.config/understanding-agent/.env`. |
+| `UNDERSTANDING_AGENT_MODEL` | `sonnet`, `haiku`, `nous` | Model saved by `install.sh --model` in that same file. |
 | `UNDERSTANDING_AGENT_SERVER_URL` | URL | Central ledger endpoint for syncing commit defense proof across the team. |
 
 ---

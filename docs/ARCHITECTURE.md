@@ -143,7 +143,7 @@ numbers are scoped to the current HEAD commit cycle.
 | sync_history.py | 120 | local store → backfill batches to the ledger (understanding-agent-sync-history) | legacy rows get git-author resolution; fail-loud (operator command, not a commit path) |
 | push_guard.py | 95 | repo → install health ({healthy, reason}) | pre-push aid: exit 1 + remediation steps when the pre-commit hook is missing |
 | api_utils.py | 371 | LLM transport: retries, key loading (.env + env), JSON extraction | 200-with-null-content treated as retryable |
-| llm_manager.py | 244 | provider presets (nous/groq/openai/openrouter/together/ollama/custom) | legacy NOUS_*/GROQ_* vars honored via compat layer |
+| llm_manager.py | — | maps the installed `sonnet` / `haiku` / `nous` choice to its endpoint and model id | key and model come only from `~/.config/understanding-agent/.env` |
 | commit_context.py | 237 | git plumbing: head, commit msg from parent process args, diff_hash, attempt_key, attempt numbering | — |
 | evaluation_models.py | 43 | EvaluationResult wrapper | — |
 | server.py + ui/ | 692+ | LOCAL dashboard (FastAPI on 127.0.0.1:8000): /ui, /api/commits, /attempts, telemetry ingest | reads local store; central dashboard DEFERRED |

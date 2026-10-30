@@ -103,7 +103,7 @@ Within every scale, ~80% of questions target the actual diff and at most ~20% ad
 ## 🚀 Key Features
 
 - **🎙️ Voice-First Interaction**: Reads questions aloud (`say`) and transcribes developer speech in real-time using local OpenAI Whisper (`sounddevice` / `pyaudio`). Press **[Tab]** to toggle speech capture.
-- **🔌 Central LLM Provider Manager**: One module (`llm_manager.py`) resolves provider, model, base URL, and API key. Switch between Nous Research, Groq, OpenAI, OpenRouter, Together, Ollama (local), or ANY OpenAI-compatible endpoint by changing ONE environment variable — no code changes, no five-variable dances.
+- **🔌 Installed model**: `install.sh --key` and `--model` save the only API key and model the hook uses (`sonnet`, `haiku`, or `nous`). Questions and answer checks both use that pair.
 - **⚡ Fast, Resilient Execution**: Sub-second question generation with the configured provider; retries with exponential backoff on transient errors; robust JSON extraction from reasoning models.
 - **🎯 Multi-Language Change Analysis**: Function-level change detection across 15+ languages — native Python `ast` for Python, line-anchored definition matching for TS/JS/C#/Go/Rust/Java and more. Only genuinely-touched functions become questions.
 - **🛡️ Security Lens (deterministic)**: Every staged change is scanned for security-relevant surfaces — injection sinks, auth flows, hardcoded secrets, unsafe deserialization, command injection, LLM-output trust, disabled TLS, cleartext HTTP. Security-relevant changes always get one targeted security question (never a hard block). **Exception: stealable credentials hard-block the commit BEFORE any prompt or LLM call** — git history is permanent, so no answer can make committing a real credential safe. The gate covers: 25+ vendor-pinned token formats (AWS, Google, Stripe, Anthropic, GitHub, GitLab, npm, PyPI, Slack, Telegram, SendGrid, Twilio, ...), private key material, connection strings with inline credentials (`postgres://user:***@...`), basic-auth URLs, high-entropy values assigned to secret-named variables (Shannon-entropy gated, with a `# pragma: allow-secret` escape hatch), and **staged key files** (`.pem`, `.p12`, `id_rsa`, `.npmrc`, `.netrc`, ... — detected by filename alone, contents never read). Exact vendor formats block even in test files (a real leaked key is real anywhere); fixture-shaped values in tests stay exempt. The gate scans the raw staged diff (module-level code included), redacts secrets in its output, suggests `git restore --staged <file>` per finding, calls out staged-but-gitignored files, and can be disabled per-commit with `UNDERSTANDING_AGENT_SECURITY_GATE=off`.
@@ -119,15 +119,13 @@ Within every scale, ~80% of questions target the actual diff and at most ~20% ad
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `UNDERSTANDING_AGENT_PROVIDER` | `nous` | LLM provider preset: `nous`, `groq`, `openai`, `openrouter`, `together`, `ollama`, `custom` |
-| `UNDERSTANDING_AGENT_MODEL` | preset default | Model id for any provider (e.g. `deepseek/deepseek-v4-flash` on Nous, `llama-3.3-70b-versatile` on Groq) |
-| `UNDERSTANDING_AGENT_BASE_URL` | preset default | Override to point at ANY OpenAI-compatible endpoint (this alone enables custom providers) |
-| `UNDERSTANDING_AGENT_API_KEY` | — | API key for the active provider. Legacy `NOUS_API_KEY` / `GROQ_API_KEY` still work |
+| `UNDERSTANDING_AGENT_MODEL` | set by `--model` | `sonnet`, `haiku`, or `nous`. Saved in `~/.config/understanding-agent/.env` |
+| `UNDERSTANDING_AGENT_API_KEY` | set by `--key` | API key for that model, from the same file |
 | `UNDERSTANDING_AGENT_FAIL_MODE` | `open` | `open`: if the LLM is unreachable, the commit is allowed with a warning and marked `llm-unverified`. `closed`: the commit is blocked (strict verification) |
 | `UNDERSTANDING_AGENT_TELEMETRY_URL` | unset (off) | Endpoint to POST session audit payloads to (e.g. `http://dashboard.internal:8000/understanding-session`) |
 | `UNDERSTANDING_AGENT_SECURITY_GATE` | on | Hard-blocks commits containing live credentials (AWS keys, private keys, API tokens). `off` disables the credential gate for a commit (questions still run) |
 | `UNDERSTANDING_AGENT_MAX_SESSIONS` | `500` | Cap on persisted session records in `.git/understanding_sessions.json`. Values < 2 disable pruning |
-| `UNDERSTANDING_AGENT_DISABLE_THINKING` | on | Suppresses model thinking/reasoning (sends `reasoning_effort=none` on Nous). Bench-measured: deepseek-v4-flash drops from ~51s to ~10s per call. Set `off` to re-enable thinking |
+| `UNDERSTANDING_AGENT_DISABLE_THINKING` | on | For the `nous` model, sends `reasoning_effort=none`. Set `off` to leave thinking on |
 
 **Privacy note**: your staged diff (source code) is sent to the configured LLM provider for question generation and evaluation — that is how the hook works. It is never sent anywhere else unless you explicitly set `UNDERSTANDING_AGENT_TELEMETRY_URL`.
 
@@ -180,9 +178,8 @@ understanding-agent-hook/
 - **Standard Library Zero-Dependency Core**: The core git parsing, AST analysis, LLM transport, terminal UI, and HTTP client use native Python modules (`ast`, `subprocess`, `hashlib`, `http.client`, `ssl`, `difflib`, `termios`, `tty`, `select`).
 
 ### LLM Infrastructure
-- **Provider**: any OpenAI-compatible API — Nous Research (default), Groq, OpenAI, OpenRouter, Together, Ollama/local, or a custom endpoint via `UNDERSTANDING_AGENT_BASE_URL`
-- **Default model**: `qwen/qwen3-coder-30b-a3b-instruct` on Nous — override with `UNDERSTANDING_AGENT_MODEL` (or legacy `NOUS_MODEL` / `GROQ_MODEL`)
-- **Configuration**: one central manager (`llm_manager.py`) — provider, model, base URL, and key resolution in one place; switching platforms is one env var
+- **Models**: `haiku` (`claude-haiku-5-5`), `sonnet` (`claude-sonnet-5-5`), or `nous` (`qwen/qwen3-coder-30b-a3b-instruct`), chosen with `install.sh --model`
+- **Configuration**: the key and model in `~/.config/understanding-agent/.env` are the only LLM settings the hook reads
 - **HTTP Layer**: Native `http.client.HTTPSConnection` with socket cleanup, retry + exponential backoff, and robust JSON extraction (handles reasoning tags, code fences, trailing commas)
 
 ### Optional Extras
@@ -199,15 +196,12 @@ git clone https://github.com/Lizasatasiya/understanding-agentHook.git
 cd understanding-agentHook
 ```
 
-### 2. Configure Your LLM Provider
-Obtain an API key from [portal.nousresearch.com](https://portal.nousresearch.com/) (default) or use any OpenAI-compatible provider:
+### 2. Configure the model
+Pass the key and model to the installer. Those two values are written to `~/.config/understanding-agent/.env` and are the only ones the hook uses:
+
 ```bash
-export UNDERSTANDING_AGENT_API_KEY="..."
-# Optional: switch provider/model with one variable each
-# export UNDERSTANDING_AGENT_PROVIDER=groq
-# export UNDERSTANDING_AGENT_MODEL=llama-3.3-70b-versatile
+bash install.sh --key "YOUR_API_KEY" --model haiku
 ```
-*(The hook also reads `.env` / `.env.local` from the current directory, the git repository root, and `~/.config/understanding-agent/.env`. Legacy `NOUS_API_KEY` / `GROQ_API_KEY` are still honored.)*
 
 ### 3. Install Voice Dependencies (macOS)
 ```bash
@@ -306,7 +300,7 @@ When `pre-commit` runs hooks, it runs inside an isolated virtualenv sandbox. The
 ## 💡 Design Decisions & Trade-Offs
 
 1. **Why a hosted OpenAI-compatible API over local LLMs?**
-   - Git pre-commit hooks run synchronously. Local 7B/14B models on CPU/GPU take 8–15 seconds to load and generate tokens. Hosted inference delivers complete summaries and questions in **< 1.5 seconds**, keeping commit latency negligible. The provider manager makes the choice reversible per-team: point `UNDERSTANDING_AGENT_PROVIDER=ollama` at a local server and nothing else changes.
+   - Git pre-commit hooks run synchronously. Local 7B/14B models on CPU/GPU take 8–15 seconds to load and generate tokens. Hosted inference delivers complete summaries and questions in **< 1.5 seconds**, keeping commit latency negligible. The model is the one saved by `install.sh --model`.
 2. **Why scale questions 2–8 instead of a flat 2–3?**
    - A 500-LoC architectural change genuinely needs more coverage than a 20-LoC fix, but an unbounded exam turns every commit into a 10-minute exam — developers would bypass the hook (`git commit --no-verify`). The scale ladder (2–3 / 3–5 / 6–8) with hard length limits ("under 25 words, answerable in 30–45 seconds") balances rigor against velocity.
 3. **Why hard-block credentials before asking questions?**

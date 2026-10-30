@@ -2,7 +2,6 @@ import os
 import json
 import re
 import time
-import subprocess
 import http.client
 import ssl
 from urllib.parse import urlparse
@@ -21,14 +20,7 @@ def get_model() -> str:
 
 
 def get_judge_model() -> str:
-    """Model used to EVALUATE answers, deliberately separable from the
-    question-GENERATION model (RepoProbe: judge and checklist-author should
-    differ to avoid self-preference bias). UNDERSTANDING_AGENT_JUDGE_MODEL
-    overrides; absent it, the normal model is used.
-
-    Resolution lives in the central LLM manager (llm_manager.resolve_judge_model);
-    this stays as the compatibility surface callers already import.
-    """
+    """Model used to evaluate answers. Same installed model as question generation."""
     from .llm_manager import resolve_judge_model
     return resolve_judge_model()
 
@@ -45,9 +37,11 @@ def llm_request_target() -> tuple[str, str, str, str]:
     """Return scheme, host, path, and the exact URL the next call will use."""
     base_url = get_base_url().rstrip("/")
     provider = get_provider()
-    parsed = urlparse(base_url)
+    parsed = urlparse(base_url) if base_url else None
+    if not parsed or not parsed.netloc:
+        return "", "", "", "(model not configured)"
     scheme = parsed.scheme or "https"
-    host = parsed.netloc or "inference-api.nousresearch.com"
+    host = parsed.netloc
     base_path = parsed.path or "/v1"
     if _is_anthropic(base_url, provider):
         if base_path.endswith("/messages"):
@@ -100,66 +94,6 @@ def fail_open_enabled() -> bool:
     cannot run. Any other value (or unset) fails open with a warning.
     """
     return os.environ.get("UNDERSTANDING_AGENT_FAIL_MODE", "").strip().lower() != "closed"
-
-
-def _parse_key_from_file(filepath: str, preferred_keys: tuple = ("UNDERSTANDING_AGENT_API_KEY", "NOUS_API_KEY", "ANTHROPIC_API_KEY")) -> str:
-    """Extract specified keys from an env file (KEY=VALUE or export KEY=VALUE)."""
-    if not filepath or not os.path.exists(filepath):
-        return ""
-    try:
-        found_keys = {}
-        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if line.startswith("export "):
-                    line = line[7:].strip()
-                for key_name in preferred_keys:
-                    if line.startswith(key_name):
-                        parts = line.split("=", 1)
-                        if len(parts) == 2 and parts[0].strip() == key_name:
-                            val = parts[1].strip()
-                            if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
-                                val = val[1:-1].strip()
-                            if val:
-                                found_keys[key_name] = val
-        for pref in preferred_keys:
-            if pref in found_keys:
-                return found_keys[pref]
-    except Exception:
-        pass
-    return ""
-
-
-def _env_search_dirs():
-    """Directories searched for .env / .env.local: agent hook package root, cwd, its parents, git root."""
-    search_dirs = []
-
-    # 1. Always include agent hook's own installation root directory first
-    hook_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if os.path.isdir(hook_dir):
-        search_dirs.append(hook_dir)
-
-    cur = os.path.abspath(os.getcwd())
-    for _ in range(4):
-        if cur not in search_dirs:
-            search_dirs.append(cur)
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            break
-        cur = parent
-
-    try:
-        repo_root = subprocess.check_output(
-            ["git", "rev-parse", "--show-toplevel"],
-            text=True, stderr=subprocess.DEVNULL
-        ).strip()
-        if repo_root and repo_root not in search_dirs:
-            search_dirs.append(repo_root)
-    except Exception:
-        pass
-    return search_dirs
 
 
 def load_nous_api_key() -> str:
@@ -360,9 +294,11 @@ def call_llm_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: i
     never got a response.
     """
     if not api_key:
-        return 0, "No API key configured (set UNDERSTANDING_AGENT_API_KEY)"
+        return 0, "No API key configured. Pass --key when installing. The hook reads only ~/.config/understanding-agent/.env."
 
-    model_id = payload_dict.get("model") or "(none)"
+    model_id = payload_dict.get("model") or get_model()
+    if not model_id:
+        return 0, "No model configured. Pass --model sonnet, haiku, or nous when installing."
     print(f"  [LLM] model={model_id} -> {llm_request_target()[3]}", flush=True)
 
     # Suppress model thinking for providers that support it (bench-measured:
@@ -421,7 +357,7 @@ def _is_anthropic(base_url: str, provider: str) -> bool:
 
 def _format_anthropic_payload(payload_dict: dict) -> dict:
     anthropic_payload = {
-        "model": payload_dict.get("model", "claude-sonnet-5-5"),
+        "model": payload_dict.get("model") or "",
         "max_tokens": payload_dict.get("max_tokens", 1024),
     }
     if "temperature" in payload_dict:
