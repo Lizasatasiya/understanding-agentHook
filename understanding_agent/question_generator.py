@@ -150,8 +150,8 @@ class QuestionGenerator:
 
         api_key = load_nous_api_key()
         if not api_key:
-            print("\n  \033[93m[LLM] Warning: NOUS_API_KEY is not set.\033[0m")
-            print("  \033[2mSet NOUS_API_KEY in your .env or shell (export NOUS_API_KEY=\"...\") to generate custom questions.\033[0m\n", flush=True)
+            print("\n  \033[93m[LLM] Warning: UNDERSTANDING_AGENT_API_KEY is not set.\033[0m")
+            print("  \033[2mSet UNDERSTANDING_AGENT_API_KEY in your .env or shell to generate custom questions.\033[0m\n", flush=True)
             questions = self._fallback(context, hints)
             return self._finalize_checklists(self._ensure_standards_questions(questions, failed_std, context, api_key=None, hints=hints))
 

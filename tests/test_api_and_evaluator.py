@@ -66,23 +66,23 @@ class TestApiRetry(unittest.TestCase):
     def test_no_key_short_circuits(self):
         status, body = call_groq_api("", {"model": "m"})
         self.assertEqual(status, 0)
-        self.assertIn("GROQ_API_KEY", body)
+        self.assertIn("UNDERSTANDING_AGENT_API_KEY", body)
 
 
 class TestApiKeyLoading(unittest.TestCase):
-    def test_nous_env_var_wins(self):
-        with patch.dict(os.environ, {"NOUS_API_KEY": "from-nous-env"}):
-            self.assertEqual(load_nous_api_key(), "from-nous-env")
+    def test_api_key_env_var_wins(self):
+        with patch.dict(os.environ, {"UNDERSTANDING_AGENT_API_KEY": "from-env", "NOUS_API_KEY": "ignored"}):
+            self.assertEqual(load_nous_api_key(), "from-env")
 
-    def test_env_var_wins(self):
-        with patch.dict(os.environ, {"GROQ_API_KEY": "from-env"}):
+    def test_generic_api_key_env_var_wins(self):
+        with patch.dict(os.environ, {"API_KEY": "from-env", "GROQ_API_KEY": "ignored"}):
             self.assertEqual(load_groq_api_key(), "from-env")
 
     def test_reads_env_file_in_cwd(self):
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, ".env"), "w") as f:
-                f.write('GROQ_API_KEY="from-file"\n')
+                f.write('UNDERSTANDING_AGENT_API_KEY="from-file"\n')
             with patch("subprocess.check_output",
                        side_effect=Exception("not a git repo")), \
                  patch("os.path.abspath", lambda p: os.path.join(d, p)), \
@@ -223,7 +223,8 @@ class TestFollowUpGenerator(unittest.TestCase):
     def test_offline_fallback_question(self):
         from understanding_agent.followup_generator import FollowUpGenerator
         gen = FollowUpGenerator()
-        result = gen.generate(
+        with patch("understanding_agent.followup_generator.load_nous_api_key", return_value=""):
+            result = gen.generate(
             {"question": "What happens on failure?"},
             {"answer": "it retries"},
             {"missing_concepts": ["max retry attempts"]}

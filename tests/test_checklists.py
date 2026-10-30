@@ -208,14 +208,13 @@ class TestChecklistEvaluator(unittest.TestCase):
 
 
 class TestJudgeModel(unittest.TestCase):
-    def test_judge_model_env_override(self):
-        with patch.dict(os.environ, {"UNDERSTANDING_AGENT_JUDGE_MODEL": "test-judge-1"}):
-            self.assertEqual(get_judge_model(), "test-judge-1")
-
-    def test_judge_model_defaults_to_normal_model(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("UNDERSTANDING_AGENT_JUDGE_MODEL", None)
+    def test_evaluation_uses_the_same_model(self):
+        with patch.dict(os.environ, {
+            "UNDERSTANDING_AGENT_MODEL": "shared-model",
+            "UNDERSTANDING_AGENT_JUDGE_MODEL": "test-judge-1",
+        }):
             from understanding_agent.api_utils import get_model
+            self.assertEqual(get_judge_model(), "shared-model")
             self.assertEqual(get_judge_model(), get_model())
 
 

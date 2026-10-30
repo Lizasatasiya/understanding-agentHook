@@ -27,7 +27,6 @@ sys.path.insert(0, REPO_ROOT)
 from understanding_agent.api_utils import (  # noqa: E402
     load_api_key, call_llm_api, get_model, get_base_url, extract_json,
 )
-from understanding_agent.llm_manager import get_provider, resolve_judge_model  # noqa: E402
 from understanding_agent.question_generator import QuestionGenerator  # noqa: E402
 from understanding_agent.answer_evaluator import AnswerEvaluator  # noqa: E402
 from understanding_agent.change_intelligence import run_master_analysis  # noqa: E402
@@ -58,8 +57,7 @@ def main():
     # 1. Config resolution
     key = load_api_key()
     step("1. API key resolved", bool(key),
-         f"provider={get_provider()} model={get_model()} judge={resolve_judge_model()} "
-         f"endpoint={get_base_url()}" if key else "set NOUS_API_KEY (or UNDERSTANDING_AGENT_API_KEY) in .env")
+         f"model={get_model()} endpoint={get_base_url()}" if key else "set UNDERSTANDING_AGENT_API_KEY in .env")
 
     # 2. Transport
     status, body = call_llm_api(key, {

@@ -7,7 +7,7 @@ import http.client
 import ssl
 from urllib.parse import urlparse
 
-from .llm_manager import resolve_base_url, resolve_model, resolve_api_key, get_provider, PROVIDER_PRESETS, thinking_control_params
+from .llm_manager import resolve_base_url, resolve_model, resolve_api_key
 
 
 def get_base_url() -> str:
@@ -21,16 +21,8 @@ def get_model() -> str:
 
 
 def get_judge_model() -> str:
-    """Model used to EVALUATE answers, deliberately separable from the
-    question-GENERATION model (RepoProbe: judge and checklist-author should
-    differ to avoid self-preference bias). UNDERSTANDING_AGENT_JUDGE_MODEL
-    overrides; absent it, the normal model is used.
-
-    Resolution lives in the central LLM manager (llm_manager.resolve_judge_model);
-    this stays as the compatibility surface callers already import.
-    """
-    from .llm_manager import resolve_judge_model
-    return resolve_judge_model()
+    """Answer evaluation uses the same model as question generation."""
+    return get_model()
 
 
 def fail_open_enabled() -> bool:
@@ -95,75 +87,30 @@ def _env_search_dirs():
     return search_dirs
 
 
-def load_nous_api_key() -> str:
-    """Load the active provider's API key from the environment or .env files.
+_API_KEY_NAMES = ("UNDERSTANDING_AGENT_API_KEY", "LLM_API_KEY", "API_KEY")
 
-    Provider-aware, resolved via llm_manager:
-      1. UNDERSTANDING_AGENT_API_KEY / LLM_API_KEY / API_KEY / provider preset's env vars
-      2. .env / .env.local in cwd, parents, git root, ~/.config
-      3. All known provider keys (OPENAI, GEMINI, ANTHROPIC, DEEPSEEK, etc.)
+
+def load_nous_api_key() -> str:
+    """Load the single API key from the environment or .env files.
+
+    1. UNDERSTANDING_AGENT_API_KEY / LLM_API_KEY / API_KEY in the process environment
+    2. The same names in .env / .env.local (cwd, parents, git root, ~/.config)
     """
-    # 1. Environment variables (process env takes precedence over disk files)
     env_key = resolve_api_key()
     if env_key:
         return env_key
 
-    # Legacy GROQ_API_KEY env var outranks any key found in .env files
-    # (preserves the pre-manager precedence: all env vars before all files).
-    groq_env = os.environ.get("GROQ_API_KEY", "").strip()
-    if groq_env:
-        return groq_env
-
-    provider = get_provider()
-    preset = PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["custom"])
-    file_key_names = [
-        preset["api_key_env"],
-        "UNDERSTANDING_AGENT_API_KEY",
-        "LLM_API_KEY",
-        "API_KEY",
-    ] + list(preset.get("alt_api_key_envs", ()))
-
-    # Add all other known provider keys from presets so any provider key in .env is found
-    for prov_name, p_data in PROVIDER_PRESETS.items():
-        k = p_data.get("api_key_env")
-        if k and k not in file_key_names:
-            file_key_names.append(k)
-        for alt in p_data.get("alt_api_key_envs", ()):
-            if alt not in file_key_names:
-                file_key_names.append(alt)
-
     search_dirs = _env_search_dirs()
-
-    # 2. Check .env files for key names
     for d in search_dirs:
         for fname in (".env", ".env.local"):
-            key = _parse_key_from_file(os.path.join(d, fname), tuple(file_key_names))
+            key = _parse_key_from_file(os.path.join(d, fname), _API_KEY_NAMES)
             if key:
                 return key
 
-    key = _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), tuple(file_key_names))
-    if key:
-        return key
-
-    # 3. Legacy fallback names (NOUS_* then GROQ) for pre-manager setups
-    legacy_nous = ("NOUS_API_KEY", "NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY")
-    for d in search_dirs:
-        for fname in (".env", ".env.local"):
-            key = _parse_key_from_file(os.path.join(d, fname), legacy_nous)
-            if key:
-                return key
-
-    key = _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), legacy_nous)
-    if key:
-        return key
-
-    for d in search_dirs:
-        for fname in (".env", ".env.local"):
-            key = _parse_key_from_file(os.path.join(d, fname), ("GROQ_API_KEY",))
-            if key:
-                return key
-
-    return _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), ("GROQ_API_KEY",))
+    return _parse_key_from_file(
+        os.path.expanduser("~/.config/understanding-agent/.env"),
+        _API_KEY_NAMES,
+    )
 
 
 # Alias for backward compatibility
@@ -351,22 +298,17 @@ def _normalize_response_body(body: str, model_id: str = "") -> str:
 
 
 def call_llm_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: int = 2) -> tuple[int, str]:
-    """Send an HTTP request to the provider's API (OpenAI-compatible or Anthropic).
+    """Send an HTTP request to the org OpenAI-compatible chat-completions API.
 
     Retries transient failures (connection errors, 429, 5xx, and the gateway's
     200-with-empty-content glitch) with a short exponential backoff. Returns
     (status_code, response_text_or_error). status_code 0 means the request
     never got a response.
     """
-    provider = get_provider()
-    if not api_key and provider not in ("ollama",):
-        return 0, f"No API key configured for provider '{provider}' (set UNDERSTANDING_AGENT_API_KEY, GROQ_API_KEY, or NOUS_API_KEY)"
+    if not api_key:
+        return 0, "No API key configured (set UNDERSTANDING_AGENT_API_KEY)"
 
-    # Suppress model thinking for providers that support it (bench-measured:
-    # deepseek-v4-flash 51s -> 10s per call). Kill switch:
-    # UNDERSTANDING_AGENT_DISABLE_THINKING=off
     payload_dict = dict(payload_dict)
-    payload_dict.update(thinking_control_params())
 
     last_status, last_body = 0, ""
     for attempt in range(retries + 1):
@@ -406,73 +348,34 @@ call_groq_api = call_llm_api          # deprecated alias
 # load_api_key / load_groq_api_key aliases are defined near load_nous_api_key.
 
 
-def _is_anthropic(base_url: str, provider: str) -> bool:
-    return provider == "anthropic" or "api.anthropic.com" in base_url
-
-
-def _format_anthropic_payload(payload_dict: dict) -> dict:
-    anthropic_payload = {
-        "model": payload_dict.get("model", "claude-3-5-sonnet-20241022"),
-        "max_tokens": payload_dict.get("max_tokens", 1024),
-    }
-    if "temperature" in payload_dict:
-        anthropic_payload["temperature"] = payload_dict["temperature"]
-
-    raw_messages = payload_dict.get("messages", [])
-    system_parts = []
-    filtered_messages = []
-    for m in raw_messages:
-        if isinstance(m, dict):
-            if m.get("role") == "system":
-                system_parts.append(m.get("content", ""))
-            else:
-                filtered_messages.append({
-                    "role": m.get("role", "user"),
-                    "content": m.get("content", ""),
-                })
-    if system_parts:
-        anthropic_payload["system"] = "\n\n".join(system_parts)
-    anthropic_payload["messages"] = filtered_messages
-    return anthropic_payload
-
-
 def _nous_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[int, str]:
     base_url = get_base_url().rstrip("/")
-    provider = get_provider()
 
     parsed = urlparse(base_url)
-    scheme = parsed.scheme or "https"
-    host = parsed.netloc or "inference-api.nousresearch.com"
+    scheme = parsed.scheme or "http"
+    host = parsed.netloc or "llm.yorkdevs.link:2222"
     base_path = parsed.path or "/v1"
 
-    if _is_anthropic(base_url, provider):
-        if base_path.endswith("/messages"):
-            endpoint_path = base_path
-        else:
-            endpoint_path = f"{base_path}/messages" if base_path else "/v1/messages"
-        payload_data = _format_anthropic_payload(payload_dict)
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "User-Agent": "understanding-agent/0.3.0",
-        }
+    if base_path.endswith("/chat/completions"):
+        endpoint_path = base_path
     else:
-        # Standard OpenAI-compatible format
-        if base_path.endswith("/chat/completions"):
-            endpoint_path = base_path
-        else:
-            endpoint_path = f"{base_path}/chat/completions"
-        payload_data = payload_dict
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "understanding-agent/0.3.0",
-        }
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+        endpoint_path = f"{base_path}/chat/completions"
+    payload_data = payload_dict
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "understanding-agent/0.3.0",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
     payload = json.dumps(payload_data).encode("utf-8")
     headers["Content-Length"] = str(len(payload))
+
+    model_id = (payload_data.get("model") or payload_dict.get("model") or "").strip()
+    print(
+        f"  [LLM] model={model_id or '(none)'} -> {scheme}://{host}{endpoint_path}",
+        flush=True,
+    )
 
     conn = None
     try:

@@ -1,9 +1,7 @@
 import unittest
 from unittest.mock import patch
-import os
 
 from understanding_agent.api_utils import call_nous_api, _is_meaningful_response, _extract_message_text
-from understanding_agent.llm_manager import thinking_disabled, thinking_control_params
 
 
 def _ok_body(content):
@@ -19,37 +17,17 @@ def _empty_body():
 
 
 class TestThinkingControl(unittest.TestCase):
-    def test_thinking_disabled_by_default(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("UNDERSTANDING_AGENT_DISABLE_THINKING", None)
-            self.assertTrue(thinking_disabled())
-
-    def test_thinking_kill_switch(self):
-        for v in ("off", "0", "false", "no"):
-            with patch.dict(os.environ, {"UNDERSTANDING_AGENT_DISABLE_THINKING": v}):
-                self.assertFalse(thinking_disabled(), v)
-                self.assertEqual(thinking_control_params("nous"), {})
-
-    def test_nous_provider_sends_reasoning_effort_none(self):
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("UNDERSTANDING_AGENT_DISABLE_THINKING", None)
-            with patch.dict(os.environ, {"UNDERSTANDING_AGENT_PROVIDER": "nous"}):
-                self.assertEqual(thinking_control_params(), {"reasoning_effort": "none"})
-
-    def test_other_providers_get_no_thinking_params(self):
-        # Strict OpenAI endpoints 400 on unknown params; only send where supported.
-        with patch.dict(os.environ, {"UNDERSTANDING_AGENT_PROVIDER": "openai"}):
-            self.assertEqual(thinking_control_params(), {})
-
-    def test_call_nous_api_injects_thinking_params(self):
+    def test_requests_do_not_add_provider_params(self):
         seen = {}
+
         def fake_request(api_key, payload, timeout):
             seen.update(payload)
             return 200, _ok_body("[{\"question\": \"Why?\"}]")
-        with patch.dict(os.environ, {"UNDERSTANDING_AGENT_PROVIDER": "nous"}), \
-             patch("understanding_agent.api_utils._groq_request_once", side_effect=fake_request):
+
+        with patch("understanding_agent.api_utils._groq_request_once", side_effect=fake_request):
             call_nous_api("k", {"model": "m"})
-        self.assertEqual(seen.get("reasoning_effort"), "none")
+        self.assertNotIn("reasoning_effort", seen)
+        self.assertEqual(seen.get("model"), "m")
 
 
 class TestEmptyContentRetry(unittest.TestCase):

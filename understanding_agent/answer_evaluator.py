@@ -1,5 +1,5 @@
 from .evaluation_models import EvaluationResult
-from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, get_judge_model, fail_open_enabled
+from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, fail_open_enabled
 from .checklists import (
     parse_checklist,
     aggregate_score,
@@ -206,7 +206,7 @@ class AnswerEvaluator:
         """
         prompt = self._build_checklist_prompt(question, answer, checklist, context, summary, env=env)
         payload = {
-            "model": get_judge_model(),
+            "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.2,
             "max_tokens": 900,
