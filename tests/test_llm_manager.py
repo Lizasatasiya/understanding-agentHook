@@ -39,11 +39,13 @@ def _clean_env(f):
         "CEREBRAS_API_KEY", "CEREBRAS_MODEL", "CEREBRAS_BASE_URL",
         "SAMBANOVA_API_KEY", "SAMBANOVA_MODEL", "SAMBANOVA_BASE_URL",
         "OLLAMA_API_KEY", "OLLAMA_MODEL", "OLLAMA_BASE_URL",
+        "UNDERSTANDING_AGENT_IGNORE_DOTENV",
     )
     def wrapper(self):
         saved = {k: os.environ.get(k) for k in managed}
         for k in managed:
             os.environ.pop(k, None)
+        os.environ["UNDERSTANDING_AGENT_IGNORE_DOTENV"] = "1"
         try:
             f(self)
         finally:
@@ -66,7 +68,7 @@ class TestProviderPresets(unittest.TestCase):
         expected = (
             "nous", "groq", "openai", "gemini", "anthropic", "deepseek",
             "mistral", "openrouter", "together", "perplexity", "xai",
-            "cohere", "cerebras", "sambanova", "ollama", "custom"
+            "cohere", "cerebras", "sambanova", "ollama", "custom", "yorkdevs"
         )
         for name in expected:
             self.assertIn(name, PROVIDER_PRESETS)
@@ -78,8 +80,10 @@ class TestProviderPresets(unittest.TestCase):
 
 class TestProviderResolution(unittest.TestCase):
     @_clean_env
-    def test_default_provider_is_nous(self):
-        self.assertEqual(get_provider(), "nous")
+    def test_default_provider_is_org_gateway(self):
+        self.assertEqual(get_provider(), "yorkdevs")
+        self.assertEqual(resolve_base_url(), "http://llm.yorkdevs.link:2222/v1")
+        self.assertEqual(resolve_model(), "default")
 
     @_clean_env
     def test_provider_env_selects_preset(self):
@@ -89,9 +93,9 @@ class TestProviderResolution(unittest.TestCase):
         self.assertEqual(resolve_model(), "llama-3.3-70b-versatile")
 
     @_clean_env
-    def test_unknown_provider_falls_back_to_nous(self):
+    def test_unknown_provider_falls_back_to_org_gateway(self):
         os.environ["UNDERSTANDING_AGENT_PROVIDER"] = "does-not-exist"
-        self.assertEqual(get_provider(), "nous")
+        self.assertEqual(get_provider(), "yorkdevs")
 
     @_clean_env
     def test_one_env_var_switches_provider_and_uses_preset_model(self):

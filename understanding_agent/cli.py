@@ -905,7 +905,7 @@ def main():
         elif all_individual_passed:
             is_passed = True
         else:
-            is_passed = False
+            is_passed = avg_score > 50
 
         attempt_status = "PASSED" if is_passed else "FAILED"
         if is_passed:

@@ -33,6 +33,15 @@ GROQ_BASE_URL) keep working through the compat resolution below.
 """
 
 import os
+import subprocess
+
+# Org OpenAI-compatible gateway. Every call uses this unless a process
+# environment variable explicitly selects another provider.
+# Replace UNDERSTANDING_AGENT_API_KEY in .env (placeholder: sk-dummy-replace-me).
+# Replace ORG_LLM_MODEL with the id from GET /v1/models if "default" is rejected.
+ORG_LLM_BASE_URL = "http://llm.yorkdevs.link:2222/v1"
+ORG_LLM_MODEL = "default"
+DEFAULT_PROVIDER = "yorkdevs"
 
 # ---------------------------------------------------------------------------
 # Provider presets
@@ -137,6 +146,12 @@ PROVIDER_PRESETS = {
         "api_key_env": "UNDERSTANDING_AGENT_API_KEY",
         "alt_api_key_envs": ("LLM_API_KEY", "API_KEY"),
     },
+    "yorkdevs": {
+        "base_url": ORG_LLM_BASE_URL,
+        "model": ORG_LLM_MODEL,
+        "api_key_env": "YORKDEVS_API_KEY",
+        "alt_api_key_envs": (),
+    },
 }
 
 PROVIDER_ALIASES = {
@@ -148,6 +163,74 @@ PROVIDER_ALIASES = {
 
 def _env(name: str) -> str:
     return os.environ.get(name, "").strip()
+
+
+def _dotenv_values() -> dict:
+    """UNDERSTANDING_AGENT_* settings from .env files.
+
+    Process environment always wins. Tests set UNDERSTANDING_AGENT_IGNORE_DOTENV=1.
+    API keys are intentionally not loaded here; api_utils.load_nous_api_key owns that.
+    """
+    if _env("UNDERSTANDING_AGENT_IGNORE_DOTENV") == "1":
+        return {}
+    wanted = (
+        "UNDERSTANDING_AGENT_PROVIDER", "LLM_PROVIDER", "PROVIDER",
+        "UNDERSTANDING_AGENT_MODEL", "LLM_MODEL", "MODEL",
+        "UNDERSTANDING_AGENT_BASE_URL", "LLM_BASE_URL", "BASE_URL",
+        "UNDERSTANDING_AGENT_JUDGE_MODEL",
+    )
+    found = {}
+    search_dirs = []
+    cur = os.path.abspath(os.getcwd())
+    for _ in range(4):
+        search_dirs.append(cur)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    try:
+        repo_root = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+        if repo_root and repo_root not in search_dirs:
+            search_dirs.append(repo_root)
+    except Exception:
+        pass
+    search_dirs.append(os.path.expanduser("~/.config/understanding-agent"))
+
+    for directory in search_dirs:
+        for fname in (".env", ".env.local"):
+            path = os.path.join(directory, fname)
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        if line.startswith("export "):
+                            line = line[7:].strip()
+                        if "=" not in line:
+                            continue
+                        key, val = line.split("=", 1)
+                        key = key.strip()
+                        if key not in wanted or key in found:
+                            continue
+                        val = val.strip()
+                        if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                            val = val[1:-1].strip()
+                        if val:
+                            found[key] = val
+            except Exception:
+                continue
+    return found
+
+
+def _configured(name: str) -> str:
+    """Process env, then .env / .env.local."""
+    return _env(name) or _dotenv_values().get(name, "")
 
 
 def detect_provider_from_model(model: str) -> str | None:
@@ -247,19 +330,26 @@ def detect_provider_from_env() -> str | None:
 
 def get_provider() -> str:
     """Active provider name (a PROVIDER_PRESETS key)."""
+    # Process env only here, so a shell override still beats .env.
     p = (_env("UNDERSTANDING_AGENT_PROVIDER") or _env("LLM_PROVIDER") or _env("PROVIDER")).lower()
+    if not p:
+        # Repo .env selects the org gateway ahead of auto-detection from
+        # leftover provider keys (for example a Nous key still in .env).
+        p = (_dotenv_values().get("UNDERSTANDING_AGENT_PROVIDER")
+             or _dotenv_values().get("LLM_PROVIDER")
+             or _dotenv_values().get("PROVIDER")
+             or "").lower()
     if p:
         p = PROVIDER_ALIASES.get(p, p)
         if p in PROVIDER_PRESETS:
             return p
-        # Preserves legacy behavior of falling back to nous on unknown provider name
-        return "nous"
+        return DEFAULT_PROVIDER
 
     detected = detect_provider_from_env()
     if detected:
         return detected
 
-    return "nous"
+    return DEFAULT_PROVIDER
 
 
 def _detect_groq_key_shape(key: str) -> bool:
@@ -270,7 +360,7 @@ def resolve_base_url() -> str:
     """Resolve the chat-completions base URL for the active provider."""
     # 1. Explicit overrides win, in precedence order.
     for var in ("UNDERSTANDING_AGENT_BASE_URL", "LLM_BASE_URL", "BASE_URL"):
-        v = _env(var)
+        v = _configured(var)
         if v:
             return v
 
@@ -308,7 +398,7 @@ def resolve_model() -> str:
     """Resolve the model id for the active provider."""
     # 1. Generic model overrides
     for var in ("UNDERSTANDING_AGENT_MODEL", "LLM_MODEL", "MODEL"):
-        v = _env(var)
+        v = _configured(var)
         if v:
             return v
 
@@ -350,7 +440,7 @@ def resolve_judge_model() -> str:
     UNDERSTANDING_AGENT_JUDGE_MODEL overrides; absent it, the normal model is
     used (single-model setups are still valid, just less controlled).
     """
-    return _env("UNDERSTANDING_AGENT_JUDGE_MODEL") or resolve_model()
+    return _configured("UNDERSTANDING_AGENT_JUDGE_MODEL") or resolve_model()
 
 
 def _resolve_api_key(provider: str) -> str:
