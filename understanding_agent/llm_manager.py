@@ -137,12 +137,19 @@ PROVIDER_PRESETS = {
         "api_key_env": "UNDERSTANDING_AGENT_API_KEY",
         "alt_api_key_envs": ("LLM_API_KEY", "API_KEY"),
     },
+    "yorkdevs": {
+        "base_url": "http://llm.yorkdevs.link:2222/v1",
+        "model": "default",
+        "api_key_env": "YORKDEVS_API_KEY",
+        "alt_api_key_envs": (),
+    },
 }
 
 PROVIDER_ALIASES = {
     "google": "gemini",
     "claude": "anthropic",
     "grok": "xai",
+    "york": "yorkdevs",
 }
 
 
@@ -150,16 +157,86 @@ def _env(name: str) -> str:
     return os.environ.get(name, "").strip()
 
 
+def _env_search_dirs():
+    """Directories searched for .env: hook root, cwd, its parents, git root."""
+    search_dirs = []
+    # 1. Agent hook's own repo directory (first priority)
+    hook_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if os.path.isdir(hook_dir):
+        search_dirs.append(hook_dir)
+
+    cur = os.path.abspath(os.getcwd())
+    for _ in range(4):
+        if cur not in search_dirs:
+            search_dirs.append(cur)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+
+    try:
+        repo_root = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            text=True, stderr=subprocess.DEVNULL
+        ).strip()
+        if repo_root and repo_root not in search_dirs:
+            search_dirs.append(repo_root)
+    except Exception:
+        pass
+    return search_dirs
+
+
+def _dotenv_values() -> dict:
+    """Parse key-value pairs from .env files in search_dirs (first file found wins)."""
+    if _env("UNDERSTANDING_AGENT_IGNORE_DOTENV") == "1":
+        return {}
+    for directory in _env_search_dirs():
+        for fname in (".env", ".env.local"):
+            path = os.path.join(directory, fname)
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                    file_found = {}
+                    for line in fh:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        if line.startswith("export "):
+                            line = line[7:].strip()
+                        if "=" not in line:
+                            continue
+                        key, val = line.split("=", 1)
+                        key = key.strip()
+                        val = val.strip()
+                        if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                            val = val[1:-1].strip()
+                        if val:
+                            file_found[key] = val
+                    if file_found:
+                        return file_found
+            except Exception:
+                continue
+    return {}
+
+
+def _configured(name: str) -> str:
+    """Process env wins, then .env."""
+    return _env(name) or _dotenv_values().get(name, "")
+
+
 def detect_provider_from_model(model: str) -> str | None:
     """Infer provider name from the model identifier."""
     if not model:
         return None
     m = model.lower().strip()
+    if m == "default" or "york" in m:
+        return "yorkdevs"
     if m.startswith("gemini") or "gemini" in m:
         return "gemini"
-    if m.startswith("claude") or "claude" in m:
+    if m.startswith("claude") or "claude" in m or "anthropic" in m:
         return "anthropic"
-    if m.startswith(("gpt-", "o1", "o3", "chatgpt", "text-davinci")):
+    if m.startswith(("gpt-", "o1", "o3", "chatgpt", "text-davinci")) or "openai" in m:
         return "openai"
     if m.startswith("deepseek") or "deepseek" in m:
         return "deepseek"
@@ -173,7 +250,7 @@ def detect_provider_from_model(model: str) -> str | None:
         return "cohere"
     if m.startswith("qwen") or "qwen" in m:
         return "nous"
-    if m.startswith("llama") or "llama" in m:
+    if m.startswith("llama") or "llama" in m or "groq" in m:
         return "groq"
     return None
 
@@ -183,6 +260,8 @@ def detect_provider_from_key(key: str) -> str | None:
     if not key:
         return None
     k = key.strip()
+    if len(k) == 36 and k.count("-") == 4:
+        return "yorkdevs"
     if k.startswith("gsk_"):
         return "groq"
     if k.startswith("sk-ant-"):
@@ -195,20 +274,22 @@ def detect_provider_from_key(key: str) -> str | None:
         return "openrouter"
     if k.startswith("xai-"):
         return "xai"
+    if k.startswith("sk-proj-"):
+        return "openai"
     return None
 
 
 def detect_provider_from_env() -> str | None:
-    """Auto-detect active provider from environment variables."""
+    """Auto-detect active provider from environment variables or .env."""
     # 1. Model name in generic env vars
     for var in ("UNDERSTANDING_AGENT_MODEL", "LLM_MODEL", "MODEL"):
-        p = detect_provider_from_model(_env(var))
+        p = detect_provider_from_model(_configured(var))
         if p:
             return p
 
     # 2. Key shape in generic env vars
     for var in ("UNDERSTANDING_AGENT_API_KEY", "LLM_API_KEY", "API_KEY"):
-        p = detect_provider_from_key(_env(var))
+        p = detect_provider_from_key(_configured(var))
         if p:
             return p
 
@@ -217,12 +298,12 @@ def detect_provider_from_env() -> str | None:
         if prov_name in ("nous", "custom", "ollama"):
             continue
         for var in (preset["api_key_env"],) + preset["alt_api_key_envs"]:
-            if _env(var):
+            if _configured(var):
                 return prov_name
 
     # 4. Check Nous vars (with Groq key sniffing)
     for var in ("NOUS_API_KEY", "NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY"):
-        val = _env(var)
+        val = _configured(var)
         if val:
             if _detect_groq_key_shape(val):
                 return "groq"
@@ -232,14 +313,14 @@ def detect_provider_from_env() -> str | None:
     for prov_name in PROVIDER_PRESETS:
         if prov_name in ("custom",):
             continue
-        if _env(f"{prov_name.upper()}_MODEL"):
+        if _configured(f"{prov_name.upper()}_MODEL"):
             return prov_name
 
     # 6. Provider-specific base url env vars
     for prov_name in PROVIDER_PRESETS:
         if prov_name in ("custom",):
             continue
-        if _env(f"{prov_name.upper()}_BASE_URL"):
+        if _configured(f"{prov_name.upper()}_BASE_URL"):
             return prov_name
 
     return None
@@ -247,14 +328,36 @@ def detect_provider_from_env() -> str | None:
 
 def get_provider() -> str:
     """Active provider name (a PROVIDER_PRESETS key)."""
+    # 1. Process environment override always takes precedence
     p = (_env("UNDERSTANDING_AGENT_PROVIDER") or _env("LLM_PROVIDER") or _env("PROVIDER")).lower()
     if p:
         p = PROVIDER_ALIASES.get(p, p)
         if p in PROVIDER_PRESETS:
             return p
-        # Preserves legacy behavior of falling back to nous on unknown provider name
-        return "nous"
 
+    # 2. Infer provider directly from configured MODEL (in env or .env)
+    model_name = _configured("UNDERSTANDING_AGENT_MODEL") or _configured("LLM_MODEL") or _configured("MODEL")
+    p_from_model = detect_provider_from_model(model_name)
+    if p_from_model:
+        return p_from_model
+
+    # 3. Infer provider directly from configured API_KEY prefix/shape
+    key_val = _configured("UNDERSTANDING_AGENT_API_KEY") or _configured("LLM_API_KEY") or _configured("API_KEY")
+    p_from_key = detect_provider_from_key(key_val)
+    if p_from_key:
+        return p_from_key
+
+    # 4. Explicit provider in .env
+    p = (_dotenv_values().get("UNDERSTANDING_AGENT_PROVIDER")
+         or _dotenv_values().get("LLM_PROVIDER")
+         or _dotenv_values().get("PROVIDER")
+         or "").lower()
+    if p:
+        p = PROVIDER_ALIASES.get(p, p)
+        if p in PROVIDER_PRESETS:
+            return p
+
+    # 5. Other provider detections
     detected = detect_provider_from_env()
     if detected:
         return detected
@@ -270,7 +373,7 @@ def resolve_base_url() -> str:
     """Resolve the chat-completions base URL for the active provider."""
     # 1. Explicit overrides win, in precedence order.
     for var in ("UNDERSTANDING_AGENT_BASE_URL", "LLM_BASE_URL", "BASE_URL"):
-        v = _env(var)
+        v = _configured(var)
         if v:
             return v
 
@@ -290,7 +393,7 @@ def resolve_base_url() -> str:
         "OLLAMA_BASE_URL",
     )
     for var in provider_base_urls:
-        v = _env(var)
+        v = _configured(var)
         if v:
             return v
 
@@ -308,7 +411,7 @@ def resolve_model() -> str:
     """Resolve the model id for the active provider."""
     # 1. Generic model overrides
     for var in ("UNDERSTANDING_AGENT_MODEL", "LLM_MODEL", "MODEL"):
-        v = _env(var)
+        v = _configured(var)
         if v:
             return v
 
@@ -329,7 +432,7 @@ def resolve_model() -> str:
         "OLLAMA_MODEL",
     )
     for var in provider_models:
-        v = _env(var)
+        v = _configured(var)
         if v:
             return v
 
@@ -356,18 +459,18 @@ def resolve_judge_model() -> str:
 def _resolve_api_key(provider: str) -> str:
     """Resolve the API key for a provider, honoring central vars first."""
     for var in ("UNDERSTANDING_AGENT_API_KEY", "LLM_API_KEY", "API_KEY"):
-        v = _env(var)
+        v = _configured(var)
         if v:
             return v
 
     if provider in PROVIDER_PRESETS:
         preset = PROVIDER_PRESETS[provider]
         for var in (preset["api_key_env"],) + preset["alt_api_key_envs"]:
-            v = _env(var)
+            v = _configured(var)
             if v:
                 return v
 
-    v = _env(f"{provider.upper()}_API_KEY")
+    v = _configured(f"{provider.upper()}_API_KEY")
     if v:
         return v
 
@@ -386,7 +489,7 @@ def resolve_api_key() -> str:
     # means the user configured Groq before the provider var existed.
     if provider == "nous":
         for var in ("NOUS_API_KEY", "NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY"):
-            v = _env(var)
+            v = _configured(var)
             if _detect_groq_key_shape(v):
                 return v
 
@@ -395,7 +498,7 @@ def resolve_api_key() -> str:
         if prov_name in ("custom", "ollama"):
             continue
         for var in (preset["api_key_env"],) + preset["alt_api_key_envs"]:
-            v = _env(var)
+            v = _configured(var)
             if v:
                 return v
 

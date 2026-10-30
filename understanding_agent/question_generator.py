@@ -440,13 +440,14 @@ class QuestionGenerator:
             "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.4,
-            "max_tokens": 1200
+            "max_tokens": max(1500, target_count * 350)
         }
 
         status, body = call_nous_api(api_key, payload, timeout=30)
         if status != 200:
             if status != 0:
-                print(f"\n  \033[93m[Nous API returned HTTP {status}: {body[:200]}]\033[0m\n", flush=True)
+                from .llm_manager import get_provider
+                print(f"\n  \033[93m[{get_provider()} API returned HTTP {status}: {body[:200]}]\033[0m\n", flush=True)
             return []
 
         try:

@@ -73,11 +73,18 @@ def _parse_key_from_file(filepath: str, preferred_keys: tuple = ("NOUS_API_KEY",
 
 
 def _env_search_dirs():
-    """Directories searched for .env / .env.local: cwd, its parents, git root."""
+    """Directories searched for .env / .env.local: agent hook package root, cwd, its parents, git root."""
     search_dirs = []
+
+    # 1. Always include agent hook's own installation root directory first
+    hook_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if os.path.isdir(hook_dir):
+        search_dirs.append(hook_dir)
+
     cur = os.path.abspath(os.getcwd())
     for _ in range(4):
-        search_dirs.append(cur)
+        if cur not in search_dirs:
+            search_dirs.append(cur)
         parent = os.path.dirname(cur)
         if parent == cur:
             break
@@ -117,10 +124,10 @@ def load_nous_api_key() -> str:
     provider = get_provider()
     preset = PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["custom"])
     file_key_names = [
-        preset["api_key_env"],
-        "UNDERSTANDING_AGENT_API_KEY",
-        "LLM_API_KEY",
         "API_KEY",
+        "LLM_API_KEY",
+        "UNDERSTANDING_AGENT_API_KEY",
+        preset["api_key_env"],
     ] + list(preset.get("alt_api_key_envs", ()))
 
     # Add all other known provider keys from presets so any provider key in .env is found
