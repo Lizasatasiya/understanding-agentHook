@@ -36,9 +36,12 @@ class TestThinkingControl(unittest.TestCase):
             with patch.dict(os.environ, {"UNDERSTANDING_AGENT_PROVIDER": "nous"}):
                 self.assertEqual(thinking_control_params(), {"reasoning_effort": "none"})
 
-    def test_other_providers_get_no_thinking_params(self):
-        # Strict OpenAI endpoints 400 on unknown params; only send where supported.
-        with patch.dict(os.environ, {"UNDERSTANDING_AGENT_PROVIDER": "openai"}):
+    def test_anthropic_models_get_no_thinking_params(self):
+        # Anthropic rejects reasoning_effort; only Nous gets it.
+        with patch.dict(os.environ, {
+            "UNDERSTANDING_AGENT_MODEL": "sonnet",
+            "UNDERSTANDING_AGENT_IGNORE_DOTENV": "1",
+        }):
             self.assertEqual(thinking_control_params(), {})
 
     def test_call_nous_api_injects_thinking_params(self):

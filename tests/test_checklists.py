@@ -208,9 +208,13 @@ class TestChecklistEvaluator(unittest.TestCase):
 
 
 class TestJudgeModel(unittest.TestCase):
-    def test_judge_model_env_override(self):
-        with patch.dict(os.environ, {"UNDERSTANDING_AGENT_JUDGE_MODEL": "test-judge-1"}):
-            self.assertEqual(get_judge_model(), "test-judge-1")
+    def test_judge_model_ignores_separate_judge_env(self):
+        with patch.dict(os.environ, {
+            "UNDERSTANDING_AGENT_MODEL": "haiku",
+            "UNDERSTANDING_AGENT_JUDGE_MODEL": "test-judge-1",
+            "UNDERSTANDING_AGENT_IGNORE_DOTENV": "1",
+        }):
+            self.assertEqual(get_judge_model(), "claude-3-5-haiku-20241022")
 
     def test_judge_model_defaults_to_normal_model(self):
         with patch.dict(os.environ, {}, clear=False):

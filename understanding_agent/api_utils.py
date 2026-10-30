@@ -7,7 +7,7 @@ import http.client
 import ssl
 from urllib.parse import urlparse
 
-from .llm_manager import resolve_base_url, resolve_model, resolve_api_key, get_provider, PROVIDER_PRESETS, thinking_control_params
+from .llm_manager import resolve_base_url, resolve_model, resolve_api_key, get_provider, thinking_control_params
 
 
 def get_base_url() -> str:
@@ -42,7 +42,7 @@ def fail_open_enabled() -> bool:
     return os.environ.get("UNDERSTANDING_AGENT_FAIL_MODE", "").strip().lower() != "closed"
 
 
-def _parse_key_from_file(filepath: str, preferred_keys: tuple = ("NOUS_API_KEY", "NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY", "GROQ_API_KEY")) -> str:
+def _parse_key_from_file(filepath: str, preferred_keys: tuple = ("UNDERSTANDING_AGENT_API_KEY", "NOUS_API_KEY", "ANTHROPIC_API_KEY")) -> str:
     """Extract specified keys from an env file (KEY=VALUE or export KEY=VALUE)."""
     if not filepath or not os.path.exists(filepath):
         return ""
@@ -105,72 +105,36 @@ def _env_search_dirs():
 def load_nous_api_key() -> str:
     """Load the active provider's API key from the environment or .env files.
 
-    Provider-aware, resolved via llm_manager:
-      1. UNDERSTANDING_AGENT_API_KEY / LLM_API_KEY / API_KEY / provider preset's env vars
-      2. .env / .env.local in cwd, parents, git root, ~/.config
-      3. All known provider keys (OPENAI, GEMINI, ANTHROPIC, DEEPSEEK, etc.)
+    Order:
+      1. UNDERSTANDING_AGENT_API_KEY / LLM_API_KEY / API_KEY, then the
+         selected model's own key (NOUS_* or ANTHROPIC_*/CLAUDE_API_KEY)
+      2. The same names in .env / .env.local and ~/.config/understanding-agent/.env
     """
-    # 1. Environment variables (process env takes precedence over disk files)
     env_key = resolve_api_key()
     if env_key:
         return env_key
 
-    # Legacy GROQ_API_KEY env var outranks any key found in .env files
-    # (preserves the pre-manager precedence: all env vars before all files).
-    groq_env = os.environ.get("GROQ_API_KEY", "").strip()
-    if groq_env:
-        return groq_env
-
-    provider = get_provider()
-    preset = PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["custom"])
-    file_key_names = [
-        "API_KEY",
-        "LLM_API_KEY",
+    file_key_names = (
         "UNDERSTANDING_AGENT_API_KEY",
-        preset["api_key_env"],
-    ] + list(preset.get("alt_api_key_envs", ()))
+        "LLM_API_KEY",
+        "API_KEY",
+        "NOUS_API_KEY",
+        "NOUSRESEARCH_API_KEY",
+        "NOUS_PORTAL_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "CLAUDE_API_KEY",
+    )
 
-    # Add all other known provider keys from presets so any provider key in .env is found
-    for prov_name, p_data in PROVIDER_PRESETS.items():
-        k = p_data.get("api_key_env")
-        if k and k not in file_key_names:
-            file_key_names.append(k)
-        for alt in p_data.get("alt_api_key_envs", ()):
-            if alt not in file_key_names:
-                file_key_names.append(alt)
-
-    search_dirs = _env_search_dirs()
-
-    # 2. Check .env files for key names
-    for d in search_dirs:
+    for d in _env_search_dirs():
         for fname in (".env", ".env.local"):
-            key = _parse_key_from_file(os.path.join(d, fname), tuple(file_key_names))
+            key = _parse_key_from_file(os.path.join(d, fname), file_key_names)
             if key:
                 return key
 
-    key = _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), tuple(file_key_names))
-    if key:
-        return key
-
-    # 3. Legacy fallback names (NOUS_* then GROQ) for pre-manager setups
-    legacy_nous = ("NOUS_API_KEY", "NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY")
-    for d in search_dirs:
-        for fname in (".env", ".env.local"):
-            key = _parse_key_from_file(os.path.join(d, fname), legacy_nous)
-            if key:
-                return key
-
-    key = _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), legacy_nous)
-    if key:
-        return key
-
-    for d in search_dirs:
-        for fname in (".env", ".env.local"):
-            key = _parse_key_from_file(os.path.join(d, fname), ("GROQ_API_KEY",))
-            if key:
-                return key
-
-    return _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), ("GROQ_API_KEY",))
+    return _parse_key_from_file(
+        os.path.expanduser("~/.config/understanding-agent/.env"),
+        file_key_names,
+    )
 
 
 # Alias for backward compatibility
@@ -365,9 +329,8 @@ def call_llm_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: i
     (status_code, response_text_or_error). status_code 0 means the request
     never got a response.
     """
-    provider = get_provider()
-    if not api_key and provider not in ("ollama",):
-        return 0, f"No API key configured for provider '{provider}' (set UNDERSTANDING_AGENT_API_KEY, GROQ_API_KEY, or NOUS_API_KEY)"
+    if not api_key:
+        return 0, "No API key configured (set UNDERSTANDING_AGENT_API_KEY)"
 
     # Suppress model thinking for providers that support it (bench-measured:
     # deepseek-v4-flash 51s -> 10s per call). Kill switch:

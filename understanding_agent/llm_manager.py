@@ -1,155 +1,33 @@
-"""Central LLM provider manager.
+"""LLM configuration for the three supported models: nous, sonnet, and haiku.
 
-ONE place to configure every LLM the hook talks to. Fully model-agnostic and
-provider-agnostic: any provider exposing an OpenAI-compatible /chat/completions
-endpoint (or Anthropic /messages) works out of the box simply by setting a model
-name and an API key.
-
-Configuration (generic or provider-specific):
-
-    Generic / Unified:
-        MODEL / LLM_MODEL / UNDERSTANDING_AGENT_MODEL       model id
-        API_KEY / LLM_API_KEY / UNDERSTANDING_AGENT_API_KEY key
-        BASE_URL / LLM_BASE_URL / UNDERSTANDING_AGENT_BASE_URL endpoint override
-        PROVIDER / LLM_PROVIDER / UNDERSTANDING_AGENT_PROVIDER preset name
-
-    Provider-specific (auto-detected when present):
-        OPENAI_API_KEY / OPENAI_MODEL
-        GEMINI_API_KEY (or GOOGLE_API_KEY) / GEMINI_MODEL
-        ANTHROPIC_API_KEY / ANTHROPIC_MODEL
-        DEEPSEEK_API_KEY / DEEPSEEK_MODEL
-        GROQ_API_KEY / GROQ_MODEL
-        MISTRAL_API_KEY / MISTRAL_MODEL
-        OPENROUTER_API_KEY / OPENROUTER_MODEL
-        TOGETHER_API_KEY / TOGETHER_MODEL
-        PERPLEXITY_API_KEY / PERPLEXITY_MODEL
-        XAI_API_KEY / XAI_MODEL
-        COHERE_API_KEY / COHERE_MODEL
-        OLLAMA_BASE_URL / OLLAMA_MODEL
-
-Changing provider or model is ONE env var, not five. Legacy variables
-(NOUS_API_KEY / NOUS_MODEL / NOUS_BASE_URL / GROQ_API_KEY / GROQ_MODEL /
-GROQ_BASE_URL) keep working through the compat resolution below.
+UNDERSTANDING_AGENT_MODEL selects one of those names. Questions and answer
+checks both use it. The API key is UNDERSTANDING_AGENT_API_KEY.
 """
 
 import os
+import subprocess
 
 # ---------------------------------------------------------------------------
-# Provider presets
+# Supported models
 # ---------------------------------------------------------------------------
 
-PROVIDER_PRESETS = {
+# Questions and answer checks both use whichever of these the installer selected.
+SUPPORTED_MODELS = {
     "nous": {
-        "base_url": "https://inference-api.nousresearch.com/v1",
+        "provider": "nous",
         "model": "qwen/qwen3-coder-30b-a3b-instruct",
-        "api_key_env": "NOUS_API_KEY",
-        "alt_api_key_envs": ("NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY"),
+        "base_url": "https://inference-api.nousresearch.com/v1",
     },
-    "groq": {
-        "base_url": "https://api.groq.com/openai/v1",
-        "model": "llama-3.3-70b-versatile",
-        "api_key_env": "GROQ_API_KEY",
-        "alt_api_key_envs": (),
-    },
-    "openai": {
-        "base_url": "https://api.openai.com/v1",
-        "model": "gpt-4o-mini",
-        "api_key_env": "OPENAI_API_KEY",
-        "alt_api_key_envs": (),
-    },
-    "gemini": {
-        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-        "model": "gemini-2.0-flash",
-        "api_key_env": "GEMINI_API_KEY",
-        "alt_api_key_envs": ("GOOGLE_API_KEY", "GOOGLE_AI_API_KEY"),
-    },
-    "anthropic": {
-        "base_url": "https://api.anthropic.com/v1",
+    "sonnet": {
+        "provider": "anthropic",
         "model": "claude-3-5-sonnet-20241022",
-        "api_key_env": "ANTHROPIC_API_KEY",
-        "alt_api_key_envs": ("CLAUDE_API_KEY",),
+        "base_url": "https://api.anthropic.com/v1",
     },
-    "deepseek": {
-        "base_url": "https://api.deepseek.com/v1",
-        "model": "deepseek-chat",
-        "api_key_env": "DEEPSEEK_API_KEY",
-        "alt_api_key_envs": (),
+    "haiku": {
+        "provider": "anthropic",
+        "model": "claude-3-5-haiku-20241022",
+        "base_url": "https://api.anthropic.com/v1",
     },
-    "mistral": {
-        "base_url": "https://api.mistral.ai/v1",
-        "model": "mistral-small-latest",
-        "api_key_env": "MISTRAL_API_KEY",
-        "alt_api_key_envs": (),
-    },
-    "openrouter": {
-        "base_url": "https://openrouter.ai/api/v1",
-        "model": "openai/gpt-4o-mini",
-        "api_key_env": "OPENROUTER_API_KEY",
-        "alt_api_key_envs": (),
-    },
-    "together": {
-        "base_url": "https://api.together.xyz/v1",
-        "model": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
-        "api_key_env": "TOGETHER_API_KEY",
-        "alt_api_key_envs": (),
-    },
-    "perplexity": {
-        "base_url": "https://api.perplexity.ai",
-        "model": "sonar",
-        "api_key_env": "PERPLEXITY_API_KEY",
-        "alt_api_key_envs": (),
-    },
-    "xai": {
-        "base_url": "https://api.x.ai/v1",
-        "model": "grok-2-latest",
-        "api_key_env": "XAI_API_KEY",
-        "alt_api_key_envs": ("GROK_API_KEY",),
-    },
-    "cohere": {
-        "base_url": "https://api.cohere.com/v2",
-        "model": "command-r-plus",
-        "api_key_env": "COHERE_API_KEY",
-        "alt_api_key_envs": (),
-    },
-    "cerebras": {
-        "base_url": "https://api.cerebras.ai/v1",
-        "model": "llama3.1-70b",
-        "api_key_env": "CEREBRAS_API_KEY",
-        "alt_api_key_envs": (),
-    },
-    "sambanova": {
-        "base_url": "https://api.sambanova.ai/v1",
-        "model": "Meta-Llama-3.1-70B-Instruct",
-        "api_key_env": "SAMBANOVA_API_KEY",
-        "alt_api_key_envs": (),
-    },
-    "ollama": {
-        # Local server; no key required.
-        "base_url": "http://localhost:11434/v1",
-        "model": "qwen2.5-coder:7b",
-        "api_key_env": "OLLAMA_API_KEY",
-        "alt_api_key_envs": (),
-    },
-    "custom": {
-        # Fully driven by BASE_URL / MODEL / API_KEY.
-        "base_url": "",
-        "model": "",
-        "api_key_env": "UNDERSTANDING_AGENT_API_KEY",
-        "alt_api_key_envs": ("LLM_API_KEY", "API_KEY"),
-    },
-    "yorkdevs": {
-        "base_url": "http://llm.yorkdevs.link:2222/v1",
-        "model": "default",
-        "api_key_env": "YORKDEVS_API_KEY",
-        "alt_api_key_envs": (),
-    },
-}
-
-PROVIDER_ALIASES = {
-    "google": "gemini",
-    "claude": "anthropic",
-    "grok": "xai",
-    "york": "yorkdevs",
 }
 
 
@@ -225,287 +103,91 @@ def _configured(name: str) -> str:
     return _env(name) or _dotenv_values().get(name, "")
 
 
-def detect_provider_from_model(model: str) -> str | None:
-    """Infer provider name from the model identifier."""
-    if not model:
-        return None
-    m = model.lower().strip()
-    if m == "default" or "york" in m:
-        return "yorkdevs"
-    if m.startswith("gemini") or "gemini" in m:
-        return "gemini"
-    if m.startswith("claude") or "claude" in m or "anthropic" in m:
-        return "anthropic"
-    if m.startswith(("gpt-", "o1", "o3", "chatgpt", "text-davinci")) or "openai" in m:
-        return "openai"
-    if m.startswith("deepseek") or "deepseek" in m:
-        return "deepseek"
-    if any(k in m for k in ("mistral", "codestral", "mixtral", "ministral", "pixtral")):
-        return "mistral"
-    if m.startswith("sonar") or "sonar" in m:
-        return "perplexity"
-    if m.startswith("grok") or "grok" in m:
-        return "xai"
-    if m.startswith("command") or "command" in m:
-        return "cohere"
-    if m.startswith("qwen") or "qwen" in m:
-        return "nous"
-    if m.startswith("llama") or "llama" in m or "groq" in m:
-        return "groq"
+def _global_model_choice() -> str:
+    """Model name written by install.sh into ~/.config/understanding-agent/.env."""
+    if _env("UNDERSTANDING_AGENT_IGNORE_DOTENV") == "1":
+        return ""
+    path = os.path.expanduser("~/.config/understanding-agent/.env")
+    if not os.path.isfile(path):
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#") or line.startswith("export "):
+                    if line.startswith("export "):
+                        line = line[7:].strip()
+                    else:
+                        continue
+                if "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                if key.strip() != "UNDERSTANDING_AGENT_MODEL":
+                    continue
+                val = val.strip()
+                if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                    val = val[1:-1].strip()
+                return val.lower()
+    except Exception:
+        return ""
+    return ""
+
+
+def installed_model_choice() -> str | None:
+    """Return sonnet, haiku, or nous when that is the configured model."""
+    raw = (
+        _env("UNDERSTANDING_AGENT_MODEL")
+        or _env("LLM_MODEL")
+        or _env("MODEL")
+        or _global_model_choice()
+        or _dotenv_values().get("UNDERSTANDING_AGENT_MODEL", "")
+    ).lower()
+    if raw in SUPPORTED_MODELS:
+        return raw
     return None
 
 
-def detect_provider_from_key(key: str) -> str | None:
-    """Infer provider name from the API key format/prefix."""
-    if not key:
-        return None
-    k = key.strip()
-    if len(k) == 36 and k.count("-") == 4:
-        return "yorkdevs"
-    if k.startswith("gsk_"):
-        return "groq"
-    if k.startswith("sk-ant-"):
-        return "anthropic"
-    if k.startswith("AIzaSy"):
-        return "gemini"
-    if k.startswith("sk-nous-"):
-        return "nous"
-    if k.startswith("sk-or-"):
-        return "openrouter"
-    if k.startswith("xai-"):
-        return "xai"
-    if k.startswith("sk-proj-"):
-        return "openai"
-    return None
-
-
-def detect_provider_from_env() -> str | None:
-    """Auto-detect active provider from environment variables or .env."""
-    # 1. Model name in generic env vars
-    for var in ("UNDERSTANDING_AGENT_MODEL", "LLM_MODEL", "MODEL"):
-        p = detect_provider_from_model(_configured(var))
-        if p:
-            return p
-
-    # 2. Key shape in generic env vars
-    for var in ("UNDERSTANDING_AGENT_API_KEY", "LLM_API_KEY", "API_KEY"):
-        p = detect_provider_from_key(_configured(var))
-        if p:
-            return p
-
-    # 3. Provider-specific key env vars (skip nous and custom to allow specific detection)
-    for prov_name, preset in PROVIDER_PRESETS.items():
-        if prov_name in ("nous", "custom", "ollama"):
-            continue
-        for var in (preset["api_key_env"],) + preset["alt_api_key_envs"]:
-            if _configured(var):
-                return prov_name
-
-    # 4. Check Nous vars (with Groq key sniffing)
-    for var in ("NOUS_API_KEY", "NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY"):
-        val = _configured(var)
-        if val:
-            if _detect_groq_key_shape(val):
-                return "groq"
-            return "nous"
-
-    # 5. Provider-specific model env vars
-    for prov_name in PROVIDER_PRESETS:
-        if prov_name in ("custom",):
-            continue
-        if _configured(f"{prov_name.upper()}_MODEL"):
-            return prov_name
-
-    # 6. Provider-specific base url env vars
-    for prov_name in PROVIDER_PRESETS:
-        if prov_name in ("custom",):
-            continue
-        if _configured(f"{prov_name.upper()}_BASE_URL"):
-            return prov_name
-
-    return None
+def _active_choice() -> str:
+    """sonnet, haiku, or nous. Anything else falls back to nous."""
+    return installed_model_choice() or "nous"
 
 
 def get_provider() -> str:
-    """Active provider name (a PROVIDER_PRESETS key)."""
-    # 1. Process environment override always takes precedence
-    p = (_env("UNDERSTANDING_AGENT_PROVIDER") or _env("LLM_PROVIDER") or _env("PROVIDER")).lower()
-    if p:
-        p = PROVIDER_ALIASES.get(p, p)
-        if p in PROVIDER_PRESETS:
-            return p
-
-    # 2. Infer provider directly from configured MODEL (in env or .env)
-    model_name = _configured("UNDERSTANDING_AGENT_MODEL") or _configured("LLM_MODEL") or _configured("MODEL")
-    p_from_model = detect_provider_from_model(model_name)
-    if p_from_model:
-        return p_from_model
-
-    # 3. Infer provider directly from configured API_KEY prefix/shape
-    key_val = _configured("UNDERSTANDING_AGENT_API_KEY") or _configured("LLM_API_KEY") or _configured("API_KEY")
-    p_from_key = detect_provider_from_key(key_val)
-    if p_from_key:
-        return p_from_key
-
-    # 4. Explicit provider in .env
-    p = (_dotenv_values().get("UNDERSTANDING_AGENT_PROVIDER")
-         or _dotenv_values().get("LLM_PROVIDER")
-         or _dotenv_values().get("PROVIDER")
-         or "").lower()
-    if p:
-        p = PROVIDER_ALIASES.get(p, p)
-        if p in PROVIDER_PRESETS:
-            return p
-
-    # 5. Other provider detections
-    detected = detect_provider_from_env()
-    if detected:
-        return detected
-
-    return "nous"
-
-
-def _detect_groq_key_shape(key: str) -> bool:
-    return key.startswith("gsk_")
+    """nous or anthropic, from the selected model."""
+    return SUPPORTED_MODELS[_active_choice()]["provider"]
 
 
 def resolve_base_url() -> str:
-    """Resolve the chat-completions base URL for the active provider."""
-    # 1. Explicit overrides win, in precedence order.
-    for var in ("UNDERSTANDING_AGENT_BASE_URL", "LLM_BASE_URL", "BASE_URL"):
-        v = _configured(var)
-        if v:
-            return v
-
-    provider = get_provider()
-
-    # 2. Provider-specific base url env vars
-    provider_base_urls = (
-        f"{provider.upper()}_BASE_URL",
-        "NOUS_BASE_URL",
-        "GROQ_BASE_URL",
-        "OPENAI_BASE_URL",
-        "GEMINI_BASE_URL",
-        "GOOGLE_BASE_URL",
-        "ANTHROPIC_BASE_URL",
-        "CLAUDE_BASE_URL",
-        "DEEPSEEK_BASE_URL",
-        "OLLAMA_BASE_URL",
-    )
-    for var in provider_base_urls:
-        v = _configured(var)
-        if v:
-            return v
-
-    if provider == "nous":
-        # Legacy sniff: a gsk_ key with no explicit provider means Groq.
-        if _detect_groq_key_shape(_resolve_api_key("nous")):
-            return PROVIDER_PRESETS["groq"]["base_url"]
-
-    if provider in PROVIDER_PRESETS:
-        return PROVIDER_PRESETS[provider]["base_url"]
-    return ""
+    """Endpoint for the selected model."""
+    return SUPPORTED_MODELS[_active_choice()]["base_url"]
 
 
 def resolve_model() -> str:
-    """Resolve the model id for the active provider."""
-    # 1. Generic model overrides
-    for var in ("UNDERSTANDING_AGENT_MODEL", "LLM_MODEL", "MODEL"):
-        v = _configured(var)
-        if v:
-            return v
-
-    provider = get_provider()
-
-    # 2. Provider-specific model env vars
-    provider_models = (
-        f"{provider.upper()}_MODEL",
-        "NOUS_MODEL",
-        "GROQ_MODEL",
-        "OPENAI_MODEL",
-        "GEMINI_MODEL",
-        "GOOGLE_MODEL",
-        "ANTHROPIC_MODEL",
-        "CLAUDE_MODEL",
-        "DEEPSEEK_MODEL",
-        "MISTRAL_MODEL",
-        "OLLAMA_MODEL",
-    )
-    for var in provider_models:
-        v = _configured(var)
-        if v:
-            return v
-
-    if provider == "nous" and _detect_groq_key_shape(_resolve_api_key("nous")):
-        return PROVIDER_PRESETS["groq"]["model"]
-
-    if provider in PROVIDER_PRESETS:
-        return PROVIDER_PRESETS[provider]["model"]
-    return ""
+    """Model id for questions and answer checks."""
+    return SUPPORTED_MODELS[_active_choice()]["model"]
 
 
 def resolve_judge_model() -> str:
-    """Model used to EVALUATE answers (the judge), separable from the
-    question-GENERATION model on purpose: authoring and judging the same
-    checklist with the same model invites self-preference bias
-    (RepoProbe, arXiv 2608.04783, keeps its judge outside the evaluated set).
-
-    UNDERSTANDING_AGENT_JUDGE_MODEL overrides; absent it, the normal model is
-    used (single-model setups are still valid, just less controlled).
-    """
-    return _env("UNDERSTANDING_AGENT_JUDGE_MODEL") or resolve_model()
+    """Answer checks use the same model as question generation."""
+    return resolve_model()
 
 
-def _resolve_api_key(provider: str) -> str:
-    """Resolve the API key for a provider, honoring central vars first."""
-    for var in ("UNDERSTANDING_AGENT_API_KEY", "LLM_API_KEY", "API_KEY"):
-        v = _configured(var)
-        if v:
-            return v
-
-    if provider in PROVIDER_PRESETS:
-        preset = PROVIDER_PRESETS[provider]
-        for var in (preset["api_key_env"],) + preset["alt_api_key_envs"]:
-            v = _configured(var)
-            if v:
-                return v
-
-    v = _configured(f"{provider.upper()}_API_KEY")
-    if v:
-        return v
-
-    return ""
+_KEY_ENVS = {
+    "nous": ("NOUS_API_KEY", "NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY"),
+    "anthropic": ("ANTHROPIC_API_KEY", "CLAUDE_API_KEY"),
+}
 
 
 def resolve_api_key() -> str:
-    """Resolve the API key for the active provider (may be empty for local)."""
-    provider = get_provider()
-
-    key = _resolve_api_key(provider)
-    if key:
-        return key
-
-    # Legacy cross-provider sniff: a gsk_ key found under a NOUS_* env var
-    # means the user configured Groq before the provider var existed.
-    if provider == "nous":
-        for var in ("NOUS_API_KEY", "NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY"):
-            v = _configured(var)
-            if _detect_groq_key_shape(v):
-                return v
-
-    # Check any known provider API key in environment
-    for prov_name, preset in PROVIDER_PRESETS.items():
-        if prov_name in ("custom", "ollama"):
-            continue
-        for var in (preset["api_key_env"],) + preset["alt_api_key_envs"]:
-            v = _configured(var)
-            if v:
-                return v
-
-    # ollama and other local presets need no key.
-    if provider in ("ollama",):
-        return ""
-
+    """API key for the selected model. Empty when nothing is configured."""
+    for var in ("UNDERSTANDING_AGENT_API_KEY", "LLM_API_KEY", "API_KEY"):
+        value = _configured(var)
+        if value:
+            return value
+    for var in _KEY_ENVS[get_provider()]:
+        value = _configured(var)
+        if value:
+            return value
     return ""
 
 

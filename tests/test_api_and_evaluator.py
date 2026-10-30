@@ -66,30 +66,38 @@ class TestApiRetry(unittest.TestCase):
     def test_no_key_short_circuits(self):
         status, body = call_groq_api("", {"model": "m"})
         self.assertEqual(status, 0)
-        self.assertIn("GROQ_API_KEY", body)
+        self.assertIn("UNDERSTANDING_AGENT_API_KEY", body)
 
 
 class TestApiKeyLoading(unittest.TestCase):
     def test_nous_env_var_wins(self):
-        with patch.dict(os.environ, {"NOUS_API_KEY": "from-nous-env"}):
+        with patch.dict(os.environ, {
+            "NOUS_API_KEY": "from-nous-env",
+            "UNDERSTANDING_AGENT_API_KEY": "",
+            "LLM_API_KEY": "",
+            "API_KEY": "",
+            "UNDERSTANDING_AGENT_IGNORE_DOTENV": "1",
+        }):
             self.assertEqual(load_nous_api_key(), "from-nous-env")
 
     def test_env_var_wins(self):
-        with patch.dict(os.environ, {"GROQ_API_KEY": "from-env"}):
+        with patch.dict(os.environ, {"UNDERSTANDING_AGENT_API_KEY": "from-env"}):
             self.assertEqual(load_groq_api_key(), "from-env")
 
     def test_reads_env_file_in_cwd(self):
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, ".env"), "w") as f:
-                f.write('GROQ_API_KEY="from-file"\n')
-            with patch("subprocess.check_output",
-                       side_effect=Exception("not a git repo")), \
-                 patch("os.path.abspath", lambda p: os.path.join(d, p)), \
+                f.write('UNDERSTANDING_AGENT_API_KEY="from-file"\n')
+            with patch.dict(os.environ, {
+                "UNDERSTANDING_AGENT_API_KEY": "",
+                "LLM_API_KEY": "",
+                "API_KEY": "",
+                "NOUS_API_KEY": "",
+            }), patch("understanding_agent.api_utils._env_search_dirs", return_value=[d]), \
+                 patch("understanding_agent.llm_manager._env_search_dirs", return_value=[d]), \
                  patch("os.path.expanduser", lambda p: "/nonexistent-home"):
-                # Patch getcwd too since abspath uses it
-                with patch("os.getcwd", return_value=d):
-                    self.assertEqual(load_groq_api_key(), "from-file")
+                self.assertEqual(load_groq_api_key(), "from-file")
 
     def test_never_reads_shell_configs(self):
         # Ensure ~/.zshrc etc. are never touched even if present

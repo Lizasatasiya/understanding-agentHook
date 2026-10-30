@@ -9,11 +9,13 @@
 #   curl -fsSL https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/main/install.sh | bash
 #
 # Options:
-#   --key <API_KEY>       Pre-configure the team LLM API key
-#   --provider <NAME>     LLM provider: nous (default), groq, openai, ollama
-#   --base-url <URL>      Custom central relay endpoint (no API key on client)
+#   --key <API_KEY>       API key for the selected model
+#   --model <NAME>        sonnet, haiku, or nous (default: nous)
 #   --uninstall           Remove global hooks and restore standard git behavior
 #   --status              Check current installation and hook health
+#
+# Example:
+#   curl -fsSL https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/main/install.sh | bash -s -- --key "YOUR_API_KEY" --model sonnet
  
 
 set -e
@@ -42,25 +44,32 @@ ENV_FILE="$CONFIG_DIR/.env"
 
 # Parse CLI flags
 ARG_KEY=""
-ARG_PROVIDER=""
-ARG_BASE_URL=""
+ARG_MODEL=""
 DO_UNINSTALL=false
 DO_STATUS=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --key|-k) ARG_KEY="$2"; shift 2 ;;
-        --provider|-p) ARG_PROVIDER="$2"; shift 2 ;;
-        --base-url|-u) ARG_BASE_URL="$2"; shift 2 ;;
+        --model|-m) ARG_MODEL="$2"; shift 2 ;;
         --uninstall) DO_UNINSTALL=true; shift ;;
         --status) DO_STATUS=true; shift ;;
         -h|--help)
-            echo "Usage: install.sh [--key <API_KEY>] [--provider <NAME>] [--base-url <URL>] [--uninstall] [--status]"
+            echo "Usage: install.sh [--key <API_KEY>] [--model sonnet|haiku|nous] [--uninstall] [--status]"
             exit 0
             ;;
         *) shift ;;
     esac
 done
+
+if [ -z "$ARG_MODEL" ]; then
+    ARG_MODEL="nous"
+fi
+ARG_MODEL="$(printf '%s' "$ARG_MODEL" | tr '[:upper:]' '[:lower:]')"
+case "$ARG_MODEL" in
+    sonnet|haiku|nous) ;;
+    *) err "Unsupported model '$ARG_MODEL'. Choose one of: sonnet, haiku, nous." ;;
+esac
 
 # STATUS CHECK
 if [ "$DO_STATUS" = true ]; then
@@ -170,33 +179,25 @@ if [ ! -f "$ENV_FILE" ]; then
     chmod 600 "$ENV_FILE"
 fi
 
-if [ -n "$ARG_KEY" ]; then
-    # Update or append key
-    if grep -q "^UNDERSTANDING_AGENT_API_KEY=" "$ENV_FILE"; then
-        sed -i.bak "s|^UNDERSTANDING_AGENT_API_KEY=.*|UNDERSTANDING_AGENT_API_KEY=$ARG_KEY|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+upsert_env() {
+    local key="$1" value="$2"
+    if grep -q "^${key}=" "$ENV_FILE"; then
+        # '|' is safe: model names have none, and keys are written with a quoted replacement.
+        local escaped
+        escaped="$(printf '%s' "$value" | sed 's/[|&\\]/\\&/g')"
+        sed -i.bak "s|^${key}=.*|${key}=${escaped}|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
     else
-        echo "UNDERSTANDING_AGENT_API_KEY=$ARG_KEY" >> "$ENV_FILE"
+        printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
     fi
+}
+
+if [ -n "$ARG_KEY" ]; then
+    upsert_env "UNDERSTANDING_AGENT_API_KEY" "$ARG_KEY"
     ok "Saved API key to $ENV_FILE"
 fi
 
-if [ -n "$ARG_PROVIDER" ]; then
-    if grep -q "^UNDERSTANDING_AGENT_PROVIDER=" "$ENV_FILE"; then
-        sed -i.bak "s|^UNDERSTANDING_AGENT_PROVIDER=.*|UNDERSTANDING_AGENT_PROVIDER=$ARG_PROVIDER|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
-    else
-        echo "UNDERSTANDING_AGENT_PROVIDER=$ARG_PROVIDER" >> "$ENV_FILE"
-    fi
-    ok "Configured provider: $ARG_PROVIDER"
-fi
-
-if [ -n "$ARG_BASE_URL" ]; then
-    if grep -q "^UNDERSTANDING_AGENT_BASE_URL=" "$ENV_FILE"; then
-        sed -i.bak "s|^UNDERSTANDING_AGENT_BASE_URL=.*|UNDERSTANDING_AGENT_BASE_URL=$ARG_BASE_URL|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
-    else
-        echo "UNDERSTANDING_AGENT_BASE_URL=$ARG_BASE_URL" >> "$ENV_FILE"
-    fi
-    ok "Configured central relay base URL: $ARG_BASE_URL"
-fi
+upsert_env "UNDERSTANDING_AGENT_MODEL" "$ARG_MODEL"
+ok "Selected model: $ARG_MODEL (questions and answer checks)"
 
 # If file is empty, write a friendly template with notes
 if [ ! -s "$ENV_FILE" ]; then
@@ -204,8 +205,7 @@ if [ ! -s "$ENV_FILE" ]; then
 # Understanding Agent Global Configuration
 # Optional: If your team uses a central relay server or shared key, configure it here:
 # UNDERSTANDING_AGENT_API_KEY=
-# UNDERSTANDING_AGENT_PROVIDER=nous
-# UNDERSTANDING_AGENT_BASE_URL=
+# UNDERSTANDING_AGENT_MODEL=nous
 EOF
     chmod 600 "$ENV_FILE"
 fi
