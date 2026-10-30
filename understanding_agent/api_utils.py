@@ -7,7 +7,7 @@ import http.client
 import ssl
 from urllib.parse import urlparse
 
-from .llm_manager import resolve_base_url, resolve_model, resolve_api_key, get_provider, thinking_control_params
+from .llm_manager import resolve_base_url, resolve_model, resolve_api_key, describe_api_key, get_provider, thinking_control_params
 
 
 def get_base_url() -> str:
@@ -84,10 +84,13 @@ def _llm_failure_detail(status: int, body: str, model_id: str) -> str | None:
         snippet = snippet[:1500] + "...(truncated)"
     if status == 0:
         return f"could not connect to {url} for model={model_id}. {snippet or 'connection failed'}"
-    return (
+    detail = (
         f"model={model_id} at {url} returned HTTP {status}. "
         f"{snippet or '(empty body)'}"
     )
+    if status in (401, 403):
+        detail += " " + describe_api_key()
+    return detail
 
 
 def fail_open_enabled() -> bool:
@@ -160,38 +163,8 @@ def _env_search_dirs():
 
 
 def load_nous_api_key() -> str:
-    """Load the active provider's API key from the environment or .env files.
-
-    Order:
-      1. UNDERSTANDING_AGENT_API_KEY / LLM_API_KEY / API_KEY, then the
-         selected model's own key (NOUS_* or ANTHROPIC_*/CLAUDE_API_KEY)
-      2. The same names in .env / .env.local and ~/.config/understanding-agent/.env
-    """
-    env_key = resolve_api_key()
-    if env_key:
-        return env_key
-
-    file_key_names = (
-        "UNDERSTANDING_AGENT_API_KEY",
-        "LLM_API_KEY",
-        "API_KEY",
-        "NOUS_API_KEY",
-        "NOUSRESEARCH_API_KEY",
-        "NOUS_PORTAL_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "CLAUDE_API_KEY",
-    )
-
-    for d in _env_search_dirs():
-        for fname in (".env", ".env.local"):
-            key = _parse_key_from_file(os.path.join(d, fname), file_key_names)
-            if key:
-                return key
-
-    return _parse_key_from_file(
-        os.path.expanduser("~/.config/understanding-agent/.env"),
-        file_key_names,
-    )
+    """API key for the selected model. See llm_manager.resolve_api_key_info."""
+    return resolve_api_key()
 
 
 # Alias for backward compatibility

@@ -36,31 +36,34 @@ def _env(name: str) -> str:
 
 
 def _env_search_dirs():
-    """Directories searched for .env: hook root, cwd, its parents, git root."""
-    search_dirs = []
-    # 1. Agent hook's own repo directory (first priority)
-    hook_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if os.path.isdir(hook_dir):
-        search_dirs.append(hook_dir)
+    """Directories searched for .env: the repository being committed.
 
-    cur = os.path.abspath(os.getcwd())
-    for _ in range(4):
-        if cur not in search_dirs:
-            search_dirs.append(cur)
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            break
-        cur = parent
+    The hook package directory is not searched. An editable install lives in
+    a checkout with its own .env, and that file was being sent on every
+    commit on the machine.
+    """
+    search_dirs = []
+
+    def add(path: str) -> None:
+        if path and path not in search_dirs:
+            search_dirs.append(path)
 
     try:
         repo_root = subprocess.check_output(
             ["git", "rev-parse", "--show-toplevel"],
             text=True, stderr=subprocess.DEVNULL
         ).strip()
-        if repo_root and repo_root not in search_dirs:
-            search_dirs.append(repo_root)
+        add(repo_root)
     except Exception:
         pass
+
+    cur = os.path.abspath(os.getcwd())
+    for _ in range(4):
+        add(cur)
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
     return search_dirs
 
 
@@ -96,6 +99,51 @@ def _dotenv_values() -> dict:
             except Exception:
                 continue
     return {}
+
+
+_GLOBAL_CONFIG = os.path.expanduser("~/.config/understanding-agent/.env")
+# Values people paste from the install example. They are not real keys.
+_PLACEHOLDER_KEYS = {
+    "api_key",
+    "your_api_key",
+    "your_key",
+    "sk-dummy-replace-me",
+    "changeme",
+    "replace-me",
+}
+
+
+def _usable_secret(value: str) -> str:
+    value = (value or "").strip()
+    if not value or value.lower() in _PLACEHOLDER_KEYS:
+        return ""
+    return value
+
+
+def _parse_env_file(path: str) -> dict:
+    found = {}
+    if not path or not os.path.isfile(path):
+        return found
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("export "):
+                    line = line[7:].strip()
+                if "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                key = key.strip()
+                val = val.strip()
+                if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                    val = val[1:-1].strip()
+                if key and val:
+                    found[key] = val
+    except Exception:
+        return {}
+    return found
 
 
 def _configured(name: str) -> str:
@@ -178,17 +226,55 @@ _KEY_ENVS = {
 }
 
 
+def _key_names() -> tuple:
+    return ("UNDERSTANDING_AGENT_API_KEY", "LLM_API_KEY", "API_KEY", *_KEY_ENVS[get_provider()])
+
+
+def resolve_api_key_info() -> tuple[str, str]:
+    """Return (api_key, where it was read from).
+
+    Process environment wins. Then the key saved by install.sh. Then a .env
+    in the repository being committed. Placeholder text such as YOUR_API_KEY
+    is ignored.
+    """
+    for name in _key_names():
+        value = _usable_secret(_env(name))
+        if value:
+            return value, f"environment variable {name}"
+
+    if _env("UNDERSTANDING_AGENT_IGNORE_DOTENV") == "1":
+        return "", "none"
+
+    global_values = _parse_env_file(_GLOBAL_CONFIG)
+    for name in _key_names():
+        value = _usable_secret(global_values.get(name, ""))
+        if value:
+            return value, _GLOBAL_CONFIG
+
+    for directory in _env_search_dirs():
+        for fname in (".env", ".env.local"):
+            path = os.path.join(directory, fname)
+            if os.path.abspath(path) == os.path.abspath(_GLOBAL_CONFIG):
+                continue
+            values = _parse_env_file(path)
+            for name in _key_names():
+                value = _usable_secret(values.get(name, ""))
+                if value:
+                    return value, path
+    return "", "none"
+
+
 def resolve_api_key() -> str:
     """API key for the selected model. Empty when nothing is configured."""
-    for var in ("UNDERSTANDING_AGENT_API_KEY", "LLM_API_KEY", "API_KEY"):
-        value = _configured(var)
-        if value:
-            return value
-    for var in _KEY_ENVS[get_provider()]:
-        value = _configured(var)
-        if value:
-            return value
-    return ""
+    return resolve_api_key_info()[0]
+
+
+def describe_api_key(api_key: str | None = None) -> str:
+    """Safe description for logs. Never includes the full key."""
+    key, source = resolve_api_key_info()
+    used = api_key if api_key is not None else key
+    prefix = (used or "")[:7]
+    return f"key from {source} (length {len(used or '')}, starts with {prefix!r})"
 
 
 class LLMManager:
