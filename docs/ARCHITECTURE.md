@@ -228,26 +228,18 @@ sessions are recorded before the commit hash exists.
 - Ledger unreachable → session queued locally, commit proceeds; queue
   drained next run.
 - SQLite unusable → legacy JSON store; commit proceeds.
-- Non-interactive context → record-only pass with loud unverified banner
-  (e2e scenes 4–5).
+- Non-interactive context → record-only pass with loud unverified banner.
 - Prune is timestamp-first (attempt_number alone was a bug — new attempt-1
-  sessions were pruned over old high-attempt rows; fixed with regression test).
+  sessions were pruned over old high-attempt rows).
 
-## 8. Test & measurement infrastructure
+## 8. Measurement
 
-- 265 unit tests + 3 standalone e2e scripts: `e2e_gate_first.py` (5 scenes:
-  gate, fallback, prune, agent-mode, gate-in-agent-mode),
-  `e2e_polyglot_fixture.py` (real NestJS/.NET/ML repo through the real
-  pipeline), `e2e_security_gate.py` (gate aborts a real git commit).
-- CI (.github/workflows/ci.yml): py3.12 + 3.14 matrix, installs the
-  `[service]` extra, runs the suite + gate e2e.
-- `scripts/llm_smoke_test.py`: 7-step live pipeline check.
 - `scripts/calibration_harness.py` + 4-case corpus: precision/recall gate
   (≥0.6 strict) for master-analysis changes; first live measurement
   1.00/1.00 (qwen3-coder-30b, Nous gateway).
 - `scripts/context_eval_harness.py` + 5-case corpus: context quality gate —
   % of expected concepts present in the built context, replaying the REAL
-  detector/graph/builder on scratch repos (CI runs it with --strict at
+  detector/graph/builder on scratch repos (strict gate at
   ≥0.80; first measurement 1.00 after it caught a real React-extraction
   gap — nested handlers excluded their component's useState preamble).
 - `scripts/bench_*.py`: LLM latency/capture-anomaly benches (Nous gateway

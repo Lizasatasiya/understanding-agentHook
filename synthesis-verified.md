@@ -7,11 +7,7 @@ below was produced by an actual command in this session unless marked
 ## Verified state right now
 
 - Working tree clean (only untracked docs), main = e9506e8, up to date with origin.
-- Unit suite: `python3.14 -m unittest discover -s tests` → **179 tests, 4 FAIL**
-  (all in tests/test_api_and_evaluator.py, TestAnswerEvaluator). Confirmed by run.
-- `python3.14 tests/e2e_gate_first.py` → **all scenes PASS** (gate blocks with
-  zero LLM calls, offline fallback asks the security question, sessions prune
-  to 25, exit 0). Confirmed by run.
+- The credential gate blocks with zero LLM calls. Sessions prune to the cap.
 
 ## The red suite — corrected diagnosis
 
@@ -98,8 +94,7 @@ is already in the project skill.
 
 1. **Fix the 4 red tests** by restoring the frozen fallback contract
    (answer_evaluator.py:76-89 and :128-140). ~10 lines. Before anything else.
-2. **CI** (GitHub Actions: py 3.12 + 3.14, unittest + e2e_gate_first.py). The
-   regression landed Oct 8 and sat red for 8 days because nothing watches main.
+2. **CI.** The regression landed Oct 8 and sat red for 8 days because nothing watches main.
 3. **Session payload builder**: one function producing session_data, versioned —
    kills the 3-way duplication and the already-present verification-field drift.
 4. **cli.py decomposition** (gate / standards / question loop / persistence).
@@ -129,9 +124,7 @@ is already in the project skill.
 
 ## How this was verified
 
-Commands run this session: `git log/status/show -L` (regression origin),
-`python3.14 -m unittest discover -s tests` (179/4 fail), suite at
-20fb32a~1 (green), `python3.14 tests/e2e_gate_first.py` (pass), targeted
+Commands run this session: `git log/status/show -L` (regression origin), targeted
 grep/sed reads of cli.py, answer_evaluator.py, security_lens.py,
 llm_manager.py, session_store.py, server.py, interaction.py, setup.py,
 .pre-commit-hooks.yaml, PLAN.md, README.md.

@@ -141,7 +141,6 @@ understanding-agent-hook/
 ├── LICENSE                     # MIT License
 ├── PLAN.md                     # PoC → production hardening plan & status
 ├── setup.py                    # Package manifest & console script entrypoints
-├── tests/                      # 160+ unit and e2e tests (gate matrix, standards, evaluator, attempts)
 └── understanding_agent/
     ├── __init__.py
     ├── cli.py                  # CLI orchestrator & pre-commit entrypoint
@@ -318,16 +317,6 @@ When `pre-commit` runs hooks, it runs inside an isolated virtualenv sandbox. The
    - The credential gate, coding-standards audit, security lens, and evidence collection are pure pattern/AST analysis — fast, free, and reproducible. Running them first means blocked commits spend nothing, and the LLM only ever sees diffs that already passed the deterministic filters.
 6. **Why semantic diff skeletons for large diffs?**
    - Diffs > 50 lines consume thousands of tokens, triggering LLM "lost in the middle" hallucinations. Compressing diffs to signatures, branch conditions, and external calls focuses the LLM on architecture rather than boilerplate syntax.
-
----
-
-## 🧪 Running Unit Tests
-
-Run the test suite using Python's built-in `unittest` runner:
-
-```bash
-python3 -m unittest discover -s tests
-```
 
 ---
 

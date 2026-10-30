@@ -71,14 +71,7 @@ Sync (teams):
 | UNDERSTANDING_AGENT_TEAM_SECRET | — | HMAC-SHA256 signing secret (X-Signature) |
 | UNDERSTANDING_AGENT_TELEMETRY_URL | — | LEGACY single-endpoint telemetry (no queue) |
 
-## 3. CI
-
-`.github/workflows/ci.yml` runs on every push/PR: python 3.12 + 3.14 matrix,
-`pip install -e ".[service]"`, `python -m unittest discover -s tests`,
-`python tests/e2e_gate_first.py`. The `[service]` install is required because
-the central-service tests run inside the suite.
-
-## 4. Central ledger deployment (teams)
+## 3. Central ledger deployment (teams)
 
 Dev (SQLite, zero Docker):
 
@@ -108,7 +101,7 @@ Everything else JIT-provisions on first sight.
 
 Smoke: `curl http://<host>:8000/api/v1/health` → `{"status":"ok","schema_version":1}`.
 
-## 5. Enforcement wiring (proof of defense)
+## 4. Enforcement wiring (proof of defense)
 
 CI (GitHub Actions):
 
@@ -161,15 +154,10 @@ silences TTS. [Tab] starts dictation; the transcript lands in the typing
 buffer so you can edit before Enter. Suspect captures (clipped mic, stutter)
 get one "say it again" prompt; mixed-language answers are never flagged.
 
-## 7. Testing and measurement
+## 7. Measurement
 
 | Command | What it proves |
 |---|---|
-| `python -m unittest discover -s tests` | 265 unit tests (incl. central service, SQLite store, identity/sync, hygiene) |
-| `python tests/e2e_gate_first.py` | 5 scenes against a real scratch git repo: gate blocks with zero LLM calls; offline fallback asks the security question; prune; agent mode records+passes; gate still blocks in agent mode |
-| `python tests/e2e_polyglot_fixture.py` | real NestJS/.NET/ML fixture through the real pipeline |
-| `python tests/e2e_security_gate.py` | gate aborts a real git commit containing a live credential |
-| `python scripts/llm_smoke_test.py` | 7-step LIVE LLM pipeline check (needs a key in .env) |
 | `python scripts/calibration_harness.py [--strict]` | master-analysis precision/recall vs the 4-case corpus (bench-first before any prompt/model change) |
 | `python scripts/context_eval_harness.py --strict` | context quality gate: % of expected concepts present in the built context (CI-enforced ≥0.80; current baseline 1.00) |
 | `understanding-agent-sync-history --repo . --server URL [--dry-run]` | backfill existing local sessions into the ledger (legacy rows get git-author resolution; batches of 25; fail-loud) |

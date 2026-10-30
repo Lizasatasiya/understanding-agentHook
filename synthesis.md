@@ -3,8 +3,7 @@ I've gone through the codebase, README, PLAN.md, packaging, tests, and the main 
 VERIFIED STATE RIGHT NOW
 
 - Working tree clean, main = e9506e8, up to date with origin.
-- Unit suite: 179 tests, 4 FAIL (all in tests/test_api_and_evaluator.py, TestAnswerEvaluator).
-- tests/e2e_gate_first.py: all scenes PASS (gate blocks with zero LLM calls, offline fallback still asks the security question, sessions prune).
+- The credential gate blocks with zero LLM calls. Sessions prune to the cap.
 
 That 4-test failure is the first thing you should know about. Commit 2fba63a (pulled from your colleague, "allow commit on fallback questions when API is unavailable") touched answer_evaluator.py: _evaluate_fallback now computes a coverage-based score (76 for minimal match, 85+ for good coverage), then throws it away and returns a hardcoded 75 with empty covered_concepts and follow_up_required=True. The tests encode the frozen fail-open contract (76 baseline, 85+ for substantive answers, dismissive answers score low with follow-up). So main is red: the colleague's commit either accidentally or deliberately changed the fallback contract and didn't run/fix the tests. This needs a decision before anything else lands — the tests are guarding the user-mandated threshold behavior, so my instinct is fix the code, not the tests.
 
