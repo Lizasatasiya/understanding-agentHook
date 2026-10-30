@@ -99,9 +99,9 @@ def load_nous_api_key() -> str:
     """Load the active provider's API key from the environment or .env files.
 
     Provider-aware, resolved via llm_manager:
-      1. UNDERSTANDING_AGENT_API_KEY / the provider preset's env vars
+      1. UNDERSTANDING_AGENT_API_KEY / LLM_API_KEY / API_KEY / provider preset's env vars
       2. .env / .env.local in cwd, parents, git root, ~/.config
-      3. Legacy NOUS_* then GROQ_API_KEY names, for backward compatibility
+      3. All known provider keys (OPENAI, GEMINI, ANTHROPIC, DEEPSEEK, etc.)
     """
     # 1. Environment variables (process env takes precedence over disk files)
     env_key = resolve_api_key()
@@ -115,19 +115,33 @@ def load_nous_api_key() -> str:
         return groq_env
 
     provider = get_provider()
-    preset = PROVIDER_PRESETS[provider]
-    file_key_names = (preset["api_key_env"],) + preset["alt_api_key_envs"] + ("UNDERSTANDING_AGENT_API_KEY",)
+    preset = PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["custom"])
+    file_key_names = [
+        preset["api_key_env"],
+        "UNDERSTANDING_AGENT_API_KEY",
+        "LLM_API_KEY",
+        "API_KEY",
+    ] + list(preset.get("alt_api_key_envs", ()))
+
+    # Add all other known provider keys from presets so any provider key in .env is found
+    for prov_name, p_data in PROVIDER_PRESETS.items():
+        k = p_data.get("api_key_env")
+        if k and k not in file_key_names:
+            file_key_names.append(k)
+        for alt in p_data.get("alt_api_key_envs", ()):
+            if alt not in file_key_names:
+                file_key_names.append(alt)
 
     search_dirs = _env_search_dirs()
 
-    # 2. Check .env files for the provider's key names first
+    # 2. Check .env files for key names
     for d in search_dirs:
         for fname in (".env", ".env.local"):
-            key = _parse_key_from_file(os.path.join(d, fname), file_key_names)
+            key = _parse_key_from_file(os.path.join(d, fname), tuple(file_key_names))
             if key:
                 return key
 
-    key = _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), file_key_names)
+    key = _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), tuple(file_key_names))
     if key:
         return key
 
@@ -244,36 +258,109 @@ def _strip_reasoning(text: str) -> str:
 
 
 def _extract_message_text(data: dict) -> str:
-    """Pull the assistant text out of an OpenAI-compatible response dict.
-
-    Returns "" for the gateway's intermittent empty-content glitch
-    (HTTP 200, finish_reason=stop, content=null — observed on the Nous
-    gateway roughly 1 call in 5; bench data in scripts/bench_capture_anomaly.py).
-    """
-    choices = data.get("choices") or []
-    if not choices:
+    """Pull the assistant text out of an LLM response dict (OpenAI, Anthropic, Gemini, Ollama)."""
+    if not isinstance(data, dict):
         return ""
-    msg = choices[0].get("message") or {}
-    text = (msg.get("content") or "").strip()
-    if not text and msg.get("reasoning"):
-        text = (msg.get("reasoning") or "").strip()
-    if not text and msg.get("reasoning_content"):
-        text = (msg.get("reasoning_content") or "").strip()
-    if not text and choices[0].get("text"):
-        text = (choices[0].get("text") or "").strip()
-    return text
+
+    # 1. OpenAI-compatible choices: choices[0].message.content
+    choices = data.get("choices") or []
+    if choices and isinstance(choices, list):
+        first = choices[0] if isinstance(choices[0], dict) else {}
+        msg = first.get("message") or {}
+        if isinstance(msg, dict):
+            text = (msg.get("content") or "").strip()
+            if not text and msg.get("reasoning"):
+                text = (msg.get("reasoning") or "").strip()
+            if not text and msg.get("reasoning_content"):
+                text = (msg.get("reasoning_content") or "").strip()
+            if text:
+                return text
+        if first.get("text"):
+            text = (first.get("text") or "").strip()
+            if text:
+                return text
+
+    # 2. Anthropic format: content: [{"type": "text", "text": "..."}]
+    content = data.get("content")
+    if isinstance(content, list):
+        texts = [
+            b.get("text", "") for b in content
+            if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+        ]
+        if texts:
+            return "".join(texts).strip()
+    elif isinstance(content, str) and content.strip():
+        return content.strip()
+
+    # 3. Gemini format: candidates: [{"content": {"parts": [{"text": "..."}]}}]
+    candidates = data.get("candidates")
+    if isinstance(candidates, list) and candidates:
+        first_c = candidates[0] if isinstance(candidates[0], dict) else {}
+        parts = first_c.get("content", {}).get("parts") or []
+        if isinstance(parts, list):
+            texts = [
+                p.get("text", "") for p in parts
+                if isinstance(p, dict) and p.get("text")
+            ]
+            if texts:
+                return "".join(texts).strip()
+
+    # 4. Ollama / generic message dict or output / response fields
+    if isinstance(data.get("message"), dict) and data["message"].get("content"):
+        return str(data["message"]["content"]).strip()
+    for field in ("response", "output", "text"):
+        if data.get(field) and isinstance(data[field], str):
+            return data[field].strip()
+
+    return ""
+
+
+def _normalize_response_body(body: str, model_id: str = "") -> str:
+    """Normalize responses from Anthropic, Gemini, Ollama, etc. into standard OpenAI format."""
+    try:
+        data = json.loads(body)
+        if not isinstance(data, dict):
+            return body
+        # If already standard OpenAI format with choices containing a message, keep as is
+        if data.get("choices") and isinstance(data["choices"], list):
+            first = data["choices"][0]
+            if isinstance(first, dict) and "message" in first:
+                return body
+
+        # Extract text from non-standard formats and wrap into OpenAI shape
+        extracted = _extract_message_text(data)
+        if extracted:
+            return json.dumps({
+                "id": data.get("id", "res-norm"),
+                "object": "chat.completion",
+                "model": model_id or data.get("model", ""),
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": extracted,
+                        },
+                        "finish_reason": data.get("stop_reason") or data.get("finish_reason") or "stop",
+                    }
+                ],
+            })
+    except Exception:
+        pass
+    return body
 
 
 def call_llm_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: int = 2) -> tuple[int, str]:
-    """Send an HTTP request to the provider's OpenAI-compatible chat-completions API.
+    """Send an HTTP request to the provider's API (OpenAI-compatible or Anthropic).
 
     Retries transient failures (connection errors, 429, 5xx, and the gateway's
     200-with-empty-content glitch) with a short exponential backoff. Returns
     (status_code, response_text_or_error). status_code 0 means the request
     never got a response.
     """
-    if not api_key:
-        return 0, "No API key configured for the active provider (set UNDERSTANDING_AGENT_API_KEY, NOUS_API_KEY, or GROQ_API_KEY)"
+    provider = get_provider()
+    if not api_key and provider not in ("ollama",):
+        return 0, f"No API key configured for provider '{provider}' (set UNDERSTANDING_AGENT_API_KEY, GROQ_API_KEY, or NOUS_API_KEY)"
 
     # Suppress model thinking for providers that support it (bench-measured:
     # deepseek-v4-flash 51s -> 10s per call). Kill switch:
@@ -293,13 +380,7 @@ def call_llm_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: i
 
 
 def _is_meaningful_response(status: int, body: str) -> bool:
-    """A response is final only if it succeeded AND carries assistant text.
-
-    The Nous gateway intermittently returns HTTP 200 with
-    finish_reason=stop and content=null while still charging tokens
-    (completion_tokens=206 in the captured sample). Treating that as
-    success made callers silently fall back and re-call the LLM.
-    """
+    """A response is final only if it succeeded AND carries assistant text."""
     if status != 200:
         return status != 0 and status != 429 and status < 500
     try:
@@ -325,25 +406,73 @@ call_groq_api = call_llm_api          # deprecated alias
 # load_api_key / load_groq_api_key aliases are defined near load_nous_api_key.
 
 
+def _is_anthropic(base_url: str, provider: str) -> bool:
+    return provider == "anthropic" or "api.anthropic.com" in base_url
+
+
+def _format_anthropic_payload(payload_dict: dict) -> dict:
+    anthropic_payload = {
+        "model": payload_dict.get("model", "claude-3-5-sonnet-20241022"),
+        "max_tokens": payload_dict.get("max_tokens", 1024),
+    }
+    if "temperature" in payload_dict:
+        anthropic_payload["temperature"] = payload_dict["temperature"]
+
+    raw_messages = payload_dict.get("messages", [])
+    system_parts = []
+    filtered_messages = []
+    for m in raw_messages:
+        if isinstance(m, dict):
+            if m.get("role") == "system":
+                system_parts.append(m.get("content", ""))
+            else:
+                filtered_messages.append({
+                    "role": m.get("role", "user"),
+                    "content": m.get("content", ""),
+                })
+    if system_parts:
+        anthropic_payload["system"] = "\n\n".join(system_parts)
+    anthropic_payload["messages"] = filtered_messages
+    return anthropic_payload
+
+
 def _nous_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[int, str]:
     base_url = get_base_url().rstrip("/")
+    provider = get_provider()
+
     parsed = urlparse(base_url)
     scheme = parsed.scheme or "https"
     host = parsed.netloc or "inference-api.nousresearch.com"
     base_path = parsed.path or "/v1"
 
-    if base_path.endswith("/chat/completions"):
-        endpoint_path = base_path
+    if _is_anthropic(base_url, provider):
+        if base_path.endswith("/messages"):
+            endpoint_path = base_path
+        else:
+            endpoint_path = f"{base_path}/messages" if base_path else "/v1/messages"
+        payload_data = _format_anthropic_payload(payload_dict)
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "User-Agent": "understanding-agent/0.3.0",
+        }
     else:
-        endpoint_path = f"{base_path}/chat/completions"
+        # Standard OpenAI-compatible format
+        if base_path.endswith("/chat/completions"):
+            endpoint_path = base_path
+        else:
+            endpoint_path = f"{base_path}/chat/completions"
+        payload_data = payload_dict
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "understanding-agent/0.3.0",
+        }
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
 
-    payload = json.dumps(payload_dict).encode("utf-8")
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-        "User-Agent": "understanding-agent/0.3.0",
-        "Content-Length": str(len(payload))
-    }
+    payload = json.dumps(payload_data).encode("utf-8")
+    headers["Content-Length"] = str(len(payload))
 
     conn = None
     try:
@@ -356,6 +485,11 @@ def _nous_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[
         conn.request("POST", endpoint_path, body=payload, headers=headers)
         response = conn.getresponse()
         body = response.read().decode("utf-8", errors="replace")
+
+        # Normalize non-OpenAI responses into standard OpenAI format
+        if response.status == 200:
+            body = _normalize_response_body(body, payload_dict.get("model", ""))
+
         return response.status, body
     except Exception as e:
         return 0, str(e)
