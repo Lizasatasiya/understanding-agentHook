@@ -5,17 +5,20 @@
 # Installs the Code Understanding Agent globally across all Git repositories
 # on this device with zero repository cloning needed on developer machines.
 #
-# Usage:
-#   curl -fsSL https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/main/install.sh | bash
+# Usage (write the branch once; the same name is installed):
+#   REF=dev
+#   curl -fsSL "https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/${REF}/install.sh" | REF="$REF" bash -s -- --key "YOUR_API_KEY" --model haiku
 #
 # Options:
 #   --key <API_KEY>       API key for the selected model
 #   --model <NAME>        sonnet, haiku, or nous (default: nous)
+#   --ref <BRANCH>        Git branch or tag to install (or set REF). Required for a curl install.
 #   --uninstall           Remove global hooks and restore standard git behavior
 #   --status              Check current installation and hook health
 #
 # Example:
-#   curl -fsSL https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/main/install.sh | bash -s -- --key "YOUR_API_KEY" --model sonnet
+#   REF=main
+#   curl -fsSL "https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/${REF}/install.sh" | REF="$REF" bash -s -- --key "YOUR_API_KEY" --model sonnet
  
 
 set -e
@@ -45,6 +48,9 @@ ENV_FILE="$CONFIG_DIR/.env"
 # Parse CLI flags
 ARG_KEY=""
 ARG_MODEL=""
+# REF is set on the bash command so the branch in the curl URL is the one installed.
+# A piped script cannot see that URL itself.
+ARG_REF="${REF:-${UNDERSTANDING_AGENT_INSTALL_REF:-}}"
 DO_UNINSTALL=false
 DO_STATUS=false
 
@@ -52,10 +58,12 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --key|-k) ARG_KEY="$2"; shift 2 ;;
         --model|-m) ARG_MODEL="$2"; shift 2 ;;
+        --ref|--branch) ARG_REF="$2"; shift 2 ;;
         --uninstall) DO_UNINSTALL=true; shift ;;
         --status) DO_STATUS=true; shift ;;
         -h|--help)
-            echo "Usage: install.sh [--key <API_KEY>] [--model sonnet|haiku|nous] [--uninstall] [--status]"
+            echo "Usage: install.sh [--ref <branch>] [--key <API_KEY>] [--model sonnet|haiku|nous] [--uninstall] [--status]"
+            echo "Curl install: REF=dev curl -fsSL \"https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/\${REF}/install.sh\" | REF=\"\$REF\" bash -s -- --key KEY --model haiku"
             exit 0
             ;;
         *) shift ;;
@@ -107,6 +115,9 @@ if [ "$DO_UNINSTALL" = true ]; then
     fi
     rm -rf "$HOOKS_DIR"
     ok "Removed global hooks directory ($HOOKS_DIR)"
+    rm -rf "$VENV_DIR"
+    rm -f "$BIN_DIR/understanding-agent"
+    ok "Removed installed package ($VENV_DIR)"
     printf "\n${GREEN}${BOLD}Uninstallation complete.${RESET} Git will now use default per-project hooks.\n"
     exit 0
 fi
@@ -164,8 +175,14 @@ if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/setup.py" ] && [ -d "$SCRIPT_DIR/un
     ok "Installing from local source: $SCRIPT_DIR"
     "$VENV_DIR/bin/pip" install --upgrade --quiet -e "$SCRIPT_DIR"
 else
-    ok "Installing directly from GitHub: $REPO_URL"
-    "$VENV_DIR/bin/pip" install --upgrade --quiet "git+$REPO_URL"
+    if [ -z "$ARG_REF" ]; then
+        err "No branch given. The branch in the curl URL is not visible to a piped script, so pass it through. Example: REF=dev curl -fsSL \"https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/\${REF}/install.sh\" | REF=\"\$REF\" bash -s -- --key \"YOUR_API_KEY\" --model haiku"
+    fi
+    case "$ARG_REF" in
+        *[!A-Za-z0-9._/-]*|-*|*/.*|*..*) err "Unsupported branch name '$ARG_REF'." ;;
+    esac
+    ok "Installing directly from GitHub: $REPO_URL @ $ARG_REF"
+    "$VENV_DIR/bin/pip" install --upgrade --force-reinstall --quiet "git+${REPO_URL}@${ARG_REF}"
 fi
 
 # Create symlink in ~/.local/bin if directory exists in PATH
