@@ -33,7 +33,10 @@ class TestThinkingControl(unittest.TestCase):
     def test_nous_provider_sends_reasoning_effort_none(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("UNDERSTANDING_AGENT_DISABLE_THINKING", None)
-            with patch.dict(os.environ, {"UNDERSTANDING_AGENT_PROVIDER": "nous"}):
+            with patch.dict(os.environ, {
+                "UNDERSTANDING_AGENT_MODEL": "nous",
+                "UNDERSTANDING_AGENT_IGNORE_DOTENV": "1",
+            }):
                 self.assertEqual(thinking_control_params(), {"reasoning_effort": "none"})
 
     def test_anthropic_models_get_no_thinking_params(self):
@@ -49,10 +52,26 @@ class TestThinkingControl(unittest.TestCase):
         def fake_request(api_key, payload, timeout):
             seen.update(payload)
             return 200, _ok_body("[{\"question\": \"Why?\"}]")
-        with patch.dict(os.environ, {"UNDERSTANDING_AGENT_PROVIDER": "nous"}), \
-             patch("understanding_agent.api_utils._groq_request_once", side_effect=fake_request):
+        with patch.dict(os.environ, {
+            "UNDERSTANDING_AGENT_MODEL": "nous",
+            "UNDERSTANDING_AGENT_IGNORE_DOTENV": "1",
+        }), patch("understanding_agent.api_utils._groq_request_once", side_effect=fake_request):
             call_nous_api("k", {"model": "m"})
         self.assertEqual(seen.get("reasoning_effort"), "none")
+
+    def test_each_call_logs_the_model(self):
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with patch("understanding_agent.api_utils._groq_request_once",
+                   return_value=(200, _ok_body("ok"))), \
+             patch.dict(os.environ, {
+                 "UNDERSTANDING_AGENT_MODEL": "haiku",
+                 "UNDERSTANDING_AGENT_IGNORE_DOTENV": "1",
+             }), \
+             redirect_stdout(buf):
+            call_nous_api("k", {"model": "claude-3-5-haiku-20241022"})
+        self.assertIn("[LLM] model=claude-3-5-haiku-20241022 -> https://api.anthropic.com/v1", buf.getvalue())
 
 
 class TestEmptyContentRetry(unittest.TestCase):

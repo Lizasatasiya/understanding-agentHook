@@ -332,6 +332,9 @@ def call_llm_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: i
     if not api_key:
         return 0, "No API key configured (set UNDERSTANDING_AGENT_API_KEY)"
 
+    model_id = payload_dict.get("model") or "(none)"
+    print(f"  [LLM] model={model_id} -> {get_base_url()}", flush=True)
+
     # Suppress model thinking for providers that support it (bench-measured:
     # deepseek-v4-flash 51s -> 10s per call). Kill switch:
     # UNDERSTANDING_AGENT_DISABLE_THINKING=off
