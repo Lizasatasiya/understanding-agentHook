@@ -265,7 +265,7 @@ def _normalize_response_body(body: str, model_id: str = "") -> str:
         # Extract text from non-standard formats and wrap into OpenAI shape
         extracted = _extract_message_text(data)
         if extracted:
-            return json.dumps({
+            normalized = {
                 "id": data.get("id", "res-norm"),
                 "object": "chat.completion",
                 "model": model_id or data.get("model", ""),
@@ -279,10 +279,55 @@ def _normalize_response_body(body: str, model_id: str = "") -> str:
                         "finish_reason": data.get("stop_reason") or data.get("finish_reason") or "stop",
                     }
                 ],
-            })
+            }
+            if "usage" in data:
+                normalized["usage"] = data["usage"]
+            elif "usageMetadata" in data:
+                normalized["usageMetadata"] = data["usageMetadata"]
+            return json.dumps(normalized)
     except Exception:
         pass
     return body
+
+
+def format_token_usage(data: dict) -> str | None:
+    if not isinstance(data, dict):
+        return None
+    # 1. Anthropic or OpenAI usage dict
+    usage = data.get("usage")
+    if isinstance(usage, dict):
+        in_tokens = usage.get("prompt_tokens") if usage.get("prompt_tokens") is not None else usage.get("input_tokens")
+        out_tokens = usage.get("completion_tokens") if usage.get("completion_tokens") is not None else usage.get("output_tokens")
+        total = usage.get("total_tokens")
+        if in_tokens is not None or out_tokens is not None:
+            in_val = in_tokens if in_tokens is not None else 0
+            out_val = out_tokens if out_tokens is not None else 0
+            tot_val = total if total is not None else (in_val + out_val)
+            return f"prompt={in_val}, completion={out_val}, total={tot_val}"
+
+    # 2. Gemini usageMetadata
+    meta = data.get("usageMetadata")
+    if isinstance(meta, dict):
+        in_val = meta.get("promptTokenCount", 0)
+        out_val = meta.get("candidatesTokenCount", 0)
+        tot_val = meta.get("totalTokenCount", in_val + out_val)
+        return f"prompt={in_val}, completion={out_val}, total={tot_val}"
+
+    return None
+
+
+_format_token_usage = format_token_usage
+
+
+def _log_token_usage(body: str, purpose: str | None = None) -> None:
+    try:
+        data = json.loads(body)
+        usage_str = format_token_usage(data)
+        if usage_str:
+            label = f" ({purpose})" if purpose else ""
+            print(f"  [LLM Usage{label}] {usage_str}", flush=True)
+    except Exception:
+        pass
 
 
 def call_llm_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: int = 2) -> tuple[int, str]:
@@ -296,15 +341,18 @@ def call_llm_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: i
     if not api_key:
         return 0, "No API key configured. Pass --key when installing. The hook reads only ~/.config/understanding-agent/.env."
 
+    payload_dict = dict(payload_dict)
+    purpose = payload_dict.pop("_purpose", None) or payload_dict.pop("purpose", None)
+
     model_id = payload_dict.get("model") or get_model()
     if not model_id:
         return 0, "No model configured. Pass --model sonnet, haiku, nous, or org when installing."
-    print(f"  [LLM] model={model_id} -> {llm_request_target()[3]}", flush=True)
+    purpose_label = f" ({purpose})" if purpose else ""
+    print(f"  [LLM{purpose_label}] model={model_id} -> {llm_request_target()[3]}", flush=True)
 
     # Suppress model thinking for providers that support it (bench-measured:
     # deepseek-v4-flash 51s -> 10s per call). Kill switch:
     # UNDERSTANDING_AGENT_DISABLE_THINKING=off
-    payload_dict = dict(payload_dict)
     payload_dict.update(thinking_control_params())
 
     last_status, last_body = 0, ""
@@ -314,6 +362,7 @@ def call_llm_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: i
             detail = _llm_failure_detail(status, body, model_id)
             if detail:
                 log_llm_error(detail)
+            _log_token_usage(body, purpose=purpose)
             return status, body
         last_status, last_body = status, body
         if attempt < retries:

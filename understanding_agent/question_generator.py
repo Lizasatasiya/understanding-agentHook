@@ -374,7 +374,8 @@ class QuestionGenerator:
             "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.4,
-            "max_tokens": max(1500, target_count * 350)
+            "max_tokens": max(1500, target_count * 350),
+            "_purpose": "Question Generation",
         }
 
         status, body = call_nous_api(api_key, payload, timeout=30)

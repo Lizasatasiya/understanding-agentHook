@@ -61,7 +61,8 @@ RULES:
             "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.5,
-            "max_tokens": 128
+            "max_tokens": 128,
+            "_purpose": "Follow-up Question",
         }
 
         status, body = call_nous_api(api_key, payload, timeout=30)

@@ -213,6 +213,7 @@ class AnswerEvaluator:
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.2,
             "max_tokens": 900,
+            "_purpose": "Answer Evaluation",
         }
         status, body = call_nous_api(api_key, payload, timeout=45)
         if status != 200:
@@ -431,7 +432,8 @@ class AnswerEvaluator:
             "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.2,
-            "max_tokens": 450
+            "max_tokens": 450,
+            "_purpose": "Answer Evaluation (Follow-up)",
         }
 
         status, body = call_nous_api(api_key, payload, timeout=35)

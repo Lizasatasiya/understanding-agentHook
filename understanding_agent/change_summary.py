@@ -1,6 +1,6 @@
 import os
 import json
-from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, log_llm_error
+from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, log_llm_error, format_token_usage
 
 
 class ChangeSummary:
@@ -98,7 +98,8 @@ class ChangeSummary:
             "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3,
-            "max_tokens": max_tokens
+            "max_tokens": max_tokens,
+            "_purpose": "Change Summary",
         }
 
         status, body = call_nous_api(api_key, payload, timeout=30)
@@ -107,6 +108,10 @@ class ChangeSummary:
 
         try:
             result = json.loads(body)
+            usage_str = format_token_usage(result)
+            if usage_str:
+                print(f"  [Change Summary Tokens] {usage_str}", flush=True)
+
             choices = result.get("choices") or []
             if not choices:
                 return {}
