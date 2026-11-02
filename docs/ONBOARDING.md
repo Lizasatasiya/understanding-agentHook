@@ -86,7 +86,7 @@ UNDERSTANDING_AGENT_REPO_ROOT=/path/to/their/project \
 |---|---|
 | `python3` says 3.9.x | Stale terminal session (zsh caches lookups) — open a NEW terminal. The tools also self-heal: they re-exec under the modern python automatically. |
 | Hook output looks stale after pulling hook-repo changes | pre-commit snapshots the hook repo at its recorded rev — in each project: `pre-commit clean && pre-commit install-hooks` (or `pre-commit autoupdate --repo <path>`) |
-| No API key configured | Re-run `install.sh --key "..." --model haiku` (or sonnet / nous). The hook does not read a project `.env` |
+| No API key configured | Re-run `install.sh --key "..." --model haiku` (or sonnet / nous / org). The hook does not read a project `.env` |
 | `zsh: permission denied: python3.14` | A broken leftover alias on some machines — ignore it; only `python3` is used anywhere |
 
 ## What a demo project needs (for the management-demo format)

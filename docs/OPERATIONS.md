@@ -43,7 +43,7 @@ LLM:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| UNDERSTANDING_AGENT_MODEL | set by `--model` | `sonnet`, `haiku`, or `nous` |
+| UNDERSTANDING_AGENT_MODEL | set by `--model` | `sonnet`, `haiku`, `nous`, or `org` |
 | UNDERSTANDING_AGENT_API_KEY | set by `--key` | key for that model |
 | UNDERSTANDING_AGENT_FAIL_MODE | open | closed = block commits when LLM unreachable |
 | UNDERSTANDING_AGENT_DISABLE_THINKING | on | for `nous`, send `reasoning_effort=none` |

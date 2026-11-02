@@ -103,7 +103,7 @@ Within every scale, ~80% of questions target the actual diff and at most ~20% ad
 ## 🚀 Key Features
 
 - **🎙️ Voice-First Interaction**: Reads questions aloud (`say`) and transcribes developer speech in real-time using local OpenAI Whisper (`sounddevice` / `pyaudio`). Press **[Tab]** to toggle speech capture.
-- **🔌 Installed model**: `install.sh --key` and `--model` save the only API key and model the hook uses (`sonnet`, `haiku`, or `nous`). Questions and answer checks both use that pair.
+- **🔌 Installed model**: `install.sh --key` and `--model` save the only API key and model the hook uses (`sonnet`, `haiku`, `nous`, or `org`). Questions and answer checks both use that pair.
 - **⚡ Fast, Resilient Execution**: Sub-second question generation with the configured provider; retries with exponential backoff on transient errors; robust JSON extraction from reasoning models.
 - **🎯 Multi-Language Change Analysis**: Function-level change detection across 15+ languages — native Python `ast` for Python, line-anchored definition matching for TS/JS/C#/Go/Rust/Java and more. Only genuinely-touched functions become questions.
 - **🛡️ Security Lens (deterministic)**: Every staged change is scanned for security-relevant surfaces — injection sinks, auth flows, hardcoded secrets, unsafe deserialization, command injection, LLM-output trust, disabled TLS, cleartext HTTP. Security-relevant changes always get one targeted security question (never a hard block). **Exception: stealable credentials hard-block the commit BEFORE any prompt or LLM call** — git history is permanent, so no answer can make committing a real credential safe. The gate covers: 25+ vendor-pinned token formats (AWS, Google, Stripe, Anthropic, GitHub, GitLab, npm, PyPI, Slack, Telegram, SendGrid, Twilio, ...), private key material, connection strings with inline credentials (`postgres://user:***@...`), basic-auth URLs, high-entropy values assigned to secret-named variables (Shannon-entropy gated, with a `# pragma: allow-secret` escape hatch), and **staged key files** (`.pem`, `.p12`, `id_rsa`, `.npmrc`, `.netrc`, ... — detected by filename alone, contents never read). Exact vendor formats block even in test files (a real leaked key is real anywhere); fixture-shaped values in tests stay exempt. The gate scans the raw staged diff (module-level code included), redacts secrets in its output, suggests `git restore --staged <file>` per finding, calls out staged-but-gitignored files, and can be disabled per-commit with `UNDERSTANDING_AGENT_SECURITY_GATE=off`.
@@ -119,7 +119,7 @@ Within every scale, ~80% of questions target the actual diff and at most ~20% ad
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `UNDERSTANDING_AGENT_MODEL` | set by `--model` | `sonnet`, `haiku`, or `nous`. Saved in `~/.config/understanding-agent/.env` |
+| `UNDERSTANDING_AGENT_MODEL` | set by `--model` | `sonnet`, `haiku`, `nous`, or `org`. Saved in `~/.config/understanding-agent/.env` |
 | `UNDERSTANDING_AGENT_API_KEY` | set by `--key` | API key for that model, from the same file |
 | `UNDERSTANDING_AGENT_FAIL_MODE` | `open` | `open`: if the LLM is unreachable, the commit is allowed with a warning and marked `llm-unverified`. `closed`: the commit is blocked (strict verification) |
 | `UNDERSTANDING_AGENT_TELEMETRY_URL` | unset (off) | Endpoint to POST session audit payloads to (e.g. `http://dashboard.internal:8000/understanding-session`) |
@@ -178,7 +178,7 @@ understanding-agent-hook/
 - **Standard Library Zero-Dependency Core**: The core git parsing, AST analysis, LLM transport, terminal UI, and HTTP client use native Python modules (`ast`, `subprocess`, `hashlib`, `http.client`, `ssl`, `difflib`, `termios`, `tty`, `select`).
 
 ### LLM Infrastructure
-- **Models**: `haiku` (`claude-haiku-5-5`), `sonnet` (`claude-sonnet-5-5`), or `nous` (`qwen/qwen3-coder-30b-a3b-instruct`), chosen with `install.sh --model`
+- **Models**: `haiku` (`claude-haiku-5-5`), `sonnet` (`claude-sonnet-5-5`), `nous` (`qwen/qwen3-coder-30b-a3b-instruct`), or `org` (`http://llm.yorkdevs.link:2222/v1`), chosen with `install.sh --model`
 - **Configuration**: the key and model in `~/.config/understanding-agent/.env` are the only LLM settings the hook reads
 - **HTTP Layer**: Native `http.client.HTTPSConnection` with socket cleanup, retry + exponential backoff, and robust JSON extraction (handles reasoning tags, code fences, trailing commas)
 

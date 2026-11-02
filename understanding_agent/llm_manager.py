@@ -1,7 +1,7 @@
 """LLM configuration for the model and key saved by install.sh.
 
 Both values live in ~/.config/understanding-agent/.env:
-UNDERSTANDING_AGENT_MODEL is sonnet, haiku, or nous.
+UNDERSTANDING_AGENT_MODEL is sonnet, haiku, nous, or org.
 UNDERSTANDING_AGENT_API_KEY is the key for that model.
 Questions and answer checks use that same pair. Nothing else is consulted.
 """
@@ -28,6 +28,11 @@ SUPPORTED_MODELS = {
         "provider": "anthropic",
         "model": "claude-haiku-5-5",
         "base_url": "https://api.anthropic.com/v1",
+    },
+    "org": {
+        "provider": "openai",
+        "model": "org",
+        "base_url": "http://llm.yorkdevs.link:2222/v1",
     },
 }
 
@@ -87,7 +92,7 @@ def _installed() -> dict:
 
 
 def installed_model_choice() -> str | None:
-    """Return sonnet, haiku, or nous from the install file. No other source."""
+    """Return sonnet, haiku, nous, or org from the install file. No other source."""
     raw = (_installed().get("UNDERSTANDING_AGENT_MODEL") or "").strip().lower()
     if raw in SUPPORTED_MODELS:
         return raw
@@ -102,7 +107,7 @@ def _active_spec() -> dict:
 
 
 def get_provider() -> str:
-    """nous or anthropic, from the installed model. Empty when none is installed."""
+    """nous, anthropic, or openai, from the installed model. Empty when none is installed."""
     return _active_spec().get("provider", "")
 
 

@@ -11,7 +11,7 @@
 #
 # Options:
 #   --key <API_KEY>       API key for the selected model
-#   --model <NAME>        sonnet, haiku, or nous. Required the first time; later installs keep the saved model.
+#   --model <NAME>        sonnet, haiku, nous, or org. Required the first time; later installs keep the saved model.
 #   --ref <BRANCH>        Git branch or tag to install (or set REF). Required for a curl install.
 #   --uninstall           Remove global hooks and restore standard git behavior
 #   --status              Check current installation and hook health
@@ -62,7 +62,7 @@ while [ $# -gt 0 ]; do
         --uninstall) DO_UNINSTALL=true; shift ;;
         --status) DO_STATUS=true; shift ;;
         -h|--help)
-            echo "Usage: install.sh [--ref <branch>] [--key <API_KEY>] [--model sonnet|haiku|nous] [--uninstall] [--status]"
+            echo "Usage: install.sh [--ref <branch>] [--key <API_KEY>] [--model sonnet|haiku|nous|org] [--uninstall] [--status]"
             echo "Curl install: REF=dev curl -fsSL \"https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/\${REF}/install.sh\" | REF=\"\$REF\" bash -s -- --key KEY --model haiku"
             exit 0
             ;;
@@ -73,8 +73,8 @@ done
 if [ -n "$ARG_MODEL" ]; then
     ARG_MODEL="$(printf '%s' "$ARG_MODEL" | tr '[:upper:]' '[:lower:]')"
     case "$ARG_MODEL" in
-        sonnet|haiku|nous) ;;
-        *) err "Unsupported model '$ARG_MODEL'. Choose one of: sonnet, haiku, nous." ;;
+        sonnet|haiku|nous|org) ;;
+        *) err "Unsupported model '$ARG_MODEL'. Choose one of: sonnet, haiku, nous, org." ;;
     esac
 fi
 
