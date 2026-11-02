@@ -241,6 +241,7 @@ if [ -z "$UNDERSTANDING_AGENT_CHAIN_RUNNING" ]; then
     GIT_DIR="$(git rev-parse --git-dir 2>/dev/null)"
     if [ -n "$GIT_DIR" ] && [ -x "$GIT_DIR/hooks/pre-commit" ]; then
         UNDERSTANDING_AGENT_CHAIN_RUNNING=1 "$GIT_DIR/hooks/pre-commit" "$@" || exit $?
+        exit 0
     fi
 fi
 

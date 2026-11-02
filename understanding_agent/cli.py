@@ -106,6 +106,7 @@ from .hook_stages import (
     _print_agent_block,
     _detect_no_verify,
     _print_no_verify_block,
+    _is_prepare_stage,
     is_already_verified_for_commit,
     mark_verified_for_commit,
     clear_verified_for_commit,
@@ -175,8 +176,12 @@ def main():
 
     # Check if pre-commit already verified and defended this exact staged change
     if is_already_verified_for_commit(project_root, head_commit, diff_hash):
-        clear_verified_for_commit(project_root)
         sys.exit(0)
+
+    # If running in prepare-commit-msg stage and NOT verified, this is a --no-verify bypass
+    if _is_prepare_stage():
+        _print_no_verify_block(commit_msg)
+        sys.exit(1)
         
     # 3. Stack Detection (languages, frameworks, domains — keys all downstream hints)
     stack = StackDetector().detect(project_root)

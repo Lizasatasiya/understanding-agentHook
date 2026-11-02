@@ -21,12 +21,12 @@ SUPPORTED_MODELS = {
     },
     "sonnet": {
         "provider": "anthropic",
-        "model": "claude-sonnet-5-5",
+        "model": "claude-sonnet-4-5",
         "base_url": "https://api.anthropic.com/v1",
     },
     "haiku": {
         "provider": "anthropic",
-        "model": "claude-haiku-5-5",
+        "model": "claude-haiku-4-5",
         "base_url": "https://api.anthropic.com/v1",
     },
     "org": {
