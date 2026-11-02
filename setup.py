@@ -15,7 +15,9 @@ setup(
         ]
     },
     python_requires=">=3.10",
-    install_requires=[],
+    install_requires=[
+        "openai>=1.40",
+    ],
     extras_require={
         "voice": [
             "sounddevice",

@@ -379,10 +379,51 @@ def _format_anthropic_payload(payload_dict: dict) -> dict:
     return anthropic_payload
 
 
+def _openai_client_request(api_key: str, payload_dict: dict, timeout: int) -> tuple[int, str]:
+    """Call the org model the same way as the OpenAI client.
+
+    base_url is the installed org endpoint. api_key is the key saved by
+    install.sh. chat.completions.create reads choices[0].message.content.
+    """
+    try:
+        from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
+    except ImportError:
+        return 0, "The openai package is not installed. Re-run install.sh so the org model can be called."
+
+    base_url = get_base_url().rstrip("/") + "/"
+    messages = payload_dict.get("messages") or []
+    kwargs = {
+        "model": payload_dict.get("model") or get_model(),
+        "messages": messages,
+    }
+    if "temperature" in payload_dict:
+        kwargs["temperature"] = payload_dict["temperature"]
+    if payload_dict.get("max_tokens") is not None:
+        kwargs["max_tokens"] = payload_dict["max_tokens"]
+
+    try:
+        client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
+        completion = client.chat.completions.create(**kwargs)
+        return 200, completion.model_dump_json()
+    except APIStatusError as exc:
+        body = ""
+        response = getattr(exc, "response", None)
+        if response is not None:
+            body = getattr(response, "text", "") or ""
+        return exc.status_code or 0, body or str(exc)
+    except (APIConnectionError, APITimeoutError) as exc:
+        return 0, str(exc)
+    except Exception as exc:
+        return 0, str(exc)
+
+
 def _nous_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[int, str]:
     base_url = get_base_url().rstrip("/")
     provider = get_provider()
     scheme, host, endpoint_path, _full_url = llm_request_target()
+
+    if provider == "openai":
+        return _openai_client_request(api_key, payload_dict, timeout)
 
     if _is_anthropic(base_url, provider):
         payload_data = _format_anthropic_payload(payload_dict)
