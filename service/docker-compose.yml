@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: understanding
       POSTGRES_DB: understanding_ledger
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5434:5432"
     volumes:
       - ledger_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -21,12 +21,15 @@ services:
       dockerfile: service/Dockerfile
     environment:
       SERVICE_DATABASE_URL: postgresql+psycopg://understanding:understanding@db:5432/understanding_ledger
-      SERVICE_TEAM_TOKEN: ${SERVICE_TEAM_TOKEN:-}
-      SERVICE_TEAM_SECRET: ${SERVICE_TEAM_SECRET:-}
-      SERVICE_ADMIN_TOKEN: ${SERVICE_ADMIN_TOKEN:-}
+      SERVICE_TEAM_TOKEN: ${SERVICE_TEAM_TOKEN:-team-token-secret-123}
+      SERVICE_TEAM_SECRET: ${SERVICE_TEAM_SECRET:-team-hmac-secret-456}
+      SERVICE_ADMIN_TOKEN: ${SERVICE_ADMIN_TOKEN:-admin-secret-789}
       SERVICE_RETENTION_DAYS: ${SERVICE_RETENTION_DAYS:-90}
     ports:
-      - "8000:8000"
+      - "8088:8000"
+    volumes:
+      - ../service:/app/service
+      - ../understanding_agent:/app/understanding_agent
     depends_on:
       db:
         condition: service_healthy

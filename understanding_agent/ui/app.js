@@ -15,6 +15,10 @@
     selectedCommitData: null,
     selectedAttemptId: null,
     selectedAttemptData: null,
+    selectedProject: '',
+    projects: [],
+    selectedBranch: '',
+    branches: [],
     searchQuery: '',
     currentView: 'overview', // 'overview' | 'attempt'
     auditFilter: 'all', // 'all' | 'failed' | 'passed'
@@ -27,13 +31,20 @@
     commitsCount: document.getElementById('commits-count'),
     commitSearch: document.getElementById('commit-search'),
     refreshBtn: document.getElementById('refresh-btn'),
+    crumbUser: document.getElementById('crumb-user'),
+    crumbProject: document.getElementById('crumb-project'),
+    crumbBranch: document.getElementById('crumb-branch'),
     crumbCommitTitle: document.getElementById('crumb-commit-title'),
     emptyState: document.getElementById('empty-state'),
     commitOverviewView: document.getElementById('commit-overview-view'),
     attemptDetailView: document.getElementById('attempt-detail-view'),
 
-    // User selection elements
+    // User & Project & Branch selection elements
     userSelect: document.getElementById('user-select'),
+    projectSelect: document.getElementById('project-select'),
+    projectsCount: document.getElementById('projects-count'),
+    branchSelect: document.getElementById('branch-select'),
+    branchesCount: document.getElementById('branches-count'),
     userFlowCard: document.getElementById('user-flow-card'),
     userFlowAvatar: document.getElementById('user-flow-avatar'),
     userFlowName: document.getElementById('user-flow-name'),
@@ -152,6 +163,73 @@
     el.userSelect.innerHTML = html;
   }
 
+  async function fetchProjects() {
+    try {
+      const url = state.selectedUser
+        ? `/api/projects?user=${encodeURIComponent(state.selectedUser)}`
+        : '/api/projects';
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      state.projects = Array.isArray(data) ? data : [];
+      renderProjectSelect();
+    } catch (err) {
+      console.error('Failed to load projects from DB:', err);
+    }
+  }
+
+  function renderProjectSelect() {
+    if (!el.projectSelect) return;
+    const currentVal = state.selectedProject;
+    const totalCommits = state.projects.reduce((acc, p) => acc + (p.commit_count || 0), 0);
+    let html = `<option value="">All Projects (${state.projects.length} Repos, ${totalCommits} Commits)</option>`;
+
+    state.projects.forEach((p) => {
+      const val = p.repo_slug || p.name;
+      const isSel = val === currentVal ? 'selected' : '';
+      html += `<option value="${escapeHtml(val)}" ${isSel}>${escapeHtml(p.name)} (${p.commit_count} commits)</option>`;
+    });
+
+    el.projectSelect.innerHTML = html;
+    if (el.projectsCount) {
+      el.projectsCount.textContent = state.projects.length;
+    }
+  }
+
+  async function fetchBranches() {
+    try {
+      const params = new URLSearchParams();
+      if (state.selectedUser) params.append('user', state.selectedUser);
+      if (state.selectedProject) params.append('project', state.selectedProject);
+      const url = params.toString() ? `/api/branches?${params.toString()}` : '/api/branches';
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      state.branches = Array.isArray(data) ? data : [];
+      renderBranchSelect();
+    } catch (err) {
+      console.error('Failed to load branches from DB:', err);
+    }
+  }
+
+  function renderBranchSelect() {
+    if (!el.branchSelect) return;
+    const currentVal = state.selectedBranch;
+    const totalCommits = state.branches.reduce((acc, b) => acc + (b.commit_count || 0), 0);
+    let html = `<option value="">All Branches (${state.branches.length} Branches, ${totalCommits} Commits)</option>`;
+
+    state.branches.forEach((b) => {
+      const val = b.name;
+      const isSel = val === currentVal ? 'selected' : '';
+      html += `<option value="${escapeHtml(val)}" ${isSel}>⎇ ${escapeHtml(b.name)} (${b.commit_count} commits)</option>`;
+    });
+
+    el.branchSelect.innerHTML = html;
+    if (el.branchesCount) {
+      el.branchesCount.textContent = state.branches.length;
+    }
+  }
+
   function updateUserFlowBanner() {
     if (!el.userFlowCard) return;
     if (!state.selectedUser) {
@@ -196,18 +274,19 @@
 
   async function fetchCommits(preserveSelection = false) {
     try {
-      const url = state.selectedUser
-        ? `/api/commits?user=${encodeURIComponent(state.selectedUser)}`
-        : '/api/commits';
+      const params = new URLSearchParams();
+      if (state.selectedUser) params.append('user', state.selectedUser);
+      if (state.selectedProject) params.append('project', state.selectedProject);
+      if (state.selectedBranch) params.append('branch', state.selectedBranch);
+      const url = params.toString() ? `/api/commits?${params.toString()}` : '/api/commits';
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const rawCommits = Array.isArray(data) ? data : [];
-      // Only passed committed commits on the left side (no current staged, no failed)
+      // Exclude staged pseudo-commits from sidebar list
       state.commits = rawCommits.filter((c) => {
         if (c.is_staged || c.id === 'staged') return false;
-        const st = (c.status || '').toUpperCase();
-        return st === 'PASSED';
+        return true;
       });
 
       renderSidebar();
@@ -286,14 +365,13 @@
 
   function renderSidebar() {
     const q = state.searchQuery.toLowerCase().trim();
-    // Guarantee only passed committed commits are shown on the left side
-    const passedCommits = state.commits.filter((c) => {
+    // Exclude staged pseudo-commits from sidebar list
+    const validCommits = state.commits.filter((c) => {
       if (c.is_staged || c.id === 'staged') return false;
-      const st = (c.status || '').toUpperCase();
-      return st === 'PASSED';
+      return true;
     });
 
-    const filtered = passedCommits.filter((c) => {
+    const filtered = validCommits.filter((c) => {
       if (!q) return true;
       return (
         (c.message && c.message.toLowerCase().includes(q)) ||
@@ -308,7 +386,7 @@
     if (filtered.length === 0) {
       el.commitList.innerHTML = `
         <div class="sidebar-empty">
-          <span>No passed commits found.</span>
+          <span>No commits found.</span>
         </div>
       `;
       return;
@@ -317,20 +395,32 @@
     el.commitList.innerHTML = filtered
       .map((c) => {
         const isActive = c.id === state.selectedCommitId;
-        const attemptsText =
-          c.attempts_count === 1
+        const st = (c.status || 'UNAUDITED').toUpperCase();
+        const isPassed = st === 'PASSED';
+        const isFailed = st === 'FAILED';
+        const isUnaudited = st === 'UNAUDITED';
+        const statusClass = isPassed ? 'status-passed' : (isFailed ? 'status-failed' : 'status-unverified');
+        const statusIcon = isPassed ? '✓' : (isFailed ? '✗' : '•');
+        const attemptsText = isUnaudited
+          ? 'Unaudited'
+          : (c.attempts_count === 1
             ? '1 attempt'
-            : c.attempts_count > 1
-              ? `${c.attempts_count} attempts`
-              : '0 attempts';
+            : (c.attempts_count > 1 ? `${c.attempts_count} attempts` : '0 attempts'));
+        const displayBranch = state.selectedBranch || (c.branch ? c.branch.split(',')[0].trim() : 'main');
 
         return `
           <div class="commit-card ${isActive ? 'active' : ''}" 
                data-id="${escapeHtml(c.id)}"
                onclick="window.understandingAgent.selectCommit('${escapeHtml(c.id)}')">
             <div class="commit-card-top">
-              <span class="commit-card-status status-passed">
-                ✓ PASSED
+              <span class="commit-card-status ${statusClass}">
+                ${statusIcon} ${escapeHtml(st)}
+              </span>
+              <span class="commit-card-project" title="${escapeHtml(c.repo || c.project || '')}">
+                📁 ${escapeHtml(c.project_name || c.repo || 'repo')}
+              </span>
+              <span class="commit-card-branch" title="Branch: ${escapeHtml(displayBranch)}">
+                ⎇ ${escapeHtml(displayBranch)}
               </span>
               <span class="commit-card-hash">${escapeHtml(c.short_hash || 'commit')}</span>
             </div>
@@ -373,6 +463,50 @@
     renderCommitOverview(data);
   }
 
+  function updateBreadcrumbs(commitData = null) {
+    if (el.crumbUser) {
+      if (state.selectedUser) {
+        const u = state.users.find(
+          (user) =>
+            (user.email && user.email.toLowerCase() === state.selectedUser.toLowerCase()) ||
+            (user.name && user.name.toLowerCase() === state.selectedUser.toLowerCase())
+        );
+        el.crumbUser.textContent = u ? u.name : state.selectedUser;
+      } else if (commitData && commitData.author) {
+        el.crumbUser.textContent = commitData.author.split('<')[0].trim();
+      } else {
+        el.crumbUser.textContent = 'All Users';
+      }
+    }
+
+    if (el.crumbProject) {
+      if (state.selectedProject) {
+        const p = state.projects.find((proj) => (proj.repo_slug === state.selectedProject || proj.name === state.selectedProject));
+        el.crumbProject.textContent = p ? p.name : state.selectedProject;
+      } else if (commitData && (commitData.project_name || commitData.repo)) {
+        el.crumbProject.textContent = commitData.project_name || commitData.repo;
+      } else {
+        el.crumbProject.textContent = 'All Projects';
+      }
+    }
+
+    if (el.crumbBranch) {
+      if (state.selectedBranch) {
+        el.crumbBranch.textContent = state.selectedBranch;
+      } else if (commitData && commitData.branch) {
+        el.crumbBranch.textContent = commitData.branch;
+      } else {
+        el.crumbBranch.textContent = 'All Branches';
+      }
+    }
+
+    if (commitData) {
+      const fullMsg = commitData.message || '';
+      const title = fullMsg.split('\n')[0] || 'Commit';
+      el.crumbCommitTitle.textContent = `${commitData.short_hash || 'commit'}: ${title}`;
+    }
+  }
+
   function renderCommitOverview(data) {
     showOverview();
 
@@ -382,7 +516,7 @@
     const title = lines[0] || 'Commit';
     const body = lines.slice(1).join('\n').trim();
 
-    el.crumbCommitTitle.textContent = `${data.short_hash || 'commit'}: ${title}`;
+    updateBreadcrumbs(data);
     el.overviewMsgTitle.textContent = title;
 
     if (body) {
@@ -392,14 +526,14 @@
       el.overviewMsgBody.classList.add('hidden');
     }
 
-    const st = (data.status || 'PASSED').toUpperCase();
+    const st = (data.status || 'UNAUDITED').toUpperCase();
     el.overviewStatusBadge.textContent = st;
     el.overviewStatusBadge.className = 'commit-status-badge';
     if (st === 'PASSED') el.overviewStatusBadge.classList.add('status-passed');
     else if (st === 'FAILED') el.overviewStatusBadge.classList.add('status-failed');
     else el.overviewStatusBadge.classList.add('status-pending');
 
-    el.overviewBranchBadge.textContent = data.branch || 'main';
+    el.overviewBranchBadge.textContent = state.selectedBranch || data.branch || 'main';
     el.overviewHash.textContent = data.hash || 'staged';
     el.overviewAuthor.textContent = data.author || 'Unknown';
     el.overviewTimestamp.textContent = formatDate(data.timestamp);
@@ -443,7 +577,7 @@
     if (attempts.length === 0) {
       el.attemptsGrid.innerHTML = `
         <div class="sidebar-empty">
-          <span>No pre-commit interactive defense attempts recorded for this commit.</span>
+          <span>No pre-commit interactive defense attempts recorded for this commit (Created outside pre-commit gate or un-audited).</span>
         </div>
       `;
     } else {
@@ -963,6 +1097,35 @@
       el.userSelect.addEventListener('change', (e) => {
         state.selectedUser = e.target.value;
         updateUserFlowBanner();
+        state.selectedProject = '';
+        state.selectedBranch = '';
+        updateBreadcrumbs();
+        fetchProjects();
+        fetchBranches();
+        state.selectedCommitId = null;
+        state.selectedCommitData = null;
+        fetchCommits(false);
+      });
+    }
+
+    // Project select dropdown listener
+    if (el.projectSelect) {
+      el.projectSelect.addEventListener('change', (e) => {
+        state.selectedProject = e.target.value;
+        state.selectedBranch = '';
+        updateBreadcrumbs();
+        fetchBranches();
+        state.selectedCommitId = null;
+        state.selectedCommitData = null;
+        fetchCommits(false);
+      });
+    }
+
+    // Branch select dropdown listener
+    if (el.branchSelect) {
+      el.branchSelect.addEventListener('change', (e) => {
+        state.selectedBranch = e.target.value;
+        updateBreadcrumbs();
         state.selectedCommitId = null;
         state.selectedCommitData = null;
         fetchCommits(false);
@@ -978,6 +1141,8 @@
     // Refresh button
     el.refreshBtn.addEventListener('click', () => {
       fetchUsers();
+      fetchProjects();
+      fetchBranches();
       fetchCommits(true);
     });
 
@@ -995,13 +1160,17 @@
     // Copy terminal audit report button
     if (el.btnCopyTerminal) el.btnCopyTerminal.addEventListener('click', copyAsciiAuditReport);
 
-    // Initial load: fetch users and commits from DB
+    // Initial load: fetch users, projects, branches, and commits from DB
     fetchUsers();
+    fetchProjects();
+    fetchBranches();
     fetchCommits();
 
     // Auto-refresh every 8 seconds to catch newly recorded sessions seamlessly in real time
     setInterval(() => {
       fetchUsers();
+      fetchProjects();
+      fetchBranches();
       fetchCommits(true);
     }, 8000);
   }

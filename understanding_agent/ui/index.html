@@ -11,7 +11,7 @@
   <link
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
     rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css?v=light_mode_force_v2">
+  <link rel="stylesheet" href="/static/style.css?v=projects_hier_v5">
 </head>
 
 <body>
@@ -72,6 +72,55 @@
             </div>
           </div>
         </div>
+
+        <!-- PROJECT / REPOSITORY SELECTION FIELD (REAL-TIME DB FETCH) -->
+        <div class="user-filter-box project-filter-box">
+          <div class="user-filter-header">
+            <span class="user-filter-label">
+              <svg class="user-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+              </svg>
+              <span>Project / Repo</span>
+            </span>
+            <span id="projects-count" class="badge-count">0</span>
+          </div>
+          <div class="user-select-wrapper">
+            <select id="project-select" class="user-select" aria-label="Select Project / Repository">
+              <option value="">All Projects</option>
+            </select>
+            <div class="select-arrow">
+              <svg viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- BRANCH SELECTION FIELD (REAL-TIME DB FETCH) -->
+        <div class="user-filter-box branch-filter-box">
+          <div class="user-filter-header">
+            <span class="user-filter-label">
+              <svg class="user-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="6" y1="3" x2="6" y2="15"></line>
+                <circle cx="18" cy="6" r="3"></circle>
+                <circle cx="6" cy="18" r="3"></circle>
+                <path d="M18 9a9 9 0 0 1-9 9"></path>
+              </svg>
+              <span>Branch</span>
+            </span>
+            <span id="branches-count" class="badge-count">0</span>
+          </div>
+          <div class="user-select-wrapper">
+            <select id="branch-select" class="user-select" aria-label="Select Git Branch">
+              <option value="">All Branches</option>
+            </select>
+            <div class="select-arrow">
+              <svg viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
+              </svg>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="sidebar-section-title">
@@ -93,7 +142,11 @@
       <!-- Breadcrumb / Top Bar -->
       <header class="top-nav">
         <div class="nav-breadcrumbs" id="breadcrumbs">
-          <span class="crumb-root">Repository</span>
+          <span class="crumb-root" id="crumb-user">All Users</span>
+          <span class="crumb-sep">/</span>
+          <span class="crumb-root" id="crumb-project">All Projects</span>
+          <span class="crumb-sep">/</span>
+          <span class="crumb-root" id="crumb-branch">All Branches</span>
           <span class="crumb-sep">/</span>
           <span class="crumb-current" id="crumb-commit-title">Select a Commit</span>
         </div>
@@ -397,7 +450,7 @@
     </main>
   </div>
 
-  <script src="/static/app.js?v=light_mode_force_v2"></script>
+  <script src="/static/app.js?v=option_b_v4"></script>
 </body>
 
 </html>

@@ -31,8 +31,78 @@ SYNC_TIMEOUT_SECONDS = 2.5
 _QUEUE_NAME = "understanding_sync_queue.json"
 
 
-def _sync_base_url() -> str:
-    return os.environ.get("UNDERSTANDING_AGENT_SYNC_URL", "").strip().rstrip("/")
+def _load_repo_config(repo_root: str | None = None) -> dict:
+    """Safely load project-level configuration from repository root or current dir."""
+    candidate_dirs = []
+    if repo_root and os.path.isdir(repo_root):
+        candidate_dirs.append(repo_root)
+    cwd = os.getcwd()
+    if cwd not in candidate_dirs:
+        candidate_dirs.append(cwd)
+
+    for directory in candidate_dirs:
+        for filename in (".understanding-agent.json", ".understanding-agent.yaml", ".understanding-agent.yml"):
+            cfg_path = os.path.join(directory, filename)
+            if os.path.isfile(cfg_path):
+                try:
+                    with open(cfg_path, "r", encoding="utf-8") as f:
+                        if filename.endswith(".json"):
+                            data = json.load(f)
+                        else:
+                            # Simple key: value parser for yaml without third-party dependencies
+                            data = {}
+                            for line in f:
+                                line = line.strip()
+                                if line and not line.startswith("#") and ":" in line:
+                                    k, v = line.split(":", 1)
+                                    data[k.strip()] = v.strip().strip("'\"")
+                        if isinstance(data, dict):
+                            return data
+                except Exception:
+                    pass
+    return {}
+
+
+DEFAULT_CENTRAL_SYNC_URL = "http://localhost:8088"
+DEFAULT_TEAM_KEY = "team-token-secret-123"
+DEFAULT_TEAM_SECRET = "team-hmac-secret-456"
+
+
+def _resolve_config(repo_root: str | None = None) -> tuple[str, str, str]:
+    """Securely resolve (sync_url, team_token, team_secret).
+
+    Precedence:
+      1. Environment variables (UNDERSTANDING_AGENT_SYNC_URL, etc.)
+      2. Repo-level config file (.understanding-agent.json / .yaml)
+      3. Built-in central server defaults (active globally across all projects)
+    """
+    repo_cfg = _load_repo_config(repo_root)
+
+    sync_url = (
+        os.environ.get("UNDERSTANDING_AGENT_SYNC_URL")
+        or repo_cfg.get("sync_url")
+        or DEFAULT_CENTRAL_SYNC_URL
+    ).strip().rstrip("/")
+
+    team_key = (
+        os.environ.get("UNDERSTANDING_AGENT_TEAM_KEY")
+        or repo_cfg.get("team_key")
+        or repo_cfg.get("team_token")
+        or DEFAULT_TEAM_KEY
+    ).strip()
+
+    team_secret = (
+        os.environ.get("UNDERSTANDING_AGENT_TEAM_SECRET")
+        or repo_cfg.get("team_secret")
+        or DEFAULT_TEAM_SECRET
+    ).strip()
+
+    return sync_url, team_key, team_secret
+
+
+def _sync_base_url(repo_root: str | None = None) -> str:
+    url, _, _ = _resolve_config(repo_root)
+    return url
 
 
 def _legacy_telemetry_url() -> str:
@@ -50,14 +120,12 @@ def _sign(secret: str, body: bytes) -> str:
     return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
 
 
-def _headers(session_data: dict, body: bytes) -> dict:
+def _headers(session_data: dict, body: bytes, team_key: str = "", team_secret: str = "") -> dict:
     headers = {"Content-Type": "application/json"}
-    team_key = os.environ.get("UNDERSTANDING_AGENT_TEAM_KEY", "").strip()
     if team_key:
         headers["X-Team-Token"] = team_key
-    secret = os.environ.get("UNDERSTANDING_AGENT_TEAM_SECRET", "").strip()
-    if secret:
-        headers["X-Signature"] = _sign(secret, body)
+    if team_secret:
+        headers["X-Signature"] = _sign(team_secret, body)
     return headers
 
 
@@ -93,13 +161,13 @@ def _write_queue(repo_root: str, queue: list) -> None:
         pass
 
 
-def _post(url: str, session_data: dict) -> bool:
+def _post(url: str, session_data: dict, team_key: str = "", team_secret: str = "") -> bool:
     """One POST with the sync budget. True on HTTP 2xx."""
     body = _canonical_payload(session_data)
     req = urllib.request.Request(
         url,
         data=body,
-        headers=_headers(session_data, body),
+        headers=_headers(session_data, body, team_key=team_key, team_secret=team_secret),
         method="POST",
     )
     try:
@@ -114,16 +182,16 @@ class ServerClient:
 
     def send(self, session_data: dict, repo_root: str | None = None):
         repo_root = repo_root or os.getcwd()
-        base = _sync_base_url()
+        base, team_key, team_secret = _resolve_config(repo_root)
 
         if base:
             # 1. Drain any queued sessions from earlier offline runs FIRST.
             queue = _load_queue(repo_root)
             if queue:
-                if _post(f"{base}/api/v1/sessions/batch", {"sessions": queue}):
+                if _post(f"{base}/api/v1/sessions/batch", {"sessions": queue}, team_key=team_key, team_secret=team_secret):
                     _write_queue(repo_root, [])
             # 2. Deliver this session; enqueue on failure.
-            if _post(f"{base}/api/v1/sessions", session_data):
+            if _post(f"{base}/api/v1/sessions", session_data, team_key=team_key, team_secret=team_secret):
                 return
             queue = _load_queue(repo_root)
             queue.append(session_data)
