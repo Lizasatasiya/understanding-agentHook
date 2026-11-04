@@ -6,6 +6,7 @@ was verified against the code.
 
 | Doc | Audience | What it covers |
 |---|---|---|
+| [END_TO_END.md](END_TO_END.md) | Engineers | Current `server-database` flow from the git hook through scoring and the ledger, plus unused files and orphan functions |
 | [OVERVIEW.md](OVERVIEW.md) | Everyone, non-technical | What this system is, the problem it solves, what happens when a developer commits, what it deliberately never does, deployment shapes for solo devs and teams |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Engineers | Module map with input/output contracts, the full commit-time pipeline, session data schema v3, local + central storage, the evaluation protocol, failure modes |
 | [DECISIONS.md](DECISIONS.md) | Engineers, tech leadership | Every major design decision with the alternatives considered and why they were rejected |
