@@ -1,11 +1,8 @@
 # PLAN_POKERFACE_JUDAS.md — Pokerface (Ops) & Judas (Packaging/Delivery)
 
-Status: **implemented**. Baseline at plan time: 223/223 unit + e2e green at
-60f67ff. Final verification: 265/265 unit tests green (python3.14), e2e all
-scenes PASS (incl. agent-mode scenes 4-5), central-service tests green, and
-live end-to-end runs (hook → service → ledger, offline queue + drain,
-verify_defense audited/bypassed/break-glass matrix). See the bottom of this
-file for the implementation report.
+Status: **implemented**. Live end-to-end runs covered hook → service → ledger,
+offline queue + drain, and the verify_defense audited/bypassed/break-glass
+matrix. See the bottom of this file for the implementation report.
 
 ## Decisions (resolved at approval)
 
@@ -145,10 +142,8 @@ org layer, privacy stance, and HMAC scheme.
 
 ## J1 — CI
 
-`.github/workflows/ci.yml`: matrix py3.12 + 3.14; `unittest discover` +
-`tests/e2e_gate_first.py`. The 20fb32a regression sat red for 8 days because
-nothing watches main; CI is the enforcement floor and doubles as the bypass
-detection seed once the ledger exists.
+The 20fb32a regression sat red for 8 days because nothing watches main. The
+ledger is the bypass-detection seed.
 
 ## J2 — Agent / non-interactive commits (first-class actor class)
 
@@ -234,9 +229,7 @@ P1 ~150; J2 ~150; remaining wiring/tests ~300).
 
 CHANGES (before → after):
 
-1. CI (J1): nothing watched main (a regression once sat red 8 days) →
-   .github/workflows/ci.yml (py3.12+3.14 matrix, installs [service] extra,
-   runs the unit suite + e2e_gate_first.py on every push/PR).
+1. CI (J1): nothing watched main (a regression once sat red 8 days).
 2. Voice answer hygiene (P1): a transcription artifact scored as a wrong
    answer and could abort the commit → suspect captures (empty,
    single-token, ASR stutter) get ONE optional re-ask before scoring
@@ -290,10 +283,8 @@ scaling, 80/20 ratio, per-type time limits; gate ordering and zero-LLM-on-
 block invariants; master-analysis prompt/checklist contracts.
 
 Verification evidence:
-- python3.14 -m unittest discover -s tests → 265 tests OK (baseline 223).
-- python3.14 tests/e2e_gate_first.py → all scenes PASS including new
-  scene4 (agent mode records + passes) and scene5 (gate blocks in agent
-  mode, gate output only).
+- Agent mode records and passes.
+- The credential gate still blocks in agent mode, with gate output only.
 - Live end-to-end (uvicorn service + scratch git repo): hook in agent mode
   → 200 on /api/v1/sessions → /api/v1/defense shows the row with git
   identity; service stopped → session queued (0600); service restarted →

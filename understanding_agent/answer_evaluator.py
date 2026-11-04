@@ -1,5 +1,5 @@
 from .evaluation_models import EvaluationResult
-from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, get_judge_model, fail_open_enabled
+from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, get_judge_model, fail_open_enabled, log_llm_error
 from .checklists import (
     parse_checklist,
     aggregate_score,
@@ -30,12 +30,15 @@ class AnswerEvaluator:
         else:
             api_key = load_nous_api_key()
         if not api_key:
-            # No key configured: fail open rather than fail the whole commit pipeline.
+            log_llm_error(
+                "No API key configured. Set UNDERSTANDING_AGENT_API_KEY. "
+                "This answer was not checked by the model."
+            )
             if fail_open_enabled():
                 return self._evaluate_fallback(question, answer, is_offline=True)
             return EvaluationResult({
                 "score": 0,
-                "evaluation": "Cannot verify understanding: NOUS_API_KEY is not configured and UNDERSTANDING_AGENT_FAIL_MODE=closed.",
+                "evaluation": "Cannot verify understanding: UNDERSTANDING_AGENT_API_KEY is not configured and UNDERSTANDING_AGENT_FAIL_MODE=closed.",
                 "follow_up_required": False,
                 "missing_concepts": [],
                 "llm_verified": False,
@@ -76,7 +79,7 @@ class AnswerEvaluator:
         import re
         text = (answer.get("answer") or "").strip().lower()
         status_prefix = (
-            "Offline evaluation (no NOUS_API_KEY configured)."
+            "Offline evaluation (no API key configured)."
             if is_offline
             else "LLM evaluation unavailable (API error or timeout); failing open."
         )
@@ -172,7 +175,7 @@ class AnswerEvaluator:
             score = 76
             follow_up = False
 
-        status_prefix = "Offline evaluation (no NOUS_API_KEY configured)." if is_offline else "LLM evaluation unavailable (API error or timeout); failing open."
+        status_prefix = "Offline evaluation (no API key configured)." if is_offline else "LLM evaluation unavailable (API error or timeout); failing open."
         eval_text = f"{status_prefix} Semantic fallback: covered {len(covered)}/{len(expected)} expected concepts."
         if covered:
             eval_text += f" Recognized: {', '.join(covered)}."
@@ -227,38 +230,53 @@ class AnswerEvaluator:
                 text = (choices[0].get("text") or "").strip()
             parsed = extract_json(text)
             if not isinstance(parsed, dict):
+                if text:
+                    log_llm_error("Answer check failed: the model reply was not a checklist judgment.")
                 return None
             raw_items = parsed.get("items")
             if not isinstance(raw_items, list) or len(raw_items) != len(checklist.items):
+                log_llm_error("Answer check failed: the model checklist did not match the question.")
                 return None
             awarded = []
             rationales = []
             for idx, item in enumerate(checklist.items):
                 ri = raw_items[idx]
                 if not isinstance(ri, dict):
+                    log_llm_error("Answer check failed: a checklist item in the model reply was not an object.")
                     return None
                 score = ri.get("score")
                 try:
                     score = int(score)
                 except (TypeError, ValueError):
+                    log_llm_error("Answer check failed: a checklist score in the model reply was not an integer.")
                     return None
                 if score not in [int(t) for t in item.tiers]:
-                    return None  # rubric adherence violated -> degrade
+                    log_llm_error(
+                        f"Answer check failed: checklist score {score} is outside the allowed tiers."
+                    )
+                    return None
                 awarded.append(score)
                 rationales.append(str(ri.get("rationale", "")))
             clarity = parsed.get("clarity", {})
             if not isinstance(clarity, dict):
+                log_llm_error("Answer check failed: the model reply had no clarity score.")
                 return None
             try:
                 clarity_score = int(clarity.get("score"))
             except (TypeError, ValueError):
+                log_llm_error("Answer check failed: the model clarity score was not an integer.")
                 return None
             if clarity_score not in (0, 1):
+                log_llm_error(
+                    f"Answer check failed: clarity score {clarity_score} is outside 0 or 1."
+                )
                 return None
             score = aggregate_score(checklist, awarded, clarity_score)
-        except (ValueError, KeyError):
+        except (ValueError, KeyError) as exc:
+            log_llm_error(f"Answer check failed: could not read the model reply ({exc}).")
             return None
-        except Exception:
+        except Exception as exc:
+            log_llm_error(f"Answer check failed: {exc}")
             return None
 
         covered = [i.key_point for i, a in zip(checklist.items, awarded) if a > 0]
@@ -436,8 +454,11 @@ class AnswerEvaluator:
             parsed = extract_json(text)
             if isinstance(parsed, dict) and "score" in parsed:
                 return parsed
+            if text:
+                log_llm_error("Answer check failed: the model reply did not include a score.")
             return {}
-        except Exception:
+        except Exception as exc:
+            log_llm_error(f"Answer check failed: could not read the model reply ({exc}).")
             return {}
 
     def _call_groq(self, api_key: str, prompt: str) -> dict:

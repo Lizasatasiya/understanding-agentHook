@@ -343,8 +343,8 @@ drops the end of the change — exactly where late returns/raises live. Rank
 **Decision.** change_kind.py classifies every commit (even offline) from
 paths/diff-shape/symbols into typed weights over the six frozen domains +
 auditable signals; the classification prints for the developer and feeds a
-CHANGE CLASSIFICATION section in BOTH question prompts. tests/
-test_change_kind.py is the frozen matrix (like the gate matrix).
+CHANGE CLASSIFICATION section in BOTH question prompts. The domain
+matrix lives in `change_kind.py`.
 
 **Alternatives.** LLM-only classification (exists via master analysis) —
 offline-blind and unauditable; or no classification (questions target the

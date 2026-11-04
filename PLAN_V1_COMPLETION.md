@@ -1,10 +1,7 @@
 # PLAN_V1_COMPLETION.md — remaining V1 work (all except UI, which a colleague owns)
 
-Status: **implemented**. Final: 288 unit tests green, all e2e scripts pass
-(e2e_gate_first 5 scenes, e2e_security_gate — which this pass also REPAIRED:
-it had been silently broken by a scanner-mangled fixture and a system-python
-hook invocation — and e2e_polyglot_fixture), context eval harness 1.00
-aggregate coverage (CI-gated at 0.80). Baseline was 265 at plan time.
+Status: **implemented**. Context eval harness 1.00 aggregate coverage
+(strict gate at 0.80).
 
 ## Implementation report (concise)
 

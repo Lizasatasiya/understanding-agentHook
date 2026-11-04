@@ -1,6 +1,6 @@
 import os
 import json
-from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model
+from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, log_llm_error
 
 
 class ChangeSummary:
@@ -15,10 +15,14 @@ class ChangeSummary:
         # For multi-component or large changes, perform a single unified summary call
         if is_large or len(changes) > 1:
             if not api_key:
+                log_llm_error(
+                    "No API key configured. Set UNDERSTANDING_AGENT_API_KEY. "
+                    "The change summary was not written by the model."
+                )
                 summary = self._unified_fallback(context)
             else:
                 prompt = self._build_unified_prompt(context)
-                summary = self._call_groq(api_key, prompt, max_tokens=400)
+                summary = self._call_groq(api_key, prompt, max_tokens=800)
                 if not summary:
                     summary = self._unified_fallback(context)
 
@@ -31,10 +35,14 @@ class ChangeSummary:
         # Single small change
         f = changes[0]
         if not api_key:
+            log_llm_error(
+                "No API key configured. Set UNDERSTANDING_AGENT_API_KEY. "
+                "The change summary was not written by the model."
+            )
             single_sum = self._fallback(f)
         else:
             prompt = self._build_prompt_for_single(f)
-            single_sum = self._call_groq(api_key, prompt, max_tokens=300)
+            single_sum = self._call_groq(api_key, prompt, max_tokens=800)
             if not single_sum:
                 single_sum = self._fallback(f)
 
@@ -85,7 +93,7 @@ class ChangeSummary:
         ]
         return "\n".join(lines)
 
-    def _call_nous(self, api_key: str, prompt: str, max_tokens: int = 300) -> dict:
+    def _call_nous(self, api_key: str, prompt: str, max_tokens: int = 800) -> dict:
         payload = {
             "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
@@ -106,11 +114,40 @@ class ChangeSummary:
             text = (msg.get("content") or "").strip()
             if not text and msg.get("reasoning"):
                 text = (msg.get("reasoning") or "").strip()
+            if not text and msg.get("reasoning_content"):
+                text = (msg.get("reasoning_content") or "").strip()
+
             parsed = extract_json(text)
-            if isinstance(parsed, dict) and "what_changed" in parsed:
-                return parsed
+            if isinstance(parsed, dict):
+                what_changed = (
+                    parsed.get("what_changed")
+                    or parsed.get("whatChanged")
+                    or parsed.get("summary")
+                    or parsed.get("description")
+                    or parsed.get("changes")
+                )
+                if what_changed:
+                    return {
+                        "what_changed": str(what_changed),
+                        "impact": str(parsed.get("impact") or parsed.get("why_it_matters") or "Updates component logic."),
+                        "why_it_matters": str(parsed.get("why_it_matters") or parsed.get("impact") or "Implements required functionality."),
+                        "key_risks": str(parsed.get("key_risks") or "")
+                    }
+
+            # If the model replied with a direct text summary instead of a JSON object
+            if text and len(text) > 15 and not text.lower().startswith("error"):
+                return {
+                    "what_changed": text,
+                    "impact": "Updates staged component code.",
+                    "why_it_matters": "Implements required functionality.",
+                    "key_risks": ""
+                }
+
+            if text:
+                log_llm_error("Change summary failed: the model reply was not a summary object.")
             return {}
-        except Exception:
+        except Exception as exc:
+            log_llm_error(f"Change summary failed: could not read the model reply ({exc}).")
             return {}
 
     def _call_groq(self, api_key: str, prompt: str, max_tokens: int = 300) -> dict:

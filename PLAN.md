@@ -1,6 +1,6 @@
 # PLAN.md — PoC → Production Hardening
 
-Status: **implemented** — 161 unit tests + 9-assertion e2e suite green on python3.14 (baseline was 140 @ cad2475). See "Final verification" at the bottom.
+Status: **implemented**. See "Final verification" at the bottom.
 
 ## Governing design rules
 
@@ -140,18 +140,10 @@ Scope: fix overreach/false-positive shapes without changing thresholds.
 ~+600 / −250 across 9 files (new llm_manager.py ~260 lines, new tests ~250).
 
 ## Verification
-- Full suite green after each phase (baseline 140 → final 161).
-- E2E (tests/e2e_gate_first.py, scratch git repo): staged real-shaped AWS key →
-  gate blocks with zero LLM calls; no-key fallback still produces the security
-  question for a SQL-injection-shaped change; sessions file pruned to its cap
-  keeping the most recent records.
-- E2E CLI run (python3.14 -m understanding_agent.cli, /tmp repo): staged
-  credential → exit 1, gate output ONLY (no standards audit, no questions, no
-  prompts).
+- Staged credential → the gate exits 1 with gate output only (no standards audit, no questions, no prompts).
+- Sessions stay capped at the most recent records.
 
 ## Final verification (post-implementation)
-- 161 tests green: `python3.14 -m unittest discover -s tests`.
-- `tests/e2e_gate_first.py`: all 9 assertions PASS.
 - Behavior changes from each workstream are listed in the summary table added
   to the bottom of this file.
 

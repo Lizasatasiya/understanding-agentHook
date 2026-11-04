@@ -5,15 +5,20 @@
 # Installs the Code Understanding Agent globally across all Git repositories
 # on this device with zero repository cloning needed on developer machines.
 #
-# Usage:
-#   curl -fsSL https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/main/install.sh | bash
+# Usage (write the branch once; the same name is installed):
+#   REF=dev
+#   curl -fsSL "https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/${REF}/install.sh" | REF="$REF" bash -s -- --key "YOUR_API_KEY" --model haiku
 #
 # Options:
-#   --key <API_KEY>       Pre-configure the team LLM API key
-#   --provider <NAME>     LLM provider: nous (default), groq, openai, ollama
-#   --base-url <URL>      Custom central relay endpoint (no API key on client)
+#   --key <API_KEY>       API key for the selected model
+#   --model <NAME>        sonnet, haiku, nous, or org. Required the first time; later installs keep the saved model.
+#   --ref <BRANCH>        Git branch or tag to install (or set REF). Required for a curl install.
 #   --uninstall           Remove global hooks and restore standard git behavior
 #   --status              Check current installation and hook health
+#
+# Example:
+#   REF=main
+#   curl -fsSL "https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/${REF}/install.sh" | REF="$REF" bash -s -- --key "YOUR_API_KEY" --model sonnet
  
 
 set -e
@@ -42,25 +47,36 @@ ENV_FILE="$CONFIG_DIR/.env"
 
 # Parse CLI flags
 ARG_KEY=""
-ARG_PROVIDER=""
-ARG_BASE_URL=""
+ARG_MODEL=""
+# REF is set on the bash command so the branch in the curl URL is the one installed.
+# A piped script cannot see that URL itself.
+ARG_REF="${REF:-${UNDERSTANDING_AGENT_INSTALL_REF:-}}"
 DO_UNINSTALL=false
 DO_STATUS=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --key|-k) ARG_KEY="$2"; shift 2 ;;
-        --provider|-p) ARG_PROVIDER="$2"; shift 2 ;;
-        --base-url|-u) ARG_BASE_URL="$2"; shift 2 ;;
+        --model|-m) ARG_MODEL="$2"; shift 2 ;;
+        --ref|--branch) ARG_REF="$2"; shift 2 ;;
         --uninstall) DO_UNINSTALL=true; shift ;;
         --status) DO_STATUS=true; shift ;;
         -h|--help)
-            echo "Usage: install.sh [--key <API_KEY>] [--provider <NAME>] [--base-url <URL>] [--uninstall] [--status]"
+            echo "Usage: install.sh [--ref <branch>] [--key <API_KEY>] [--model sonnet|haiku|nous|org] [--uninstall] [--status]"
+            echo "Curl install: REF=dev curl -fsSL \"https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/\${REF}/install.sh\" | REF=\"\$REF\" bash -s -- --key KEY --model haiku"
             exit 0
             ;;
         *) shift ;;
     esac
 done
+
+if [ -n "$ARG_MODEL" ]; then
+    ARG_MODEL="$(printf '%s' "$ARG_MODEL" | tr '[:upper:]' '[:lower:]')"
+    case "$ARG_MODEL" in
+        sonnet|haiku|nous|org) ;;
+        *) err "Unsupported model '$ARG_MODEL'. Choose one of: sonnet, haiku, nous, org." ;;
+    esac
+fi
 
 # STATUS CHECK
 if [ "$DO_STATUS" = true ]; then
@@ -98,6 +114,9 @@ if [ "$DO_UNINSTALL" = true ]; then
     fi
     rm -rf "$HOOKS_DIR"
     ok "Removed global hooks directory ($HOOKS_DIR)"
+    rm -rf "$VENV_DIR"
+    rm -f "$BIN_DIR/understanding-agent"
+    ok "Removed installed package ($VENV_DIR)"
     printf "\n${GREEN}${BOLD}Uninstallation complete.${RESET} Git will now use default per-project hooks.\n"
     exit 0
 fi
@@ -155,8 +174,14 @@ if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/setup.py" ] && [ -d "$SCRIPT_DIR/un
     ok "Installing from local source: $SCRIPT_DIR"
     "$VENV_DIR/bin/pip" install --upgrade --quiet -e "$SCRIPT_DIR"
 else
-    ok "Installing directly from GitHub: $REPO_URL"
-    "$VENV_DIR/bin/pip" install --upgrade --quiet "git+$REPO_URL"
+    if [ -z "$ARG_REF" ]; then
+        err "No branch given. The branch in the curl URL is not visible to a piped script, so pass it through. Example: REF=dev curl -fsSL \"https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/\${REF}/install.sh\" | REF=\"\$REF\" bash -s -- --key \"YOUR_API_KEY\" --model haiku"
+    fi
+    case "$ARG_REF" in
+        *[!A-Za-z0-9._/-]*|-*|*/.*|*..*) err "Unsupported branch name '$ARG_REF'." ;;
+    esac
+    ok "Installing directly from GitHub: $REPO_URL @ $ARG_REF"
+    "$VENV_DIR/bin/pip" install --upgrade --force-reinstall --quiet "git+${REPO_URL}@${ARG_REF}"
 fi
 
 # Create symlink in ~/.local/bin if directory exists in PATH
@@ -170,32 +195,26 @@ if [ ! -f "$ENV_FILE" ]; then
     chmod 600 "$ENV_FILE"
 fi
 
-if [ -n "$ARG_KEY" ]; then
-    # Update or append key
-    if grep -q "^UNDERSTANDING_AGENT_API_KEY=" "$ENV_FILE"; then
-        sed -i.bak "s|^UNDERSTANDING_AGENT_API_KEY=.*|UNDERSTANDING_AGENT_API_KEY=$ARG_KEY|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
+upsert_env() {
+    local key="$1" value="$2"
+    if grep -q "^${key}=" "$ENV_FILE"; then
+        # '|' is safe: model names have none, and keys are written with a quoted replacement.
+        local escaped
+        escaped="$(printf '%s' "$value" | sed 's/[|&\\]/\\&/g')"
+        sed -i.bak "s|^${key}=.*|${key}=${escaped}|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
     else
-        echo "UNDERSTANDING_AGENT_API_KEY=$ARG_KEY" >> "$ENV_FILE"
+        printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
     fi
+}
+
+if [ -n "$ARG_KEY" ]; then
+    upsert_env "UNDERSTANDING_AGENT_API_KEY" "$ARG_KEY"
     ok "Saved API key to $ENV_FILE"
 fi
 
-if [ -n "$ARG_PROVIDER" ]; then
-    if grep -q "^UNDERSTANDING_AGENT_PROVIDER=" "$ENV_FILE"; then
-        sed -i.bak "s|^UNDERSTANDING_AGENT_PROVIDER=.*|UNDERSTANDING_AGENT_PROVIDER=$ARG_PROVIDER|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
-    else
-        echo "UNDERSTANDING_AGENT_PROVIDER=$ARG_PROVIDER" >> "$ENV_FILE"
-    fi
-    ok "Configured provider: $ARG_PROVIDER"
-fi
-
-if [ -n "$ARG_BASE_URL" ]; then
-    if grep -q "^UNDERSTANDING_AGENT_BASE_URL=" "$ENV_FILE"; then
-        sed -i.bak "s|^UNDERSTANDING_AGENT_BASE_URL=.*|UNDERSTANDING_AGENT_BASE_URL=$ARG_BASE_URL|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
-    else
-        echo "UNDERSTANDING_AGENT_BASE_URL=$ARG_BASE_URL" >> "$ENV_FILE"
-    fi
-    ok "Configured central relay base URL: $ARG_BASE_URL"
+if [ -n "$ARG_MODEL" ]; then
+    upsert_env "UNDERSTANDING_AGENT_MODEL" "$ARG_MODEL"
+    ok "Selected model: $ARG_MODEL (questions and answer checks)"
 fi
 
 # If file is empty, write a friendly template with notes
@@ -204,8 +223,7 @@ if [ ! -s "$ENV_FILE" ]; then
 # Understanding Agent Global Configuration
 # Optional: If your team uses a central relay server or shared key, configure it here:
 # UNDERSTANDING_AGENT_API_KEY=
-# UNDERSTANDING_AGENT_PROVIDER=nous
-# UNDERSTANDING_AGENT_BASE_URL=
+# UNDERSTANDING_AGENT_MODEL=
 EOF
     chmod 600 "$ENV_FILE"
 fi
@@ -223,6 +241,7 @@ if [ -z "$UNDERSTANDING_AGENT_CHAIN_RUNNING" ]; then
     GIT_DIR="$(git rev-parse --git-dir 2>/dev/null)"
     if [ -n "$GIT_DIR" ] && [ -x "$GIT_DIR/hooks/pre-commit" ]; then
         UNDERSTANDING_AGENT_CHAIN_RUNNING=1 "$GIT_DIR/hooks/pre-commit" "$@" || exit $?
+        exit 0
     fi
 fi
 

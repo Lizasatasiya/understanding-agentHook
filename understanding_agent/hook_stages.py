@@ -200,6 +200,42 @@ def _detect_agent_execution() -> tuple[bool, str]:
     return _check_agent_process()
 
 
+def _is_prepare_stage() -> bool:
+    """Check if the current invocation is running inside the prepare-commit-msg hook."""
+    import os
+    import sys
+    import subprocess
+
+    if any("COMMIT_EDITMSG" in str(a) or "prepare-commit-msg" in str(a) for a in sys.argv):
+        return True
+    if os.environ.get("PRE_COMMIT_HOOK_TYPE") == "prepare-commit-msg":
+        return True
+    if "PRE_COMMIT_COMMIT_MSG_SOURCE" in os.environ:
+        return True
+
+    try:
+        curr_pid = os.getpid()
+        for _ in range(8):
+            if curr_pid <= 1:
+                break
+            out = subprocess.check_output(
+                ["ps", "-o", "ppid,args", "-p", str(curr_pid)],
+                text=True, stderr=subprocess.DEVNULL
+            ).strip().splitlines()
+            if len(out) < 2:
+                break
+            parts = out[1].strip().split(None, 1)
+            ppid = int(parts[0])
+            cmd_line = parts[1] if len(parts) > 1 else ""
+            if "prepare-commit-msg" in cmd_line or "COMMIT_EDITMSG" in cmd_line:
+                return True
+            curr_pid = ppid
+    except Exception:
+        pass
+
+    return False
+
+
 def _detect_no_verify(project_root: str = None, head_commit: str = None, diff_hash: str = None) -> bool:
     """Detect if the commit attempt is trying to bypass pre-commit via --no-verify or -n."""
     import os
@@ -272,9 +308,7 @@ def _detect_no_verify(project_root: str = None, head_commit: str = None, diff_ha
 
     # 4. Check if prepare-commit-msg hook was reached without prior pre-commit verification
     if project_root and head_commit and diff_hash:
-        is_prepare_stage = any("COMMIT_EDITMSG" in a for a in sys.argv) or \
-                           os.environ.get("PRE_COMMIT_HOOK_TYPE") == "prepare-commit-msg"
-        if is_prepare_stage:
+        if _is_prepare_stage():
             if not is_already_verified_for_commit(project_root, head_commit, diff_hash):
                 return True
 
@@ -473,7 +507,10 @@ def is_already_verified_for_commit(project_root: str, head_commit: str, diff_has
     import os
     import json
     import time
+    import sqlite3
+    from datetime import datetime
 
+    # 1. Check verified badge json file
     state_file = os.path.join(project_root, ".git", "understanding_agent_verified.json")
     if os.path.exists(state_file):
         try:
@@ -481,10 +518,31 @@ def is_already_verified_for_commit(project_root: str, head_commit: str, diff_has
                 data = json.load(f)
                 if (data.get("head_commit") == head_commit and
                     data.get("diff_hash") == diff_hash and
-                    time.time() - data.get("timestamp", 0) < 120):
+                    time.time() - data.get("timestamp", 0) < 300):
                     return True
         except Exception:
             pass
+
+    # 2. Check understanding_sessions.db for a recent PASSED session for this exact diff
+    db_path = os.path.join(project_root, ".git", "understanding_sessions.db")
+    if os.path.exists(db_path):
+        try:
+            conn = sqlite3.connect(db_path, timeout=2.0)
+            c = conn.cursor()
+            row = c.execute(
+                "SELECT timestamp FROM sessions "
+                "WHERE head_commit = ? AND diff_hash = ? AND status = 'PASSED' "
+                "ORDER BY timestamp DESC LIMIT 1",
+                (head_commit, diff_hash)
+            ).fetchone()
+            conn.close()
+            if row and row[0]:
+                session_time = datetime.fromisoformat(row[0]).timestamp()
+                if time.time() - session_time < 3600:  # within 1 hour
+                    return True
+        except Exception:
+            pass
+
     return False
 
 

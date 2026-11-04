@@ -19,8 +19,7 @@ finding list.
   content to an LLM before the gate would make the prompt an injection
   surface for the exact code being screened. An LLM must also never be able
   to downgrade or explain away a block.
-- Invariant: blocked paths spend ZERO LLM calls (guarded by
-  `tests/e2e_gate_first.py` scene 1). Record-only/agent mode (Judas J2)
+- Invariant: blocked paths spend ZERO LLM calls. Record-only/agent mode (Judas J2)
   exits AFTER the gate — agents are unverified actors, not exempt ones
   (scene 5).
 - The gate is hard-blocked by design; escape hatches are explicit and
@@ -105,10 +104,10 @@ Hard rules, each enforced in code:
 
 | Rule | Guard |
 |---|---|
-| Gate before any LLM call, zero calls on block | `tests/e2e_gate_first.py` scenes 1, 5 |
-| Findings citation-verified, advisory-only | `tests/test_change_intelligence.py` |
-| Malformed LLM output degrades to deterministic | `tests/test_change_intelligence.py` |
-| Fallback/offline marked unverified | `tests/test_session_payload.py`, e2e |
-| Multilingual answers judged on concepts | tests/test_api_and_evaluator.py |
-| Answer hygiene re-ask before scoring | `tests/test_answer_hygiene.py` |
-| Agent mode: no questions, no LLM, gate still blocks | e2e scenes 4, 5 |
+| Gate before any LLM call, zero calls on block | `security_lens.py`, `cli.py` |
+| Findings citation-verified, advisory-only | `change_intelligence.py` |
+| Malformed LLM output degrades to deterministic | `change_intelligence.py` |
+| Offline sessions marked unverified | `session_payload.py` |
+| Multilingual answers judged on concepts | `answer_evaluator.py` |
+| Answer hygiene re-ask before scoring | `answer_hygiene.py` |
+| Agent mode: no questions, no LLM, gate still blocks | `cli.py`, `hook_stages.py` |

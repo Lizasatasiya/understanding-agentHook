@@ -2,12 +2,11 @@ import os
 import json
 import re
 import time
-import subprocess
 import http.client
 import ssl
 from urllib.parse import urlparse
 
-from .llm_manager import resolve_base_url, resolve_model, resolve_api_key, get_provider, PROVIDER_PRESETS, thinking_control_params
+from .llm_manager import resolve_base_url, resolve_model, resolve_api_key, describe_api_key, get_provider, thinking_control_params
 
 
 def get_base_url() -> str:
@@ -21,16 +20,71 @@ def get_model() -> str:
 
 
 def get_judge_model() -> str:
-    """Model used to EVALUATE answers, deliberately separable from the
-    question-GENERATION model (RepoProbe: judge and checklist-author should
-    differ to avoid self-preference bias). UNDERSTANDING_AGENT_JUDGE_MODEL
-    overrides; absent it, the normal model is used.
-
-    Resolution lives in the central LLM manager (llm_manager.resolve_judge_model);
-    this stays as the compatibility surface callers already import.
-    """
+    """Model used to evaluate answers. Same installed model as question generation."""
     from .llm_manager import resolve_judge_model
     return resolve_judge_model()
+
+
+def log_llm_error(message: str) -> None:
+    """Print an LLM failure for the developer. Never includes the API key."""
+    text = (message or "").strip() or "unknown LLM error"
+    if len(text) > 2000:
+        text = text[:2000] + "...(truncated)"
+    print(f"\n  \033[91m[LLM] ERROR: {text}\033[0m\n", flush=True)
+
+
+def llm_request_target() -> tuple[str, str, str, str]:
+    """Return scheme, host, path, and the exact URL the next call will use."""
+    base_url = get_base_url().rstrip("/")
+    provider = get_provider()
+    parsed = urlparse(base_url) if base_url else None
+    if not parsed or not parsed.netloc:
+        return "", "", "", "(model not configured)"
+    scheme = parsed.scheme or "https"
+    host = parsed.netloc
+    base_path = parsed.path or "/v1"
+    if _is_anthropic(base_url, provider):
+        if base_path.endswith("/messages"):
+            endpoint_path = base_path
+        else:
+            endpoint_path = f"{base_path}/messages" if base_path else "/v1/messages"
+    else:
+        if base_path.endswith("/chat/completions"):
+            endpoint_path = base_path
+        else:
+            endpoint_path = f"{base_path}/chat/completions"
+    return scheme, host, endpoint_path, f"{scheme}://{host}{endpoint_path}"
+
+
+def _llm_failure_detail(status: int, body: str, model_id: str) -> str | None:
+    """None when the response is a successful assistant message."""
+    url = llm_request_target()[3]
+    if status == 200:
+        try:
+            data = json.loads(body)
+        except Exception:
+            return None
+        if _extract_message_text(data):
+            return None
+        snippet = (body or "").strip()
+        if len(snippet) > 1500:
+            snippet = snippet[:1500] + "...(truncated)"
+        return (
+            f"model={model_id} at {url} returned HTTP 200 with no assistant text. "
+            f"Body: {snippet or '(empty)'}"
+        )
+    snippet = (body or "").strip()
+    if len(snippet) > 1500:
+        snippet = snippet[:1500] + "...(truncated)"
+    if status == 0:
+        return f"could not connect to {url} for model={model_id}. {snippet or 'connection failed'}"
+    detail = (
+        f"model={model_id} at {url} returned HTTP {status}. "
+        f"{snippet or '(empty body)'}"
+    )
+    if status in (401, 403):
+        detail += " " + describe_api_key()
+    return detail
 
 
 def fail_open_enabled() -> bool:
@@ -42,135 +96,9 @@ def fail_open_enabled() -> bool:
     return os.environ.get("UNDERSTANDING_AGENT_FAIL_MODE", "").strip().lower() != "closed"
 
 
-def _parse_key_from_file(filepath: str, preferred_keys: tuple = ("NOUS_API_KEY", "NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY", "GROQ_API_KEY")) -> str:
-    """Extract specified keys from an env file (KEY=VALUE or export KEY=VALUE)."""
-    if not filepath or not os.path.exists(filepath):
-        return ""
-    try:
-        found_keys = {}
-        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if line.startswith("export "):
-                    line = line[7:].strip()
-                for key_name in preferred_keys:
-                    if line.startswith(key_name):
-                        parts = line.split("=", 1)
-                        if len(parts) == 2 and parts[0].strip() == key_name:
-                            val = parts[1].strip()
-                            if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
-                                val = val[1:-1].strip()
-                            if val:
-                                found_keys[key_name] = val
-        for pref in preferred_keys:
-            if pref in found_keys:
-                return found_keys[pref]
-    except Exception:
-        pass
-    return ""
-
-
-def _env_search_dirs():
-    """Directories searched for .env / .env.local: agent hook package root, cwd, its parents, git root."""
-    search_dirs = []
-
-    # 1. Always include agent hook's own installation root directory first
-    hook_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if os.path.isdir(hook_dir):
-        search_dirs.append(hook_dir)
-
-    cur = os.path.abspath(os.getcwd())
-    for _ in range(4):
-        if cur not in search_dirs:
-            search_dirs.append(cur)
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            break
-        cur = parent
-
-    try:
-        repo_root = subprocess.check_output(
-            ["git", "rev-parse", "--show-toplevel"],
-            text=True, stderr=subprocess.DEVNULL
-        ).strip()
-        if repo_root and repo_root not in search_dirs:
-            search_dirs.append(repo_root)
-    except Exception:
-        pass
-    return search_dirs
-
-
 def load_nous_api_key() -> str:
-    """Load the active provider's API key from the environment or .env files.
-
-    Provider-aware, resolved via llm_manager:
-      1. UNDERSTANDING_AGENT_API_KEY / LLM_API_KEY / API_KEY / provider preset's env vars
-      2. .env / .env.local in cwd, parents, git root, ~/.config
-      3. All known provider keys (OPENAI, GEMINI, ANTHROPIC, DEEPSEEK, etc.)
-    """
-    # 1. Environment variables (process env takes precedence over disk files)
-    env_key = resolve_api_key()
-    if env_key:
-        return env_key
-
-    # Legacy GROQ_API_KEY env var outranks any key found in .env files
-    # (preserves the pre-manager precedence: all env vars before all files).
-    groq_env = os.environ.get("GROQ_API_KEY", "").strip()
-    if groq_env:
-        return groq_env
-
-    provider = get_provider()
-    preset = PROVIDER_PRESETS.get(provider, PROVIDER_PRESETS["custom"])
-    file_key_names = [
-        "API_KEY",
-        "LLM_API_KEY",
-        "UNDERSTANDING_AGENT_API_KEY",
-        preset["api_key_env"],
-    ] + list(preset.get("alt_api_key_envs", ()))
-
-    # Add all other known provider keys from presets so any provider key in .env is found
-    for prov_name, p_data in PROVIDER_PRESETS.items():
-        k = p_data.get("api_key_env")
-        if k and k not in file_key_names:
-            file_key_names.append(k)
-        for alt in p_data.get("alt_api_key_envs", ()):
-            if alt not in file_key_names:
-                file_key_names.append(alt)
-
-    search_dirs = _env_search_dirs()
-
-    # 2. Check .env files for key names
-    for d in search_dirs:
-        for fname in (".env", ".env.local"):
-            key = _parse_key_from_file(os.path.join(d, fname), tuple(file_key_names))
-            if key:
-                return key
-
-    key = _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), tuple(file_key_names))
-    if key:
-        return key
-
-    # 3. Legacy fallback names (NOUS_* then GROQ) for pre-manager setups
-    legacy_nous = ("NOUS_API_KEY", "NOUSRESEARCH_API_KEY", "NOUS_PORTAL_API_KEY")
-    for d in search_dirs:
-        for fname in (".env", ".env.local"):
-            key = _parse_key_from_file(os.path.join(d, fname), legacy_nous)
-            if key:
-                return key
-
-    key = _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), legacy_nous)
-    if key:
-        return key
-
-    for d in search_dirs:
-        for fname in (".env", ".env.local"):
-            key = _parse_key_from_file(os.path.join(d, fname), ("GROQ_API_KEY",))
-            if key:
-                return key
-
-    return _parse_key_from_file(os.path.expanduser("~/.config/understanding-agent/.env"), ("GROQ_API_KEY",))
+    """API key for the selected model. See llm_manager.resolve_api_key_info."""
+    return resolve_api_key()
 
 
 # Alias for backward compatibility
@@ -365,9 +293,13 @@ def call_llm_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: i
     (status_code, response_text_or_error). status_code 0 means the request
     never got a response.
     """
-    provider = get_provider()
-    if not api_key and provider not in ("ollama",):
-        return 0, f"No API key configured for provider '{provider}' (set UNDERSTANDING_AGENT_API_KEY, GROQ_API_KEY, or NOUS_API_KEY)"
+    if not api_key:
+        return 0, "No API key configured. Pass --key when installing. The hook reads only ~/.config/understanding-agent/.env."
+
+    model_id = payload_dict.get("model") or get_model()
+    if not model_id:
+        return 0, "No model configured. Pass --model sonnet, haiku, nous, or org when installing."
+    print(f"  [LLM] model={model_id} -> {llm_request_target()[3]}", flush=True)
 
     # Suppress model thinking for providers that support it (bench-measured:
     # deepseek-v4-flash 51s -> 10s per call). Kill switch:
@@ -379,10 +311,16 @@ def call_llm_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: i
     for attempt in range(retries + 1):
         status, body = _groq_request_once(api_key, payload_dict, timeout)
         if _is_meaningful_response(status, body):
+            detail = _llm_failure_detail(status, body, model_id)
+            if detail:
+                log_llm_error(detail)
             return status, body
         last_status, last_body = status, body
         if attempt < retries:
             time.sleep(1.5 * (attempt + 1))
+    detail = _llm_failure_detail(last_status, last_body, model_id)
+    if detail:
+        log_llm_error(detail)
     return last_status, last_body
 
 
@@ -419,11 +357,9 @@ def _is_anthropic(base_url: str, provider: str) -> bool:
 
 def _format_anthropic_payload(payload_dict: dict) -> dict:
     anthropic_payload = {
-        "model": payload_dict.get("model", "claude-3-5-sonnet-20241022"),
+        "model": payload_dict.get("model") or "",
         "max_tokens": payload_dict.get("max_tokens", 1024),
     }
-    if "temperature" in payload_dict:
-        anthropic_payload["temperature"] = payload_dict["temperature"]
 
     raw_messages = payload_dict.get("messages", [])
     system_parts = []
@@ -443,20 +379,53 @@ def _format_anthropic_payload(payload_dict: dict) -> dict:
     return anthropic_payload
 
 
+def _openai_client_request(api_key: str, payload_dict: dict, timeout: int) -> tuple[int, str]:
+    """Call the org model the same way as the OpenAI client.
+
+    base_url is the installed org endpoint. api_key is the key saved by
+    install.sh. chat.completions.create reads choices[0].message.content.
+    """
+    try:
+        from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
+    except ImportError:
+        return 0, "The openai package is not installed. Re-run install.sh so the org model can be called."
+
+    base_url = get_base_url().rstrip("/") + "/"
+    messages = payload_dict.get("messages") or []
+    kwargs = {
+        "model": payload_dict.get("model") or get_model(),
+        "messages": messages,
+    }
+    if "temperature" in payload_dict:
+        kwargs["temperature"] = payload_dict["temperature"]
+    if payload_dict.get("max_tokens") is not None:
+        kwargs["max_tokens"] = payload_dict["max_tokens"]
+
+    try:
+        client = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
+        completion = client.chat.completions.create(**kwargs)
+        return 200, completion.model_dump_json()
+    except APIStatusError as exc:
+        body = ""
+        response = getattr(exc, "response", None)
+        if response is not None:
+            body = getattr(response, "text", "") or ""
+        return exc.status_code or 0, body or str(exc)
+    except (APIConnectionError, APITimeoutError) as exc:
+        return 0, str(exc)
+    except Exception as exc:
+        return 0, str(exc)
+
+
 def _nous_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[int, str]:
     base_url = get_base_url().rstrip("/")
     provider = get_provider()
+    scheme, host, endpoint_path, _full_url = llm_request_target()
 
-    parsed = urlparse(base_url)
-    scheme = parsed.scheme or "https"
-    host = parsed.netloc or "inference-api.nousresearch.com"
-    base_path = parsed.path or "/v1"
+    if provider == "openai":
+        return _openai_client_request(api_key, payload_dict, timeout)
 
     if _is_anthropic(base_url, provider):
-        if base_path.endswith("/messages"):
-            endpoint_path = base_path
-        else:
-            endpoint_path = f"{base_path}/messages" if base_path else "/v1/messages"
         payload_data = _format_anthropic_payload(payload_dict)
         headers = {
             "Content-Type": "application/json",
@@ -465,11 +434,6 @@ def _nous_request_once(api_key: str, payload_dict: dict, timeout: int) -> tuple[
             "User-Agent": "understanding-agent/0.3.0",
         }
     else:
-        # Standard OpenAI-compatible format
-        if base_path.endswith("/chat/completions"):
-            endpoint_path = base_path
-        else:
-            endpoint_path = f"{base_path}/chat/completions"
         payload_data = payload_dict
         headers = {
             "Content-Type": "application/json",
