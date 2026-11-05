@@ -21,7 +21,7 @@ SUPPORTED_MODELS = {
     },
     "nous": {
         "provider": "nous",
-        "model": "glm-5.3-flash",
+        "model": "qwen/qwen3-coder-30b-a3b-instruct",
         "base_url": "https://inference-api.nousresearch.com/v1",
     },
     "sonnet": {
