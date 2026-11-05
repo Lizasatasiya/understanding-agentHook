@@ -298,7 +298,7 @@ def call_llm_api(api_key: str, payload_dict: dict, timeout: int = 30, retries: i
 
     model_id = payload_dict.get("model") or get_model()
     if not model_id:
-        return 0, "No model configured. Pass --model sonnet, haiku, nous, or org when installing."
+        return 0, "No model configured. Pass --model groq, sonnet, haiku, nous, or org when installing."
     print(f"  [LLM] model={model_id} -> {llm_request_target()[3]}", flush=True)
 
     # Suppress model thinking for providers that support it (bench-measured:

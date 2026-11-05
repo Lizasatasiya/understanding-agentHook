@@ -62,8 +62,8 @@ while [ $# -gt 0 ]; do
         --uninstall) DO_UNINSTALL=true; shift ;;
         --status) DO_STATUS=true; shift ;;
         -h|--help)
-            echo "Usage: install.sh [--ref <branch>] [--key <API_KEY>] [--model sonnet|haiku|nous|org] [--uninstall] [--status]"
-            echo "Curl install: REF=dev curl -fsSL \"https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/\${REF}/install.sh\" | REF=\"\$REF\" bash -s -- --key KEY --model haiku"
+            echo "Usage: install.sh [--ref <branch>] [--key <API_KEY>] [--model groq|sonnet|haiku|nous|org] [--uninstall] [--status]"
+            echo "Curl install: REF=dev curl -fsSL \"https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/\${REF}/install.sh\" | REF=\"\$REF\" bash -s -- --key KEY --model groq"
             exit 0
             ;;
         *) shift ;;
@@ -73,8 +73,8 @@ done
 if [ -n "$ARG_MODEL" ]; then
     ARG_MODEL="$(printf '%s' "$ARG_MODEL" | tr '[:upper:]' '[:lower:]')"
     case "$ARG_MODEL" in
-        sonnet|haiku|nous|org) ;;
-        *) err "Unsupported model '$ARG_MODEL'. Choose one of: sonnet, haiku, nous, org." ;;
+        groq|sonnet|haiku|nous|org) ;;
+        *) err "Unsupported model '$ARG_MODEL'. Choose one of: groq, sonnet, haiku, nous, org." ;;
     esac
 fi
 
@@ -239,9 +239,25 @@ cat > "$HOOKS_DIR/pre-commit" <<'EOF'
 # 1. Chain project-specific hook if present in the target repo
 if [ -z "$UNDERSTANDING_AGENT_CHAIN_RUNNING" ]; then
     GIT_DIR="$(git rev-parse --git-dir 2>/dev/null)"
+    REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+
     if [ -n "$GIT_DIR" ] && [ -x "$GIT_DIR/hooks/pre-commit" ]; then
         UNDERSTANDING_AGENT_CHAIN_RUNNING=1 "$GIT_DIR/hooks/pre-commit" "$@" || exit $?
-        exit 0
+    elif [ -n "$REPO_ROOT" ] && [ -x "$REPO_ROOT/.husky/pre-commit" ]; then
+        UNDERSTANDING_AGENT_CHAIN_RUNNING=1 "$REPO_ROOT/.husky/pre-commit" "$@" || exit $?
+    elif [ -n "$REPO_ROOT" ] && [ -f "$REPO_ROOT/.pre-commit-config.yaml" ]; then
+        PRECOMMIT_BIN=""
+        if command -v pre-commit >/dev/null 2>&1; then
+            PRECOMMIT_BIN="pre-commit"
+        elif [ -x "$REPO_ROOT/.venv/bin/pre-commit" ]; then
+            PRECOMMIT_BIN="$REPO_ROOT/.venv/bin/pre-commit"
+        elif [ -x "$REPO_ROOT/venv/bin/pre-commit" ]; then
+            PRECOMMIT_BIN="$REPO_ROOT/venv/bin/pre-commit"
+        fi
+
+        if [ -n "$PRECOMMIT_BIN" ]; then
+            UNDERSTANDING_AGENT_CHAIN_RUNNING=1 "$PRECOMMIT_BIN" run --hook-stage commit || exit $?
+        fi
     fi
 fi
 
@@ -269,8 +285,12 @@ cat > "$HOOKS_DIR/prepare-commit-msg" <<'EOF'
 # 1. Chain project-specific hook if present in the target repo
 if [ -z "$UNDERSTANDING_AGENT_CHAIN_RUNNING" ]; then
     GIT_DIR="$(git rev-parse --git-dir 2>/dev/null)"
+    REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+
     if [ -n "$GIT_DIR" ] && [ -x "$GIT_DIR/hooks/prepare-commit-msg" ]; then
         UNDERSTANDING_AGENT_CHAIN_RUNNING=1 "$GIT_DIR/hooks/prepare-commit-msg" "$@" || exit $?
+    elif [ -n "$REPO_ROOT" ] && [ -x "$REPO_ROOT/.husky/prepare-commit-msg" ]; then
+        UNDERSTANDING_AGENT_CHAIN_RUNNING=1 "$REPO_ROOT/.husky/prepare-commit-msg" "$@" || exit $?
     fi
 fi
 

@@ -1,9 +1,9 @@
 """LLM configuration for the model and key saved by install.sh.
 
 Both values live in ~/.config/understanding-agent/.env:
-UNDERSTANDING_AGENT_MODEL is sonnet, haiku, nous, or org.
+UNDERSTANDING_AGENT_MODEL is groq, sonnet, haiku, nous, or org.
 UNDERSTANDING_AGENT_API_KEY is the key for that model.
-Questions and answer checks use that same pair. Nothing else is consulted.
+Questions and answer checks use that same pair.
 """
 
 import os
@@ -14,9 +14,14 @@ import os
 
 # Questions and answer checks both use whichever of these the installer selected.
 SUPPORTED_MODELS = {
+    "groq": {
+        "provider": "groq",
+        "model": "llama-3.3-70b-versatile",
+        "base_url": "https://api.groq.com/openai/v1",
+    },
     "nous": {
         "provider": "nous",
-        "model": "qwen/qwen3-coder-30b-a3b-instruct",
+        "model": "deepseek-v4.1-flash-1017",
         "base_url": "https://inference-api.nousresearch.com/v1",
     },
     "sonnet": {
@@ -34,6 +39,15 @@ SUPPORTED_MODELS = {
         "model": "org",
         "base_url": "http://llm.yorkdevs.link:2222/v1",
     },
+}
+
+MODEL_ALIASES = {
+    "llama": "groq",
+    "llama3": "groq",
+    "llama-3.3-70b": "groq",
+    "llama-3.3-70b-versatile": "groq",
+    "llama-3.1-8b": "groq",
+    "llama-3.1-8b-instant": "groq",
 }
 
 
@@ -87,15 +101,39 @@ def _parse_env_file(path: str) -> dict:
 
 
 def _installed() -> dict:
-    """Values written by install.sh. This file is the only LLM configuration."""
+    """Values written by install.sh. This file is the primary LLM configuration."""
     return _parse_env_file(_GLOBAL_CONFIG)
 
 
 def installed_model_choice() -> str | None:
-    """Return sonnet, haiku, nous, or org from the install file. No other source."""
-    raw = (_installed().get("UNDERSTANDING_AGENT_MODEL") or "").strip().lower()
-    if raw in SUPPORTED_MODELS:
-        return raw
+    """Return groq, sonnet, haiku, nous, or org from the install file or environment."""
+    # 1. Auto-detect if key is specifically a Groq key (starts with gsk_)
+    key, _ = resolve_api_key_info()
+    if key and key.startswith("gsk_"):
+        return "groq"
+
+    # 2. Check explicit model configuration
+    raw = (
+        _env("UNDERSTANDING_AGENT_MODEL")
+        or _env("LLM_MODEL")
+        or _installed().get("UNDERSTANDING_AGENT_MODEL")
+        or _installed().get("LLM_MODEL")
+        or ""
+    ).strip().lower()
+
+    resolved = MODEL_ALIASES.get(raw, raw)
+    if resolved in SUPPORTED_MODELS:
+        return resolved
+
+    # 3. Auto-detect if provider is explicitly set to groq
+    provider = (
+        _env("UNDERSTANDING_AGENT_PROVIDER")
+        or _installed().get("UNDERSTANDING_AGENT_PROVIDER")
+        or ""
+    ).strip().lower()
+    if provider == "groq":
+        return "groq"
+
     return None
 
 
@@ -107,17 +145,33 @@ def _active_spec() -> dict:
 
 
 def get_provider() -> str:
-    """nous, anthropic, or openai, from the installed model. Empty when none is installed."""
+    """groq, nous, anthropic, or openai, from the installed model. Empty when none is installed."""
     return _active_spec().get("provider", "")
 
 
 def resolve_base_url() -> str:
     """Endpoint for the installed model. Empty when none is installed."""
+    override = (
+        _env("UNDERSTANDING_AGENT_BASE_URL")
+        or _env("GROQ_BASE_URL")
+        or _installed().get("UNDERSTANDING_AGENT_BASE_URL")
+        or _installed().get("GROQ_BASE_URL")
+    )
+    if override:
+        return override
     return _active_spec().get("base_url", "")
 
 
 def resolve_model() -> str:
     """Model id for questions and answer checks. Empty when none is installed."""
+    override = (
+        _env("UNDERSTANDING_AGENT_MODEL_ID")
+        or _env("GROQ_MODEL")
+        or _installed().get("UNDERSTANDING_AGENT_MODEL_ID")
+        or _installed().get("GROQ_MODEL")
+    )
+    if override:
+        return override
     return _active_spec().get("model", "")
 
 
@@ -129,12 +183,31 @@ def resolve_judge_model() -> str:
 def resolve_api_key_info() -> tuple[str, str]:
     """Return (api_key, where it was read from).
 
-    Only UNDERSTANDING_AGENT_API_KEY in the install file is used.
-    Placeholder text such as YOUR_API_KEY is ignored.
+    Checks:
+    1. Environment variables: UNDERSTANDING_AGENT_API_KEY, GROQ_API_KEY, LLM_API_KEY
+    2. Global config file (~/.config/understanding-agent/.env)
+    3. Local .env file (if present)
     """
-    value = _usable_secret(_installed().get("UNDERSTANDING_AGENT_API_KEY", ""))
-    if value:
-        return value, _GLOBAL_CONFIG
+    for env_name in ("UNDERSTANDING_AGENT_API_KEY", "GROQ_API_KEY", "LLM_API_KEY"):
+        val = _usable_secret(os.environ.get(env_name, ""))
+        if val:
+            return val, f"environment variable ${env_name}"
+
+    installed_cfg = _installed()
+    for key_name in ("UNDERSTANDING_AGENT_API_KEY", "GROQ_API_KEY", "LLM_API_KEY"):
+        val = _usable_secret(installed_cfg.get(key_name, ""))
+        if val:
+            return val, _GLOBAL_CONFIG
+
+    # Check local .env in repo root / current dir
+    local_env_path = os.path.join(os.getcwd(), ".env")
+    if os.path.isfile(local_env_path):
+        local_cfg = _parse_env_file(local_env_path)
+        for key_name in ("UNDERSTANDING_AGENT_API_KEY", "GROQ_API_KEY", "LLM_API_KEY"):
+            val = _usable_secret(local_cfg.get(key_name, ""))
+            if val:
+                return val, local_env_path
+
     return "", "none"
 
 
