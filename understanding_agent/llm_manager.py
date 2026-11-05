@@ -21,7 +21,7 @@ SUPPORTED_MODELS = {
     },
     "nous": {
         "provider": "nous",
-        "model": "deepseek-v4.1-flash-1017",
+        "model": "glm-5.3-flash",
         "base_url": "https://inference-api.nousresearch.com/v1",
     },
     "sonnet": {
