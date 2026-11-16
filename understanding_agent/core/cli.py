@@ -63,35 +63,39 @@ import os
 import re
 import hashlib
 import subprocess
-from .environment_detector import EnvironmentDetector
 from .identity import IdentityDetector
-from .change_detector import ChangeDetector
-from .stack_detector import StackDetector
-from .code_graph import CodeGraph
-from .context_builder import ContextBuilder
-from .change_summary import ChangeSummary
-from .security_lens import SecurityLens, security_question_hint, security_gate_enabled
-from .evidence_collector import collect_evidence, evidence_question_hint
-from .practice_packs import practice_pack_hint
-from .question_generator import QuestionGenerator
-from .change_intelligence import master_analysis_enabled, run_master_analysis
-from .change_kind import classify_change
-from .followup_generator import FollowUpGenerator
-from .interaction import Interaction
-from .server_client import ServerClient
-from .answer_evaluator import AnswerEvaluator
-from .answer_hygiene import classify_answer, hygiene_enabled
-from .coding_standards import CodingStandardsChecker
-from .session_store import save_session
-from .session_payload import build_session_payload
-from .formatting_detector import is_commit_formatting_only
-from .api_utils import fail_open_enabled, log_llm_error
-from .commit_context import (
+from ..storage.server_client import ServerClient
+from ..storage.session_store import save_session
+from ..storage.session_payload import build_session_payload
+from ..llm.api_utils import fail_open_enabled, log_llm_error
+
+from ..context.environment_detector import EnvironmentDetector
+from ..context.change_detector import ChangeDetector
+from ..context.stack_detector import StackDetector
+from ..context.code_graph import CodeGraph
+from ..context.context_builder import ContextBuilder
+from ..context.change_summary import ChangeSummary
+from ..context.evidence_collector import collect_evidence, evidence_question_hint
+from ..context.change_intelligence import master_analysis_enabled, run_master_analysis
+from ..context.change_kind import classify_change
+from ..context.formatting_detector import is_commit_formatting_only
+from ..context.commit_context import (
     get_head_commit,
     get_current_commit_message,
     compute_attempt_key,
     get_next_attempt_number
 )
+
+from ..questions.question_generator import QuestionGenerator
+from ..questions.followup_generator import FollowUpGenerator
+from ..questions.practice_packs import practice_pack_hint
+
+from ..answers.interaction import Interaction
+from ..answers.answer_hygiene import classify_answer, hygiene_enabled
+
+from ..evaluation.answer_evaluator import AnswerEvaluator
+from ..evaluation.coding_standards import CodingStandardsChecker
+from ..evaluation.security_lens import SecurityLens, security_question_hint, security_gate_enabled
 
 # Phase 9 (PLAN_V1_COMPLETION.md): stage helpers live in hook_stages.py now;
 # these aliases keep any external patch targets (cli._print_gate_block, ...)
@@ -110,7 +114,12 @@ from .hook_stages import (
     is_already_verified_for_commit,
     mark_verified_for_commit,
     clear_verified_for_commit,
+    GitIndexLock,
 )
+
+# Minimum passing score threshold for answer evaluation
+PASSING_SCORE_THRESHOLD = int(os.environ.get("UNDERSTANDING_AGENT_PASSING_SCORE", "75"))
+
 
 def _write_state(state_file: str, attempt_key: str, head_commit, commit_msg,
                  diff_hash: str, attempts: int, valid_questions: list) -> None:
@@ -271,7 +280,7 @@ def main():
     if is_no_verify:
         _print_no_verify_block(commit_msg)
         try:
-            from .session_store import load_sessions
+            from ..storage.session_store import load_sessions
             _existing = load_sessions(project_root)
             nv_attempt = get_next_attempt_number(
                 _existing, head_commit, diff_hash, commit_msg, state_attempts=0
@@ -311,7 +320,7 @@ def main():
         print(f"\n\033[92m✓ All staged changes are trivial (formatting, imports, comments, docs, type annotations).\033[0m")
         print(f"\033[92m  No oral defense required — commit allowed.\033[0m\n")
         try:
-            from .session_store import load_sessions
+            from ..storage.session_store import load_sessions
             _existing = load_sessions(project_root)
             fmt_attempt = get_next_attempt_number(
                 _existing, head_commit, diff_hash, commit_msg, state_attempts=0
@@ -361,7 +370,7 @@ def main():
     if is_agent:
         _print_agent_block(agent_name, commit_msg)
         try:
-            from .session_store import load_sessions
+            from ..storage.session_store import load_sessions
             _existing = load_sessions(project_root)
             ro_attempt = get_next_attempt_number(
                 _existing, head_commit, diff_hash, commit_msg, state_attempts=0
@@ -443,7 +452,7 @@ def main():
         if choice in ("1", "fix", "f"):
             print(f"\n{RED}Please resolve the violations listed above before committing.{RESET}\n")
             try:
-                from .session_store import load_sessions
+                from ..storage.session_store import load_sessions
                 _existing = load_sessions(project_root)
                 fix_attempt_num = get_next_attempt_number(
                     _existing, head_commit, diff_hash, commit_msg, state_attempts=0
@@ -497,7 +506,7 @@ def main():
 
     existing_sessions = []
     try:
-        from .session_store import load_sessions
+        from ..storage.session_store import load_sessions
         existing_sessions = load_sessions(project_root)
     except Exception:
         pass
@@ -532,7 +541,7 @@ def main():
         if candidates:
             def _rank_sess(s):
                 qs = s.get("questions", [])
-                ans = sum(1 for q in qs if ((q.get("evaluation") or {}).get("score", 0) >= 70 or q.get("score", 0) >= 70))
+                ans = sum(1 for q in qs if ((q.get("evaluation") or {}).get("score", 0) >= PASSING_SCORE_THRESHOLD or q.get("score", 0) >= PASSING_SCORE_THRESHOLD))
                 return (ans, len(qs), s.get("attempt_number", 0))
             best_session = max(candidates, key=_rank_sess)
             cached_questions = []
@@ -554,7 +563,7 @@ def main():
                     "best_score": score,
                     "answered_in_attempt": sq.get("answered_in_attempt") or best_session.get("attempt_number"),
                 }
-                if score >= 70:
+                if score >= PASSING_SCORE_THRESHOLD:
                     cq["answered"] = True
                     cq["passed"] = True
                 else:
@@ -582,7 +591,7 @@ def main():
                                 q["evaluation"] = sq_eval
                                 q["response_time_seconds"] = sq.get("response_time_seconds", q.get("response_time_seconds", 0))
                                 q["answered_in_attempt"] = sq.get("answered_in_attempt") or s.get("attempt_number")
-            if q.get("best_score", 0) >= 70 or q.get("answered", False) or q.get("passed", False):
+            if q.get("best_score", 0) >= PASSING_SCORE_THRESHOLD or q.get("answered", False) or q.get("passed", False):
                 q["answered"] = True
                 q["passed"] = True
             else:
@@ -675,6 +684,9 @@ def main():
             mark_verified_for_commit(project_root, head_commit, diff_hash)
         sys.exit(exit_code)
 
+    index_lock = GitIndexLock(project_root)
+    index_lock.acquire()
+
     while True:
         # Persist state so attempt number and questions are tracked even if interrupted
         _write_state(state_file, attempt_key, head_commit, commit_msg,
@@ -694,7 +706,7 @@ def main():
             print(f"{BOLD}{CYAN}Question {i}/{len(valid_questions)}{RESET}")
       
             # If answer is already given with passing score, show Already Answered and skip
-            if q.get("best_score", 0) >= 70 or q.get("answered", False) or q.get("passed", False):
+            if q.get("best_score", 0) >= PASSING_SCORE_THRESHOLD or q.get("answered", False) or q.get("passed", False):
                 origin_att = q.get("answered_in_attempt")
                 if origin_att:
                     print(f"{GREEN}✓ Already Answered (Attempt #{origin_att}){RESET}\n")
@@ -727,18 +739,12 @@ def main():
 
             # On retry attempts, lightly rephrase questions that were previously
             # failed so the developer gets a fresh angle on the same concept.
-            if attempts > 1 and not q.get("passed", False) and q.get("best_score", 0) < 70:
+            if attempts > 1 and not q.get("passed", False) and q.get("best_score", 0) < PASSING_SCORE_THRESHOLD:
                 rephrased = followup_generator.rephrase_failed_question(q)
                 if rephrased and rephrased.strip() != q_text.strip():
                     q_text = rephrased
 
             print(f"{BOLD}{q_text}{RESET}\n")
-
-            # Follow-up state for this question (set only if a partial answer triggers one)
-            fu_ans = None
-            fu_eval = None
-            fu_ans_obj = {}
-            followup_q = ""
 
             ans_text = interaction.timed_input(f"{CYAN}❯ {RESET}", time_limit, speak_text=q_text)
             
@@ -783,73 +789,7 @@ def main():
             if not eval_res.llm_verified:
                 any_eval_unverified = True
 
-            # Targeted follow-up for partial understanding: one focused question
-            # on the missing concept, replacing the original score for this item.
-            if 25 <= final_score < 70 and eval_res.follow_up_required and (ans_text or "").strip():
-                missing = ", ".join(eval_res.missing_concepts) or "the missing concept"
-                followup_q = followup_generator.generate(q, ans_obj, eval_res.to_dict())
-            if followup_q and followup_q.strip() and 25 <= final_score < 70 and eval_res.follow_up_required and (ans_text or "").strip():
-                print(f"\n{YELLOW}Partial understanding. Follow-up on: {missing}{RESET}\n")
-                print(f"{BOLD}{followup_q}{RESET}\n")
-
-                fu_limit = min(time_limit, 45)
-                fu_ans = interaction.timed_input(
-                    f"{CYAN}❯ {RESET}", fu_limit, speak_text=followup_q
-                )
-                if fu_ans is None:
-                    fu_ans = ""
-                    fu_secs = fu_limit
-                    print(f"{RED}✗ Timeout reached on follow-up{RESET}")
-                else:
-                    fu_val = getattr(interaction, "last_response_time", None)
-                    if fu_val is not None and fu_val > 0:
-                        fu_secs = min(fu_limit, fu_val)
-                    else:
-                        fu_secs = min(fu_limit, 1)
-                    print(f"{GREEN}✓ Follow-up answer received in {fu_secs} seconds{RESET}")
-
-                fu_ans_obj = {
-                    "answer": fu_ans,
-                    "response_time_seconds": fu_secs,
-                    "status": "answered" if (fu_ans or "").strip() else "timeout"
-                }
-                fu_eval = evaluator.evaluate(
-                    {"question": followup_q, "type": q.get("type", "Reasoning"),
-                     "expected_concepts": eval_res.missing_concepts,
-                     "evaluation_criteria": []},
-                    fu_ans_obj, context, summary, env=env
-                )
-                final_score = max(final_score, fu_eval.score)
-                eval_res = fu_eval
-                ans_obj = fu_ans_obj
-                if not fu_eval.llm_verified:
-                    any_eval_unverified = True
-                if final_score >= 70:
-                    print(f"{GREEN}✓ Good understanding demonstrated on follow-up{RESET}")
-                elif final_score >= 25:
-                    print(f"{YELLOW}Partial understanding demonstrated on follow-up{RESET}")
-                else:
-                    print(f"{RED}✗ Understanding not demonstrated on follow-up{RESET}")
-            elif final_score >= 70:
-                print(f"{GREEN}✓ Good understanding demonstrated{RESET}")
-            elif final_score >= 25:
-                print(f"{YELLOW}Partial understanding demonstrated{RESET}")
-            else:
-                print(f"{RED}✗ Understanding not demonstrated{RESET}")
-            
-            # Only scores in GREEN (>= 70%) are considered answered and passed
-            q["best_score"] = max(q.get("best_score", 0), final_score)
-            if q["best_score"] >= 70:
-                q["answered"] = True
-                q["passed"] = True
-                if not q.get("answered_in_attempt"):
-                    q["answered_in_attempt"] = attempts
-            else:
-                q["answered"] = False
-                q["passed"] = False
-                
-            total_score += q["best_score"]
-            
+            # Direct scoring: No follow-up questions
             result_entry = {
                 "question_id": q_id,
                 "question": q_text,
@@ -858,31 +798,28 @@ def main():
                 "answer": ans_text,
                 "response_time_seconds": response_time,
                 "status": status,
-                "answered_in_attempt": q.get("answered_in_attempt") or (attempts if q["best_score"] >= 70 else None),
-                "evaluation": eval_res.to_dict()
+                "answered_in_attempt": attempts,
+                "evaluation": eval_res.to_dict(),
+                "score": final_score,
             }
-            # Record the follow-up exchange when one occurred
-            if fu_ans is not None or fu_eval is not None:
-                result_entry["follow_up"] = {
-                    "question": followup_q,
-                    "answer": fu_ans_obj.get("answer", ""),
-                    "status": fu_ans_obj.get("status", "timeout"),
-                    "evaluation": fu_eval.to_dict()
-                }
             final_results.append(result_entry)
 
             q["answer"] = ans_text
             q["evaluation"] = eval_res.to_dict()
             q["response_time_seconds"] = response_time
+            q["best_score"] = final_score
 
-            # Persist state immediately so answered questions are preserved across attempts
+            # Persist state immediately
             _write_state(state_file, attempt_key, head_commit, commit_msg,
                          diff_hash, attempts, valid_questions)
 
-            # If user gives wrong answer (< 25%), ask no next questions and abort
-            if final_score < 25:
-                print(f"\n{BOLD}{RED}Commit aborted. Please review the code and then try again.{RESET}\n")
-                
+            # If score of answer evaluation is less than threshold, commit must be aborted immediately
+            if final_score < PASSING_SCORE_THRESHOLD:
+                q["answered"] = True
+                q["passed"] = False
+                print(f"\n{RED}✗ Understanding not demonstrated.{RESET}")
+                print(f"\n{BOLD}{RED}Commit aborted. Please review your code and try again.{RESET}\n")
+
                 try:
                     session_data = build_session_payload(
                         attempt_number=attempts,
@@ -907,7 +844,16 @@ def main():
                     ServerClient().send(session_data)
                 except Exception:
                     pass
+                index_lock.release()
                 sys.exit(1)
+
+            # Score is >= threshold
+            print(f"{GREEN}✓ Good understanding demonstrated.{RESET}\n")
+            q["answered"] = True
+            q["passed"] = True
+            if not q.get("answered_in_attempt"):
+                q["answered_in_attempt"] = attempts
+            total_score += q["best_score"]
 
         avg_score = total_score / len(valid_questions) if valid_questions else 100
         # LLM verification: honest even when failing open. A session is only
@@ -917,9 +863,9 @@ def main():
 
         all_individual_passed = (
             bool(valid_questions)
-            and all(q.get("passed", False) or q.get("best_score", 0) >= 70 for q in valid_questions)
+            and all(q.get("passed", False) or q.get("best_score", 0) >= PASSING_SCORE_THRESHOLD for q in valid_questions)
         )
-        is_passed = all_individual_passed
+        is_passed = all_individual_passed and avg_score >= PASSING_SCORE_THRESHOLD
 
         attempt_status = "PASSED" if is_passed else "FAILED"
         if is_passed:
@@ -966,12 +912,14 @@ def main():
                 continue
             else:
                 print(f"\n\033[91mCommit aborted.\033[0m")
+                index_lock.release()
                 sys.exit(1)
         else:
             print(f"\n\033[92mCommit allowed: Understanding demonstrated.\033[0m")
             # Cleanup state on success
             if os.path.exists(state_file):
                 os.remove(state_file)
+            index_lock.release()
             mark_verified_for_commit(project_root, head_commit, diff_hash)
             sys.exit(0)
 

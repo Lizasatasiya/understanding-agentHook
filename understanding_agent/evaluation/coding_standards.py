@@ -485,7 +485,7 @@ class CodingStandardsChecker:
         span overlaps an added line are included — a 1-line edit to a legacy
         file never flags untouched functions.
         """
-        from .language_support import extract_functions, language_for
+        from ..context.language_support import extract_functions, language_for
         for path, content in contents.items():
             if not content.strip():
                 continue

@@ -11,8 +11,8 @@ from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSON
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
-from .coding_standards import CodingStandardsChecker, parse_violation
-from .session_store import (
+from ..evaluation.coding_standards import CodingStandardsChecker, parse_violation
+from ..storage.session_store import (
     load_sessions,
     save_session,
     get_sessions_for_commit,
@@ -170,10 +170,10 @@ def _get_change_summary(commit_id: str, files: List[Dict[str, Any]], repo_root: 
     if commit_id == "staged":
         # Attempt to run ChangeSummary if available
         try:
-            from .change_detector import ChangeDetector
-            from .code_graph import CodeGraph
-            from .context_builder import ContextBuilder
-            from .change_summary import ChangeSummary
+            from ..context.change_detector import ChangeDetector
+            from ..context.code_graph import CodeGraph
+            from ..context.context_builder import ContextBuilder
+            from ..context.change_summary import ChangeSummary
 
             detector = ChangeDetector()
             changes = detector.detect()
@@ -319,7 +319,7 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
     effective_repo_root = os.path.abspath(repo_root or get_default_repo_root())
     app = FastAPI(title="Understanding Agent - Real Data Pre-Commit Dashboard")
 
-    ui_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
+    ui_dir = os.path.dirname(os.path.abspath(__file__))
 
     @app.middleware("http")
     async def add_no_cache_headers(request: Request, call_next):

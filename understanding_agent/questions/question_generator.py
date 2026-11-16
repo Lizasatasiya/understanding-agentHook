@@ -1,7 +1,7 @@
 import json
-from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, log_llm_error
+from ..llm.api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, log_llm_error
 from .checklists import parse_checklist
-from .change_kind import classification_hint_lines
+from ..context.change_kind import classification_hint_lines
 
 
 import re

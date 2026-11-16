@@ -1,5 +1,5 @@
 import json
-from .api_utils import load_nous_api_key, call_nous_api, get_model, log_llm_error
+from ..llm.api_utils import load_nous_api_key, call_nous_api, get_model, log_llm_error
 
 class FollowUpGenerator:
     def generate(self, question: dict, answer: dict, evaluation: dict) -> str:

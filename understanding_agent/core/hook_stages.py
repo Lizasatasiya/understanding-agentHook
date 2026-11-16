@@ -250,7 +250,7 @@ def _detect_no_verify(project_root: str = None, head_commit: str = None, diff_ha
 
     # 2. Inspect ancestor git commit command line
     try:
-        from .commit_context import find_git_commit_ancestor
+        from ..context.commit_context import find_git_commit_ancestor
         _, args = find_git_commit_ancestor()
         if args:
             is_commit = False
@@ -573,5 +573,79 @@ def clear_verified_for_commit(project_root: str) -> None:
             os.remove(state_file)
     except Exception:
         pass
+
+
+class GitIndexLock:
+    """Acquires .git/index.lock during the oral defense to prevent mid-session staging tampering."""
+
+    def __init__(self, project_root: str):
+        import atexit
+        import os
+        import signal
+        import sys
+        self.project_root = project_root
+        self.lock_path = self._resolve_lock_path()
+        self._locked = False
+        atexit.register(self.release)
+
+        def _on_signal(signum, frame):
+            self.release()
+            sys.exit(128 + signum)
+
+        try:
+            signal.signal(signal.SIGINT, _on_signal)
+            signal.signal(signal.SIGTERM, _on_signal)
+        except Exception:
+            pass
+
+    def _resolve_lock_path(self) -> str:
+        import os
+        import subprocess
+        try:
+            res = subprocess.run(
+                ["git", "rev-parse", "--git-path", "index.lock"],
+                cwd=self.project_root,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            p = res.stdout.strip()
+            if not os.path.isabs(p):
+                p = os.path.join(self.project_root, p)
+            return p
+        except Exception:
+            return os.path.join(self.project_root, ".git", "index.lock")
+
+    def acquire(self) -> bool:
+        """Create the lockfile so git add / GUI staging fails while defense is active."""
+        import os
+        if not self.lock_path or self._locked:
+            return self._locked
+        try:
+            fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w") as f:
+                f.write(f"{os.getpid()}\n")
+            self._locked = True
+            return True
+        except (FileExistsError, OSError):
+            return False
+
+    def release(self) -> None:
+        """Release the lockfile so git can create the commit upon approval."""
+        import os
+        if self._locked and self.lock_path and os.path.exists(self.lock_path):
+            try:
+                os.remove(self.lock_path)
+            except Exception:
+                pass
+            self._locked = False
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
+
 
 

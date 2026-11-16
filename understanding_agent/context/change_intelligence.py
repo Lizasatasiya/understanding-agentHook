@@ -28,9 +28,9 @@ default: the default path is byte-identical to the pre-existing behavior).
 import json
 import os
 
-from .api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, log_llm_error
-from .checklists import parse_checklist
-from .coding_standards import load_standards_doc
+from ..llm.api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, log_llm_error
+from ..questions.checklists import parse_checklist
+from ..evaluation.coding_standards import load_standards_doc
 
 DOMAINS = ("ui", "data_model", "control_flow", "infra_config", "tests", "docs")
 CHANGE_TYPES = ("feature", "fix", "refactor", "config", "docs", "test")
@@ -114,7 +114,7 @@ def _validate_classification(raw) -> dict:
 def _validate_questions(raw_questions, target_count: int, question_generator) -> list:
     if not isinstance(raw_questions, list):
         return []
-    from .question_generator import QuestionGenerator  # local import: avoid cycle at module load
+    from ..questions.question_generator import QuestionGenerator  # local import: avoid cycle at module load
     gen = question_generator or QuestionGenerator()
     valid_types = getattr(gen, "_VALID_TYPES", set())
     out = []
@@ -236,7 +236,7 @@ def run_master_analysis(context: dict, summary: dict, hints: dict | None = None,
     if not api_key:
         return None
 
-    from .question_generator import QuestionGenerator  # local import: avoid cycle
+    from ..questions.question_generator import QuestionGenerator  # local import: avoid cycle
     gen = question_generator or QuestionGenerator()
     scale, target_count = gen.get_diff_scale(context)
     std = (hints or {}).get("standards") or []
