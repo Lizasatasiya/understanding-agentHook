@@ -61,7 +61,7 @@ hierarchy; everything else JIT-provisions on first sight.
 Raw answer text is personal data: retained SERVICE_RETENTION_DAYS (default
 90), then nulled by `purge_expired_answers` (scores and aggregates are kept
 forever). Per-developer score views are HR-adjacent: the dashboard side
-(Pokerface P4, deferred) must default them OFF and make individual drill-down
+(deferred) must default them OFF and make individual drill-down
 a team opt-in. See the AMENDMENTS section in
 ../CENTRALIZED_DATABASE_ARCHITECTURE.md.
 

@@ -14,7 +14,7 @@ was verified against the code.
 | [ENFORCEMENT.md](ENFORCEMENT.md) | Platform/ops, security | Bypass taxonomy (--no-verify, agents, GUIs), proof-of-defense checks, the hook-vs-centralized verdict, rejected alternatives |
 
 Living plan documents in the repo root carry the history:
-PLAN.md (PoC→production hardening), WORKSTREAMS_ASSESSMENT.md and
-PLAN_POKERFACE_JUDAS.md (the Bad Romance / Pokerface / Judas workstreams),
+PLAN.md (PoC→production hardening), WORKSTREAMS_ASSESSMENT.md
+(the remaining workstreams),
 CENTRALIZED_DATABASE_ARCHITECTURE.md (the central DB blueprint + implemented
 amendments §9).

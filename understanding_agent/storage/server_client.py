@@ -1,4 +1,4 @@
-"""Session sync client: local → central service (Pokerface P3).
+"""Session sync client: local store to the central service.
 
 Two transports, both opt-in and fail-silent (a commit is NEVER blocked or
 slowed by sync problems):

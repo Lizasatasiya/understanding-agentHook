@@ -10,7 +10,7 @@ from ..context.commit_context import (
     compute_attempt_key
 )
 
-# Pokerface P3 (PLAN_POKERFACE_JUDAS.md, decision B): the local session store
+# The local session store
 # is SQLite (.git/understanding_sessions.db, 0600) — plaintext JSON readable
 # by anyone was overruled. The public API (save_session/load_sessions/
 # get_sessions_for_commit/get_session_by_id) keeps its exact semantics; a

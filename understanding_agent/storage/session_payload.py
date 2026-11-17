@@ -11,7 +11,7 @@ Every session record produced here carries:
   - verification: ALWAYS present — a fallback/offline pass is marked
     "llm-unverified", never silently omitted (the honesty invariant)
 
-Schema v3 (Pokerface P3, PLAN_POKERFACE_JUDAS.md) adds:
+Schema v3 adds:
   - identity: zero-touch developer/repo identity (understanding_agent/identity.py)
     — the central service JIT-provisions users/repos from it
   - evidence: deterministic tool findings (semgrep/gitleaks) recorded at

@@ -1,4 +1,4 @@
-"""Central ledger schema (Pokerface P3 / Judas).
+"""Central ledger schema.
 
 SQLAlchemy 2.0 models; SQLite for dev/tests (SERVICE_DATABASE_URL=
 sqlite:///...), PostgreSQL in org deployments. JSON columns use the

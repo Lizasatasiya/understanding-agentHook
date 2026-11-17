@@ -1,4 +1,4 @@
-"""Central Understanding Service (Pokerface P3 / Judas ledger).
+"""Central Understanding Service.
 
 FastAPI ingestion for hook session payloads: zero-touch JIT provisioning
 (users/repos created on first sight from the payload's identity block),

@@ -1,4 +1,4 @@
-"""Backfill CLI (Pokerface P3 — colleague's doc Phase 4): push existing local
+"""Backfill CLI: push existing local
 sessions to the central ledger.
 
     understanding-agent-sync-history [--repo PATH] [--server URL] [--dry-run]

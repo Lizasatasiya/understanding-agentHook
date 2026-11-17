@@ -4,7 +4,7 @@ The bug class this module exists to kill: a voice-dictation artifact (empty
 capture, single clipped token, ASR stutter) reaches the evaluator, scores 0,
 and aborts the commit. Dictation failure punished the developer.
 
-Design (Pokerface P1, PLAN_POKERFACE_JUDAS.md):
+Design:
   - Suspicious answers get ONE optional re-ask ("say it again / type it /
     press Enter to submit as-is"). Never a forced discard — mixed-language
     answers are legitimate and scorable (the evaluator prompt judges concept

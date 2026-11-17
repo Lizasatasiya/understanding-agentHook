@@ -1,4 +1,4 @@
-"""Zero-touch identity resolution (Pokerface P3, from the centralized DB doc).
+"""Zero-touch identity resolution for the central service.
 
 Developers never log in or configure tokens: git itself mandates author
 metadata, so the hook harvests it at commit time. The central service

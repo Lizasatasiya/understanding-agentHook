@@ -411,7 +411,7 @@ Without individual username/password prompts, how do we guarantee data authentic
 
 ---
 
-## 9. AMENDMENTS (implemented — Pokerface P3, PLAN_POKERFACE_JUDAS.md)
+## 9. AMENDMENTS (implemented)
 
 This blueprint was adopted and implemented in `service/` (FastAPI +
 SQLAlchemy). The amendments below are deltas from the original document,
