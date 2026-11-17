@@ -90,11 +90,7 @@ def main() -> int:
 
     gen = QuestionGenerator()
 
-    print("\n--- offline fallback questions (no key needed) ---")
-    offline_q = gen._fallback(context, None)
-    for q in offline_q[:5]:
-        print(f"  [{q.get('type')}] {q.get('question')}")
-
+    print("\n--- offline: the hook does not ask hardcoded questions ---")
     if args.offline_only:
         return 0
 

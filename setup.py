@@ -8,14 +8,16 @@ setup(
     include_package_data=True,
     entry_points={
         "console_scripts": [
-            "understanding-agent = understanding_agent.cli:main",
-            "understanding-agent-ui = understanding_agent.server:run",
-            "understanding-agent-sync-history = understanding_agent.sync_history:main",
-            "understanding-agent-push-guard = understanding_agent.push_guard:main",
+            "understanding-agent = understanding_agent.core.cli:main",
+            "understanding-agent-ui = understanding_agent.ui.server:run",
+            "understanding-agent-sync-history = understanding_agent.storage.sync_history:main",
+            "understanding-agent-push-guard = understanding_agent.core.push_guard:main",
         ]
     },
     python_requires=">=3.10",
-    install_requires=[],
+    install_requires=[
+        "openai>=1.40",
+    ],
     extras_require={
         "voice": [
             "sounddevice",

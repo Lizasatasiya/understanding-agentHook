@@ -8,7 +8,7 @@ troubleshooting — for platform engineers and team leads. Grounded in v0.4.0.
 ```bash
 # Target repo
 pip install -e /path/to/understanding-agentHook   # or from git at a pinned tag
-cp .env.example .env    # fill UNDERSTANDING_AGENT_API_KEY (or NOUS_API_KEY)
+bash install.sh --key "YOUR_API_KEY" --model haiku
 ```
 
 `.pre-commit-config.yaml` in the target repo:
@@ -37,20 +37,16 @@ Notes:
 
 ## 2. Configuration reference
 
-All variables are documented in `.env.example`. The hook reads `.env` from
-the TARGET repo root at commit time.
+The hook reads the API key and model only from `~/.config/understanding-agent/.env`, which `install.sh` writes. A `.env` in the repository being committed is not used.
 
-LLM core:
+LLM:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| UNDERSTANDING_AGENT_PROVIDER | nous | nous/groq/openai/openrouter/together/ollama/custom |
-| UNDERSTANDING_AGENT_MODEL | preset default | any model id |
-| UNDERSTANDING_AGENT_BASE_URL | preset default | any OpenAI-compatible endpoint |
-| UNDERSTANDING_AGENT_API_KEY | — | provider key (else preset default var, e.g. NOUS_API_KEY) |
-| UNDERSTANDING_AGENT_JUDGE_MODEL | = model | separate judge model |
+| UNDERSTANDING_AGENT_MODEL | set by `--model` | `sonnet`, `haiku`, `nous`, or `org` |
+| UNDERSTANDING_AGENT_API_KEY | set by `--key` | key for that model |
 | UNDERSTANDING_AGENT_FAIL_MODE | open | closed = block commits when LLM unreachable |
-| UNDERSTANDING_AGENT_DISABLE_THINKING | on | suppress reasoning tokens (nous) |
+| UNDERSTANDING_AGENT_DISABLE_THINKING | on | for `nous`, send `reasoning_effort=none` |
 | UNDERSTANDING_AGENT_MASTER_ANALYSIS | off | 1/on/true enables the single-pass analysis |
 
 Behavior:
@@ -71,14 +67,7 @@ Sync (teams):
 | UNDERSTANDING_AGENT_TEAM_SECRET | — | HMAC-SHA256 signing secret (X-Signature) |
 | UNDERSTANDING_AGENT_TELEMETRY_URL | — | LEGACY single-endpoint telemetry (no queue) |
 
-## 3. CI
-
-`.github/workflows/ci.yml` runs on every push/PR: python 3.12 + 3.14 matrix,
-`pip install -e ".[service]"`, `python -m unittest discover -s tests`,
-`python tests/e2e_gate_first.py`. The `[service]` install is required because
-the central-service tests run inside the suite.
-
-## 4. Central ledger deployment (teams)
+## 3. Central ledger deployment (teams)
 
 Dev (SQLite, zero Docker):
 
@@ -108,7 +97,7 @@ Everything else JIT-provisions on first sight.
 
 Smoke: `curl http://<host>:8000/api/v1/health` → `{"status":"ok","schema_version":1}`.
 
-## 5. Enforcement wiring (proof of defense)
+## 4. Enforcement wiring (proof of defense)
 
 CI (GitHub Actions):
 
@@ -161,15 +150,10 @@ silences TTS. [Tab] starts dictation; the transcript lands in the typing
 buffer so you can edit before Enter. Suspect captures (clipped mic, stutter)
 get one "say it again" prompt; mixed-language answers are never flagged.
 
-## 7. Testing and measurement
+## 7. Measurement
 
 | Command | What it proves |
 |---|---|
-| `python -m unittest discover -s tests` | 265 unit tests (incl. central service, SQLite store, identity/sync, hygiene) |
-| `python tests/e2e_gate_first.py` | 5 scenes against a real scratch git repo: gate blocks with zero LLM calls; offline fallback asks the security question; prune; agent mode records+passes; gate still blocks in agent mode |
-| `python tests/e2e_polyglot_fixture.py` | real NestJS/.NET/ML fixture through the real pipeline |
-| `python tests/e2e_security_gate.py` | gate aborts a real git commit containing a live credential |
-| `python scripts/llm_smoke_test.py` | 7-step LIVE LLM pipeline check (needs a key in .env) |
 | `python scripts/calibration_harness.py [--strict]` | master-analysis precision/recall vs the 4-case corpus (bench-first before any prompt/model change) |
 | `python scripts/context_eval_harness.py --strict` | context quality gate: % of expected concepts present in the built context (CI-enforced ≥0.80; current baseline 1.00) |
 | `understanding-agent-sync-history --repo . --server URL [--dry-run]` | backfill existing local sessions into the ledger (legacy rows get git-author resolution; batches of 25; fail-loud) |
@@ -189,7 +173,7 @@ the local SQLite store. The team/central dashboard is deferred (P4).
 | Symptom | Cause → fix |
 |---|---|
 | Hook output looks stale after editing the hook repo | pre-commit runs the COMMITTED rev → commit, then `pre-commit clean && pre-commit install-hooks` in the target |
-| "NOUS_API_KEY is not set" warning, generic questions | key not found in env or target-repo `.env` → set it; offline fallback ran by design (session recorded llm-unverified) |
+| No API key / model not configured | `~/.config/understanding-agent/.env` is missing the install values → re-run `install.sh --key` and `--model`; the commit is allowed and recorded llm-unverified |
 | Commit exits 0 with "RECORD-ONLY MODE" | intended: non-interactive context (agent/CI) or UNDERSTANDING_AGENT_MODE=agent; the session is recorded unverified |
 | Sessions missing after v0.4 upgrade | legacy JSON was imported into `.git/understanding_sessions.db` on first run; the old file is kept as `understanding_sessions.json.imported` |
 | Ledger rows missing for offline periods | by design: queued in `.git/understanding_sync_queue.json`, drained on the next commit; check the queue file if it never drains (wrong SYNC_URL / token) |

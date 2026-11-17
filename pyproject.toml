@@ -8,7 +8,7 @@ version = "0.4.0"
 description = "Oral-defense pre-commit hook: credential gate, coding-standards audit, LLM questions with checklist-based evaluation"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["openai>=1.40"]
 
 [project.optional-dependencies]
 voice = ["sounddevice", "openai-whisper", "numpy"]
