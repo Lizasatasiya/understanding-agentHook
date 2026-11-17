@@ -156,7 +156,7 @@ shows the regex tier failing on real repos.
 
 ---
 
-## POKERFACE — operations
+## OPERATIONS
 
 ### 1. Voice dictation robustness + multilingual
 
