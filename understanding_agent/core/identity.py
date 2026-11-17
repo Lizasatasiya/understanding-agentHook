@@ -79,4 +79,36 @@ class IdentityDetector:
             "git_platform": platform,
             "remote_url": remote_url,
             "ci_actor": ci_actor,
+            "github_username": cls.github_login(repo_root),
         }
+
+    @classmethod
+    def github_login(cls, repo_root: str) -> str:
+        """GitHub login for this developer. Empty when none can be resolved.
+
+        Order: the authenticated `gh` user, GITHUB_ACTOR, git's github.user,
+        then the owner segment of a github.com remote.
+        """
+        candidates = []
+        try:
+            login = subprocess.check_output(
+                ["gh", "api", "user", "--jq", ".login"],
+                cwd=repo_root, text=True, stderr=subprocess.DEVNULL, timeout=8,
+            ).strip()
+            candidates.append(login)
+        except Exception:
+            pass
+        candidates.append(os.environ.get("GITHUB_ACTOR", ""))
+        candidates.append(cls._run_git(["config", "--get", "github.user"], repo_root))
+        remote = cls._run_git(["config", "--get", "remote.origin.url"], repo_root)
+        owner = re.search(r"github\.com[:/]([^/]+)/", remote or "")
+        if owner:
+            candidates.append(owner.group(1))
+        for raw in candidates:
+            login = (raw or "").strip()
+            if _GITHUB_LOGIN.match(login):
+                return login
+        return ""
+
+
+_GITHUB_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")

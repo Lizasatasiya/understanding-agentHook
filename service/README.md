@@ -34,6 +34,10 @@ The service auto-creates its schema on startup (SQLAlchemy `create_all`).
 | SERVICE_TEAM_SECRET | HMAC-SHA256 secret for X-Signature verification | (empty) |
 | SERVICE_ADMIN_TOKEN | Required X-Admin-Token on org-structure endpoints | (empty) |
 | SERVICE_RETENTION_DAYS | Days raw answer text is retained; enforced on every startup | 90 |
+| SERVICE_DEFENSE_STEPS | Comma-separated interview steps. Default runs summary, then the trivial bypass, then question generation | summary,trivial_gate,questions |
+| SERVICE_BYPASS_TRIVIAL | After the summary, skip question generation when the hook reports a trivial diff and standards passed | on |
+| SERVICE_INTERVIEW_TTL_SECONDS | How long an in-memory interview stays answerable | 1800 |
+| UNDERSTANDING_AGENT_PASSING_SCORE | Score below this stops the interview on that answer | 75 |
 
 ## Endpoints
 
@@ -43,6 +47,8 @@ The service auto-creates its schema on startup (SQLAlchemy `create_all`).
 | POST | /api/v1/sessions | Ingest one session (JIT user/repo, idempotent by session_id) |
 | POST | /api/v1/sessions/batch | Drain the hook's offline queue (`{"sessions": [...]}`) |
 | GET  | /api/v1/defense?repo_slug=&from=&to= | Proof-of-defense rows for CI/pre-receive |
+| POST | /api/v1/defense/start | Summary, trivial bypass, then question generation. Returns questions or action=skip |
+| POST | /api/v1/defense/{defense_id}/answer | Assess one answer. Returns continue, stop, or pass |
 | POST | /api/v1/admin/repositories | Assign a repo to an org/team |
 | POST | /api/v1/admin/members | Add a user to a team |
 | POST | /api/v1/admin/purge | Enforce raw-answer retention NOW (cron-friendly); returns purged count |

@@ -417,7 +417,7 @@ echo ""
 echo -e "\\033[93mInteractive oral defense launched for IDE Source Control commit.\\033[0m"
 echo ""
 
-"{python_bin}" -m understanding_agent.cli
+"{python_bin}" -m understanding_agent
 EXIT_CODE=$?
 echo $EXIT_CODE > "{status_file}"
 
@@ -562,6 +562,34 @@ def mark_verified_for_commit(project_root: str, head_commit: str, diff_hash: str
             }, f)
     except Exception:
         pass
+
+
+def consume_pass_marker(project_root: str, head_commit: str, diff_hash: str) -> bool:
+    """Return True and delete the pass marker when it matches this diff.
+
+    Used by prepare-commit-msg so the same git commit is not interviewed twice.
+    A later commit does not consult this marker.
+    """
+    import os
+    import json
+    import time
+
+    state_file = os.path.join(project_root, ".git", "understanding_agent_verified.json")
+    if not os.path.exists(state_file):
+        return False
+    try:
+        with open(state_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return False
+    matched = (
+        data.get("head_commit") == head_commit
+        and data.get("diff_hash") == diff_hash
+        and time.time() - data.get("timestamp", 0) < 300
+    )
+    if matched:
+        clear_verified_for_commit(project_root)
+    return matched
 
 
 def clear_verified_for_commit(project_root: str) -> None:
