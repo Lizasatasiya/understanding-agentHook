@@ -98,7 +98,8 @@ class ChangeSummary:
             "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3,
-            "max_tokens": max_tokens
+            "max_tokens": max_tokens,
+            "_event": "Change Summary",
         }
 
         status, body = call_nous_api(api_key, payload, timeout=30)

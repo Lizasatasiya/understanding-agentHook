@@ -253,6 +253,7 @@ def run_master_analysis(context: dict, summary: dict, hints: dict | None = None,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.3,
         "max_tokens": 2000,
+        "_event": "Master Analysis",
     }
     status, body = call_nous_api(api_key, payload, timeout=60)
     if status != 200:

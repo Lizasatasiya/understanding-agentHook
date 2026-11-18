@@ -3,7 +3,6 @@ from ..llm.api_utils import load_nous_api_key, extract_json, call_nous_api, get_
 from .checklists import parse_checklist
 from ..context.change_kind import classification_hint_lines
 
-
 import re
 
 class QuestionGenerator:
@@ -374,10 +373,11 @@ class QuestionGenerator:
             "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.4,
-            "max_tokens": max(1500, target_count * 350)
+            "max_tokens": max(1500, target_count * 350),
+            "_event": "Question Generation",
         }
 
-        status, body = call_nous_api(api_key, payload, timeout=30)
+        status, body = call_nous_api(api_key, payload, timeout=60)
         if status != 200:
             return []
 

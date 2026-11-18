@@ -208,11 +208,13 @@ class AnswerEvaluator:
         malformed JSON) so the caller degrades to the offline fallback.
         """
         prompt = self._build_checklist_prompt(question, answer, checklist, context, summary, env=env)
+        qid = question.get("question_id") or "Q"
         payload = {
             "model": get_judge_model(),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.2,
             "max_tokens": 900,
+            "_event": f"Answer Evaluation ({qid})",
         }
         status, body = call_nous_api(api_key, payload, timeout=45)
         if status != 200:
@@ -431,7 +433,8 @@ class AnswerEvaluator:
             "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.2,
-            "max_tokens": 450
+            "max_tokens": 450,
+            "_event": "Answer Evaluation (Legacy Fallback)",
         }
 
         status, body = call_nous_api(api_key, payload, timeout=35)

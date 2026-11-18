@@ -85,8 +85,6 @@ def _print_gate_block(critical: list, env: dict, project_root: str) -> None:
 \033[93m  Remove the credential before committing:\033[0m
   1. Move it to an environment variable or your .env (already gitignored)
   2. If it was ever committed before, rotate it — history keeps it forever
-  3. If this is a false positive, set UNDERSTANDING_AGENT_SECURITY_GATE=off
-     for this commit: git commit  # after unsetting, or use --no-verify
 """)
 
 
@@ -236,6 +234,56 @@ def _is_prepare_stage() -> bool:
     return False
 
 
+def _is_revert_or_merge_operation(project_root: str = None) -> bool:
+    """Check if the current git operation is a revert, merge, cherry-pick, or rebase."""
+    import os
+    import sys
+    import subprocess
+
+    root = project_root or os.getcwd()
+    git_dir = os.path.join(root, ".git")
+    if os.path.isdir(git_dir):
+        for indicator in ("REVERT_HEAD", "CHERRY_PICK_HEAD", "MERGE_HEAD", "rebase-merge", "rebase-apply"):
+            if os.path.exists(os.path.join(git_dir, indicator)):
+                return True
+
+    # Check CLI arguments to prepare-commit-msg: git passes message source as $2
+    # e.g., prepare-commit-msg <file> "message" / "merge" / "commit"
+    if any(a in ("merge", "squash") for a in sys.argv):
+        return True
+
+    # Also check parent process command line
+    try:
+        import shlex
+        curr_pid = os.getppid()
+        for _ in range(8):
+            if curr_pid <= 1:
+                break
+            out = subprocess.check_output(
+                ["ps", "-o", "ppid,args", "-p", str(curr_pid)],
+                text=True, stderr=subprocess.DEVNULL
+            ).strip().splitlines()
+            if len(out) < 2:
+                break
+            parts = out[1].strip().split(None, 1)
+            ppid = int(parts[0])
+            cmd_line = parts[1] if len(parts) > 1 else ""
+            try:
+                tokens = [t.lower() for t in shlex.split(cmd_line)]
+            except Exception:
+                tokens = [t.lower() for t in cmd_line.split()]
+            for i, t in enumerate(tokens):
+                if (t == "git" or t.endswith("/git")) and i + 1 < len(tokens):
+                    sub = tokens[i + 1]
+                    if sub in ("revert", "merge", "cherry-pick", "rebase"):
+                        return True
+            curr_pid = ppid
+    except Exception:
+        pass
+
+    return False
+
+
 def _detect_no_verify(project_root: str = None, head_commit: str = None, diff_hash: str = None) -> bool:
     """Detect if the commit attempt is trying to bypass pre-commit via --no-verify or -n."""
     import os
@@ -309,6 +357,8 @@ def _detect_no_verify(project_root: str = None, head_commit: str = None, diff_ha
     # 4. Check if prepare-commit-msg hook was reached without prior pre-commit verification
     if project_root and head_commit and diff_hash:
         if _is_prepare_stage():
+            if _is_revert_or_merge_operation(project_root):
+                return False
             if not is_already_verified_for_commit(project_root, head_commit, diff_hash):
                 return True
 

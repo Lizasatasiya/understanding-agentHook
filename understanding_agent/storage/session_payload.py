@@ -43,6 +43,7 @@ def build_session_payload(
     analysis: dict | None = None,
     identity: dict | None = None,
     evidence: dict | None = None,
+    token_usage: dict | None = None,
 ) -> dict:
     """Build one session record. All call sites go through here so the
     schema can never drift between paths again.
@@ -89,4 +90,6 @@ def build_session_payload(
             "gitleaks": evidence.get("gitleaks") or [],
             "test_coverage_gaps": evidence.get("test_coverage_gaps") or [],
         }
+    if token_usage:
+        payload["token_usage"] = token_usage
     return payload

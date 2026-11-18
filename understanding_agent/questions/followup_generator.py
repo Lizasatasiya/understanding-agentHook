@@ -12,10 +12,10 @@ class FollowUpGenerator:
             return ""
 
         prompt = self._build_prompt(question, answer, evaluation)
-        result = self._call_groq(api_key, prompt)
+        result = self._call_nous(api_key, prompt, event="Follow-up Generation")
         return result or ""
 
-    def rephrase_failed_question(self, question: dict) -> str:
+    def rephrase_failed_question(self, question: dict, event: str = "Question Rephrasing") -> str:
         """Return a model rephrase of a previously failed question.
 
         The original wording is kept when the model does not return one.
@@ -39,7 +39,7 @@ class FollowUpGenerator:
             "3. Keep it short \u2014 one sentence, plain English, no jargon.\n"
             "4. Return ONLY the rephrased question. No quotes, no markdown, no intros.\n"
         )
-        return self._call_groq(api_key, prompt) or ""
+        return self._call_nous(api_key, prompt, event=event) or ""
 
     def _build_prompt(self, question: dict, answer: dict, evaluation: dict) -> str:
         missing = ", ".join(evaluation.get('missing_concepts', []))
@@ -56,12 +56,13 @@ RULES:
 5. Return ONLY the question text. No quotes, no markdown, no intros.
 """
 
-    def _call_nous(self, api_key: str, prompt: str) -> str:
+    def _call_nous(self, api_key: str, prompt: str, event: str = "Question Rephrasing") -> str:
         payload = {
             "model": get_model(),
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.5,
-            "max_tokens": 128
+            "max_tokens": 128,
+            "_event": event,
         }
 
         status, body = call_nous_api(api_key, payload, timeout=30)

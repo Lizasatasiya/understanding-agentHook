@@ -12,10 +12,16 @@ from .api_utils import (
     load_nous_api_key,
     extract_json,
     call_nous_api,
+    call_llm_api,
     get_model,
     get_judge_model,
     fail_open_enabled,
     log_llm_error,
+    record_token_usage_event,
+    get_token_usage_events,
+    clear_token_usage_events,
+    get_total_token_usage,
+    print_token_usage_summary,
 )
 
 __all__ = [
@@ -29,8 +35,14 @@ __all__ = [
     "load_nous_api_key",
     "extract_json",
     "call_nous_api",
+    "call_llm_api",
     "get_model",
     "get_judge_model",
     "fail_open_enabled",
     "log_llm_error",
+    "record_token_usage_event",
+    "get_token_usage_events",
+    "clear_token_usage_events",
+    "get_total_token_usage",
+    "print_token_usage_summary",
 ]
