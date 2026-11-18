@@ -10,7 +10,7 @@ services:
     volumes:
       - ledger_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U understanding"]
+      test: ["CMD-SHELL", "pg_isready -U understanding -d understanding_ledger"]
       interval: 3s
       timeout: 3s
       retries: 15

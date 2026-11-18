@@ -224,11 +224,8 @@ sound skeleton, adopt with amendments:
   proves "someone in the team", not "this developer answered honestly".
   HMAC-signed session payloads with a repo-side secret raise the floor
   cheaply; full per-dev attestation is not worth it pre-adoption.
-- Local tier: consider SQLite (single file in .git/) as the local store with
-  JSON retained as export/compat — gives per-developer history queries the
-  dashboard needs without Postgres dependency for solo users. OPEN DECISION:
-  keep JSON-only locally + Postgres centrally (colleague's plan) vs SQLite
-  locally. Recommend JSON for now (YAGNI), Postgres centrally.
+- Local tier: a configured Postgres database holds the ledger.
+  JSON retained as export/compat. The central record is Postgres.
 
 ### 4. Managerial flow (optional, low priority — agreed)
 

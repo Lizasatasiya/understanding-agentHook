@@ -76,7 +76,7 @@ is already in the project skill.
 - Fallback evaluator prompt cap `max_tokens: 450` confirmed
   (answer_evaluator.py:232).
 - Sessions: prune default 500, `UNDERSTANDING_AGENT_MAX_SESSIONS` override
-  (session_store.py:244). Telemetry opt-in, fail-silent (test suite covers both).
+  Telemetry opt-in, fail-silent (test suite covers both).
 - Server: binds 127.0.0.1:8000 (server.py:688); violations parser is regex
   over report strings (server.py:86 `file:line: msg`) — the format coupling
   concern is confirmed.
@@ -126,5 +126,5 @@ is already in the project skill.
 
 Commands run this session: `git log/status/show -L` (regression origin), targeted
 grep/sed reads of cli.py, answer_evaluator.py, security_lens.py,
-llm_manager.py, session_store.py, server.py, interaction.py, setup.py,
+llm_manager.py, server.py, interaction.py, setup.py,
 .pre-commit-hooks.yaml, PLAN.md, README.md.

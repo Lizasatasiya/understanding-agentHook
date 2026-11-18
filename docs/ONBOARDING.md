@@ -65,7 +65,7 @@ git restore --staged scratch_creds.py && rm scratch_creds.py
 ```bash
 # central ledger (one machine serves the team):
 cd ~/understanding-agentHook
-SERVICE_DATABASE_URL=sqlite:////tmp/ledger.db SERVICE_TEAM_TOKEN=<team-token> \
+SERVICE_DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:PORT/DATABASE SERVICE_TEAM_TOKEN=<team-token> \
   python3 -m uvicorn service.app:app --port 8766          # needs [service] extra
 # per-developer hook sync (in the project or their shell):
 export UNDERSTANDING_AGENT_SYNC_URL=http://<ledger-host>:8766

@@ -65,7 +65,7 @@ class ChangeDetector:
             language = language_for(path)
             if not language:
                 # Non-code files (docs, config, schemas) AND any other
-                # unknown-extension file (e.g. server.pem, secrets.sqlite,
+                # unknown-extension file (e.g. server.pem, secrets.bin,
                 # extensionless binaries): all tracked as module-level changes.
                 # Unknown extensions must NOT be dropped — the credential gate
                 # and scale metrics need to see every staged file (a force-added

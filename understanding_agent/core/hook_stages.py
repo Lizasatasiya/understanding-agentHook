@@ -507,10 +507,7 @@ def is_already_verified_for_commit(project_root: str, head_commit: str, diff_has
     import os
     import json
     import time
-    import sqlite3
-    from datetime import datetime
 
-    # 1. Check verified badge json file
     state_file = os.path.join(project_root, ".git", "understanding_agent_verified.json")
     if os.path.exists(state_file):
         try:
@@ -519,26 +516,6 @@ def is_already_verified_for_commit(project_root: str, head_commit: str, diff_has
                 if (data.get("head_commit") == head_commit and
                     data.get("diff_hash") == diff_hash and
                     time.time() - data.get("timestamp", 0) < 300):
-                    return True
-        except Exception:
-            pass
-
-    # 2. Check understanding_sessions.db for a recent PASSED session for this exact diff
-    db_path = os.path.join(project_root, ".git", "understanding_sessions.db")
-    if os.path.exists(db_path):
-        try:
-            conn = sqlite3.connect(db_path, timeout=2.0)
-            c = conn.cursor()
-            row = c.execute(
-                "SELECT timestamp FROM sessions "
-                "WHERE head_commit = ? AND diff_hash = ? AND status = 'PASSED' "
-                "ORDER BY timestamp DESC LIMIT 1",
-                (head_commit, diff_hash)
-            ).fetchone()
-            conn.close()
-            if row and row[0]:
-                session_time = datetime.fromisoformat(row[0]).timestamp()
-                if time.time() - session_time < 3600:  # within 1 hour
                     return True
         except Exception:
             pass

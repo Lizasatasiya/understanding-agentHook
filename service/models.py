@@ -1,9 +1,8 @@
 """Central ledger schema.
 
-SQLAlchemy 2.0 models; SQLite for dev/tests (SERVICE_DATABASE_URL=
-sqlite:///...), PostgreSQL in org deployments. JSON columns use the
-portable sa.JSON type (JSONB on Postgres via the dialect where it matters
-for querying is a later optimization; the schema is the contract).
+SQLAlchemy 2.0 models for PostgreSQL. JSON columns use the portable sa.JSON
+type (JSONB on Postgres via the dialect where it matters for querying is a
+later optimization; the schema is the contract).
 
 Org hierarchy — the per-developer / per-team / per-repo answer:
   organizations 1..* teams 1..* team_members *..* users

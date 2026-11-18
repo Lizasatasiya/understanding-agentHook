@@ -118,24 +118,17 @@ the original precedence order.
 var switches provider, and the compat layer honors the pre-existing
 precedence contract (env vars before .env files, etc.).
 
-## D7. Local session store: SQLite, 0600 (user decision)
+## D7. Sessions are not stored in the repository
 
-**Decision.** Sessions live in `.git/understanding_sessions.db` (SQLite,
-0600). A legacy JSON store is imported once on first open and renamed
-`.imported` (backup, never deleted). JSON remains only as an explicit export
-format. If SQLite is unusable (read-only .git), save/load degrade to the
-legacy JSON path.
+**Decision.** Interview results are written to the configured Postgres
+database. The repository does not keep a session database.
 
 **Alternatives.**
 - *Keep plaintext JSON* (previous behavior): readable by anyone with file
   access; answers are personal data. Explicitly overruled by the user.
-- *Postgres locally too*: a server dependency on every dev machine for a
-  single-user history; pointless without the central service.
-- *SQLite + JSON mirror*: two sources of truth for no reader.
+- *A database file inside `.git/`*: a second store next to Postgres.
 
-**Why.** Local privacy posture (restricted file perms) without a server
-dependency; identical public API so callers (server.py, commit_context,
-e2e) never changed.
+**Why.** One database, the one configured for the service.
 
 ## D8. Queue-backed central sync, 2.5s budget, commit never blocked
 

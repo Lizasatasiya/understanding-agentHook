@@ -69,11 +69,12 @@ Sync (teams):
 
 ## 3. Central ledger deployment (teams)
 
-Dev (SQLite, zero Docker):
+Dev (Postgres must already be running):
 
 ```bash
 pip install -r service/requirements.txt
-SERVICE_TEAM_TOKEN=dev-token uvicorn service.app:app --port 8000
+SERVICE_DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:PORT/DATABASE \
+  SERVICE_TEAM_TOKEN=dev-token uvicorn service.app:app --port 8000
 ```
 
 Production (Postgres via compose):
@@ -84,7 +85,7 @@ SERVICE_TEAM_TOKEN=... SERVICE_TEAM_SECRET=... SERVICE_ADMIN_TOKEN=... \
   docker compose up -d     # Postgres 16 + the service, schema auto-created
 ```
 
-Service env: `SERVICE_DATABASE_URL` (sqlite:/// or postgresql+psycopg://),
+Service env: `SERVICE_DATABASE_URL` (postgresql+psycopg://),
 `SERVICE_TEAM_TOKEN` (required on ingestion when set), `SERVICE_TEAM_SECRET`
 (enables HMAC verification), `SERVICE_ADMIN_TOKEN` (org-structure endpoints),
 `SERVICE_RETENTION_DAYS` (default 90 — enforced automatically on every
@@ -164,9 +165,8 @@ Use python ≥ 3.10 (macOS system python3 is 3.9 and crashes at import).
 
 ## 8. Local dashboard (solo)
 
-`understanding-agent-ui` (needs `[ui]` extra) serves the local dashboard on
-127.0.0.1:8000 — commit history, attempts, per-question breakdowns, reading
-the local SQLite store. The team/central dashboard is deferred (P4).
+`understanding-agent-ui` (needs `[ui]` extra) serves a local view on
+127.0.0.1:8000. Interview records live in the configured Postgres database.
 
 ## 9. Troubleshooting
 
@@ -175,7 +175,6 @@ the local SQLite store. The team/central dashboard is deferred (P4).
 | Hook output looks stale after editing the hook repo | pre-commit runs the COMMITTED rev → commit, then `pre-commit clean && pre-commit install-hooks` in the target |
 | No API key / model not configured | `~/.config/understanding-agent/.env` is missing the install values → re-run `install.sh --key` and `--model`; the commit is allowed and recorded llm-unverified |
 | Commit exits 0 with "RECORD-ONLY MODE" | intended: non-interactive context (agent/CI) or UNDERSTANDING_AGENT_MODE=agent; the session is recorded unverified |
-| Sessions missing after v0.4 upgrade | legacy JSON was imported into `.git/understanding_sessions.db` on first run; the old file is kept as `understanding_sessions.json.imported` |
 | Ledger rows missing for offline periods | by design: queued in `.git/understanding_sync_queue.json`, drained on the next commit; check the queue file if it never drains (wrong SYNC_URL / token) |
 | verify_defense says UNAUDITED for a commit you defended | the defense session must have status PASSED and head_commit == the commit's PARENT; agent rows additionally need `--allow-agent-unverified` |
 | LLM slow (multi-second) | bench first (scripts/bench_*), repeat ≥3; the gateway legitimately varies 3–15s — do not tune prompts from a single sample |
@@ -183,8 +182,7 @@ the local SQLite store. The team/central dashboard is deferred (P4).
 
 ## 10. Data & privacy operations
 
-- Local store: `.git/understanding_sessions.db` (0600). Export: 
-  `from understanding_agent.session_store import export_sessions`.
+- Interview records live in the configured Postgres database.
 - Retention enforcement on the ledger: schedule
   `purge_expired_answers(db, retention_days)` — raw answers older than the
   window are nulled, scores kept.

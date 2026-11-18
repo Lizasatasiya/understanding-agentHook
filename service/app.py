@@ -63,14 +63,36 @@ def _canonicalize_request(body: bytes) -> bytes:
     return _canonical(json.loads(body.decode("utf-8")))
 
 
+def _database_url(explicit: str | None) -> str:
+    """Postgres URL for the ledger. Read from the argument, the environment, then .env."""
+    url = (explicit or os.environ.get("SERVICE_DATABASE_URL") or "").strip()
+    if not url:
+        env_path = os.path.join(os.getcwd(), ".env")
+        try:
+            with open(env_path, encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, value = line.split("=", 1)
+                    if key.strip() == "SERVICE_DATABASE_URL":
+                        url = value.strip().strip('"').strip("'")
+                        break
+        except OSError:
+            url = ""
+    if not url.startswith("postgresql"):
+        raise RuntimeError(
+            "Set SERVICE_DATABASE_URL in .env or the server environment to a postgresql+psycopg:// URL."
+        )
+    return url
+
+
 class ServiceState:
     """Holds engine/session factory + auth config; swappable in tests."""
 
     def __init__(self, database_url: str | None = None):
-        url = database_url or os.environ.get(
-            "SERVICE_DATABASE_URL", "sqlite:///./understanding_ledger.db")
-        connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-        self.engine = create_engine(url, connect_args=connect_args)
+        url = _database_url(database_url)
+        self.engine = create_engine(url)
         Base.metadata.create_all(self.engine)
         self._ensure_github_username()
         self.SessionLocal = sessionmaker(bind=self.engine, expire_on_commit=False)

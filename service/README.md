@@ -6,9 +6,10 @@ developers and repositories from the payload's zero-touch identity block, and
 serves the proof-of-defense lookup that CI/pre-receive uses to detect
 unaudited commits (see ../docs/ENFORCEMENT.md).
 
-## Quick start (SQLite, no Docker)
+## Quick start
 
     pip install -r requirements.txt
+    SERVICE_DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:PORT/DATABASE \
     SERVICE_TEAM_TOKEN=dev-token uvicorn service.app:app --port 8000
 
 Point a hook at it from any repo:
@@ -29,7 +30,7 @@ The service auto-creates its schema on startup (SQLAlchemy `create_all`).
 
 | Variable | Purpose | Default |
 |---|---|---|
-| SERVICE_DATABASE_URL | SQLAlchemy URL (sqlite:/// or postgresql+psycopg://) | sqlite:///./understanding_ledger.db |
+| SERVICE_DATABASE_URL | Postgres URL (`postgresql+psycopg://...`). Read from the environment, then `.env`. Required | (none) |
 | SERVICE_TEAM_TOKEN | Required X-Team-Token on ingestion (empty = open, dev only) | (empty) |
 | SERVICE_TEAM_SECRET | HMAC-SHA256 secret for X-Signature verification | (empty) |
 | SERVICE_ADMIN_TOKEN | Required X-Admin-Token on org-structure endpoints | (empty) |

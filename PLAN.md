@@ -75,10 +75,8 @@ fail-open mode, the commit may proceed, but:
 - Drop legacy `code-understanding-demo` path sniffing in
   get_default_repo_root (env var and cwd/.git remain).
 
-### W6 — Sessions file growth  [session_store.py]
-- Prune to the most recent N sessions (default 500) on save; env
-  UNDERSTANDING_AGENT_MAX_SESSIONS to tune; 0/unset-safe.
-- Prune AFTER dedupe/append so the newest data is always kept.
+### W6 — Session payload size
+- Keep the payload that is sent to the ledger small.
 
 ### W7 — Packaging  [setup.py]
 - `python_requires=">=3.10"`.
@@ -88,7 +86,7 @@ fail-open mode, the commit may proceed, but:
 - Question scaling 2–8 by diff size (not "capped at 2–3").
 - Default model/provider = Nous (qwen/qwen3-coder-30b-a3b-instruct) with the
   new provider-manager env vars documented; Groq as a preset, not the story.
-- File tree matches the repo (coding_standards, session_store, commit_context,
+- File tree matches the repo (coding_standards, commit_context,
   server.py, ui/).
 - Env var table gains the W2/W4/W6 variables.
 - Replace "Why Groq" decision section with provider-agnostic rationale.
