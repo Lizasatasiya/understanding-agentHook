@@ -3,8 +3,7 @@
 FastAPI ingestion for hook session payloads: zero-touch JIT provisioning
 (users/repos created on first sight from the payload's identity block),
 idempotent session upsert, batch drain for the offline queue, and the
-proof-of-defense lookup that CI/pre-receive uses to detect unaudited
-commits (docs/ENFORCEMENT.md).
+proof-of-defense lookup that CI can use to list audited commits.
 
 Auth (anti-spoofing, V1):
   - X-Team-Token: shared team token (SERVICE_TEAM_TOKEN). Proves "someone
@@ -16,8 +15,7 @@ Auth (anti-spoofing, V1):
 
 Every response carries schema_version so clients can migrate safely.
 
-Privacy/retention (ships with this, not later — see the amended
-CENTRALIZED_DATABASE_ARCHITECTURE.md): raw answer text is retained for
+Privacy/retention: raw answer text on ingested session rows is retained for
 SERVICE_RETENTION_DAYS (default 90) then nulled by purge_expired_answers
 (keep the scores/aggregates forever, drop the personal raw text).
 """
@@ -323,8 +321,7 @@ def create_app(state: ServiceState | None = None) -> FastAPI:
         to: str | None = Query(None, alias="to"),
         db: Session = Depends(get_db),
     ):
-        """Proof-of-defense rows for CI/pre-receive (docs/ENFORCEMENT.md):
-        one row per audited commit attempt, newest first."""
+        """Proof-of-defense rows: one row per ingested session, newest first."""
         repo = db.execute(
             select(Repository).where(Repository.repo_slug == repo_slug)).scalar_one_or_none()
         if not repo:

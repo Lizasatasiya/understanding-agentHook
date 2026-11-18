@@ -167,7 +167,7 @@ _CRITICAL_FILE_NAMES = ("id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_gpg",
 # Names that look like examples/keys, not real key material.
 _FILE_EXEMPT_SUFFIXES = (".example", ".sample", ".template", ".tpl")
 
-# Generic secret assignments gated on Shannon entropy (PLAN.md B2). Regex alone
+# Generic secret assignments gated on Shannon entropy. Regex alone
 # cannot block password="..." — fixtures, placeholders and doc examples all
 # die. A high-entropy value bound to a secret-named key is a real credential
 # with near-certainty; a low-entropy one is a placeholder and stays heuristic.
@@ -207,7 +207,7 @@ class SecurityLens:
 
         Returns [{file, function, label, description, redacted}]. Empty list
         means the commit may proceed. Test paths are exempt from the generic
-        entropy-gated patterns only (PLAN.md B5); exact vendor formats block
+        entropy-gated patterns only; exact vendor formats block
         everywhere — a real key is real in a test file too.
         """
         findings = []
@@ -233,7 +233,7 @@ class SecurityLens:
                 "redacted": self._redact(label, secret),
             })
 
-        # 0. Staged key FILES — the presence alone is the finding (PLAN.md B4)
+        # 0. Staged key FILES — the presence alone is the finding
         for path in self._staged_file_names():
             if self._is_critical_key_file(path):
                 _record(path, "", "staged-key-file",
@@ -244,7 +244,7 @@ class SecurityLens:
         for path, added in raw.items():
             is_test = self._is_test_path(path)
             is_doc = self._is_doc_path(path)
-            # Exact vendor formats block EVERYWHERE, including tests (PLAN.md B5):
+            # Exact vendor formats block EVERYWHERE, including tests:
             # a real leaked key is real in a test file — the classic org leak.
             for pattern, label, description in _CRITICAL_PATTERNS:
                 for m in re.finditer(pattern, added):
@@ -382,7 +382,7 @@ class SecurityLens:
         return classes
 
     def _scan_generic_secrets(self, path: str, added_lines: str, _record, func: str = ""):
-        """Entropy-gated generic secret detection (PLAN.md B2).
+        """Entropy-gated generic secret detection.
 
         Only blocks values that look like real credentials: ≥20 chars, entropy
         above threshold, ≥3 character classes, no placeholder hints. Escape
