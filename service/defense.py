@@ -21,7 +21,7 @@ from .settings import ServiceSettings
 
 _LOCK = threading.Lock()
 _INTERVIEWS: dict[str, dict] = {}
-_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 # Kept as a name so a test can replace the evaluator without touching the gateway.
 AnswerEvaluator = ModelGateway.evaluator_cls
@@ -63,9 +63,10 @@ class DefensePipeline:
     def begin(self, payload: dict) -> dict:
         if not isinstance(payload, dict):
             raise DefenseError(400, "Malformed payload")
-        username = (payload.get("github_username") or "").strip()
-        if not _LOGIN.match(username):
-            raise DefenseError(400, "A GitHub username is required")
+        git_name = (payload.get("git_name") or "").strip()
+        git_email = (payload.get("git_email") or "").strip().lower()
+        if not git_name or not _EMAIL.match(git_email):
+            raise DefenseError(400, "git user.name and user.email are required")
         context = payload.get("context")
         if not isinstance(context, dict):
             raise DefenseError(400, "Staged change context is required")
@@ -92,7 +93,8 @@ class DefensePipeline:
         with _LOCK:
             _purge_locked(now, self.settings.interview_ttl_seconds)
             _INTERVIEWS[defense_id] = {
-                "github_username": username,
+                "git_name": git_name,
+                "git_email": git_email,
                 "questions": questions,
                 "context": context,
                 "summary": state["summary"],
@@ -181,7 +183,8 @@ def submit_answer(db: Session, defense_id: str, question_id: str, answer_text: s
         try:
             fold_persona(
                 db,
-                current["github_username"],
+                current["git_email"],
+                current["git_name"],
                 passed=passed,
                 scored=list(current["scored"]),
             )

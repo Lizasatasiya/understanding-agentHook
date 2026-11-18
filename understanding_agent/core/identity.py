@@ -36,7 +36,8 @@ class IdentityDetector:
     @classmethod
     def resolve(cls, repo_root: str) -> dict:
         email = cls._run_git(["config", "user.email"], repo_root)
-        name = cls._run_git(["config", "user.name"], repo_root) or getpass.getuser()
+        configured_name = cls._run_git(["config", "user.name"], repo_root)
+        name = configured_name or getpass.getuser()
         remote_url = cls._run_git(["config", "--get", "remote.origin.url"], repo_root)
 
         platform = "custom"
@@ -66,6 +67,8 @@ class IdentityDetector:
             or ""
         )
 
+        git_email = email.lower().strip()
+        git_name = configured_name.strip()
         if not email:
             sys_user = getpass.getuser()
             email = f"{sys_user}@{socket.gethostname().lower()}.local"
@@ -73,42 +76,12 @@ class IdentityDetector:
         return {
             "user_email": email.lower().strip(),
             "user_name": name.strip(),
+            "git_email": git_email,
+            "git_name": git_name,
             "system_user": getpass.getuser(),
             "machine_id": host_hash,
             "repo_slug": repo_slug,
             "git_platform": platform,
             "remote_url": remote_url,
             "ci_actor": ci_actor,
-            "github_username": cls.github_login(repo_root),
         }
-
-    @classmethod
-    def github_login(cls, repo_root: str) -> str:
-        """GitHub login for this developer. Empty when none can be resolved.
-
-        Order: the authenticated `gh` user, GITHUB_ACTOR, git's github.user,
-        then the owner segment of a github.com remote.
-        """
-        candidates = []
-        try:
-            login = subprocess.check_output(
-                ["gh", "api", "user", "--jq", ".login"],
-                cwd=repo_root, text=True, stderr=subprocess.DEVNULL, timeout=8,
-            ).strip()
-            candidates.append(login)
-        except Exception:
-            pass
-        candidates.append(os.environ.get("GITHUB_ACTOR", ""))
-        candidates.append(cls._run_git(["config", "--get", "github.user"], repo_root))
-        remote = cls._run_git(["config", "--get", "remote.origin.url"], repo_root)
-        owner = re.search(r"github\.com[:/]([^/]+)/", remote or "")
-        if owner:
-            candidates.append(owner.group(1))
-        for raw in candidates:
-            login = (raw or "").strip()
-            if _GITHUB_LOGIN.match(login):
-                return login
-        return ""
-
-
-_GITHUB_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")

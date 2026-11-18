@@ -260,16 +260,18 @@ def main():
             sys.exit(1)
         print("\n\033[1m\033[92m✓ Proceeding with questions...\033[0m\n")
 
-    github_username = (identity.get("github_username") or "").strip()
-    if not github_username:
-        _block("Commit aborted. A GitHub username is required and could not be resolved.")
-        print("  Sign in with `gh auth login`, or set git config github.user to your GitHub login.\n")
+    git_name = (identity.get("git_name") or "").strip()
+    git_email = (identity.get("git_email") or "").strip().lower()
+    if not git_name or "@" not in git_email:
+        _block("Commit aborted. This commit has no git author name and email.")
+        print("  Set them with `git config --global user.name` and `git config --global user.email`, then commit again.\n")
         sys.exit(1)
 
     client = DefenseClient()
     try:
         started = client.start({
-            "github_username": github_username,
+            "git_name": git_name,
+            "git_email": git_email,
             "repository": env.get("repository") or identity.get("repo_slug") or "unknown",
             "branch": env.get("branch") or "unknown",
             "head_commit": head_commit,

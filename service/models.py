@@ -137,7 +137,7 @@ class SessionQuestion(Base):
 
 
 class DeveloperPersona(Base):
-    """Running aggregate for one GitHub login. Question and answer text are not stored."""
+    """Running aggregate for one git author. Question and answer text are not stored."""
 
     __tablename__ = "developer_personas"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

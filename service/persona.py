@@ -1,8 +1,8 @@
 """Developer persona aggregates.
 
 Each finished or stopped interview folds its scores into one row keyed by
-GitHub username, then the caller discards the questions and answers. This
-module never writes session rows.
+the git email on the commit, then the caller discards the questions and
+answers. This module never writes session rows.
 """
 
 import datetime
@@ -23,27 +23,17 @@ from .models import DeveloperPersona, User
 _MAX_CONCEPTS = 40
 
 
-def _noreply_email(username: str) -> str:
-    return f"{username.lower()}@users.noreply.github.com"
-
-
-def get_or_create_user(db: Session, github_username: str) -> User:
-    username = github_username.strip()
-    row = db.execute(
-        select(User).where(User.github_username == username)
-    ).scalar_one_or_none()
-    if row:
-        return row
-    email = _noreply_email(username)
+def get_or_create_user(db: Session, git_email: str, git_name: str) -> User:
+    email = git_email.strip().lower()
+    name = git_name.strip()
     row = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if row:
-        row.github_username = username
+        row.full_name = name or row.full_name
         return row
     row = User(
         email=email,
-        github_username=username,
-        full_name=username,
-        system_username=username,
+        full_name=name,
+        system_username=name,
     )
     db.add(row)
     db.flush()
@@ -64,9 +54,10 @@ def _category_means(buckets: dict) -> dict:
     return means
 
 
-def _facts(persona: DeveloperPersona) -> dict:
+def _facts(persona: DeveloperPersona, git_name: str) -> dict:
     return {
-        "github_username": persona.github_username,
+        "git_name": git_name,
+        "git_email": persona.github_username,
         "attempt_count": persona.attempt_count,
         "pass_count": persona.pass_count,
         "fail_count": persona.fail_count,
@@ -80,7 +71,7 @@ def _facts(persona: DeveloperPersona) -> dict:
 def _deterministic_summary(facts: dict) -> str:
     rate = float(facts["pass_rate"]) * 100
     return (
-        f"{facts['github_username']} has finished {facts['attempt_count']} interviews "
+        f"{facts['git_name']} ({facts['git_email']}) has finished {facts['attempt_count']} interviews "
         f"with a pass rate of {rate:.0f}% and a mean score of {facts['mean_score']:.0f}."
     )
 
@@ -116,19 +107,20 @@ def _model_summary(facts: dict) -> str:
     return text[:500]
 
 
-def fold_persona(db: Session, github_username: str, *, passed: bool, scored: list) -> None:
+def fold_persona(db: Session, git_email: str, git_name: str, *, passed: bool, scored: list) -> None:
     """Update the running persona from this attempt's scores, then return.
 
-    `scored` items are `{category, score, missing_concepts}`. The caller must
-    not include question text or answer text.
+    The row is keyed by the git email on the commit. `scored` items are
+    `{category, score, missing_concepts}`. The caller must not include
+    question text or answer text.
     """
-    user = get_or_create_user(db, github_username)
+    user = get_or_create_user(db, git_email, git_name)
     persona = db.execute(
-        select(DeveloperPersona).where(DeveloperPersona.github_username == user.github_username)
+        select(DeveloperPersona).where(DeveloperPersona.github_username == user.email)
     ).scalar_one_or_none()
     if persona is None:
         persona = DeveloperPersona(
-            github_username=user.github_username,
+            github_username=user.email,
             user_id=user.id,
             scores_by_category={},
             missing_concepts={},
@@ -173,7 +165,7 @@ def fold_persona(db: Session, github_username: str, *, passed: bool, scored: lis
     persona.missing_concepts = concepts
     persona.last_attempt_at = datetime.datetime.now(datetime.timezone.utc)
 
-    facts = _facts(persona)
+    facts = _facts(persona, git_name)
     summary = _model_summary(facts) or _deterministic_summary(facts)
     persona.summary = summary
     db.flush()
