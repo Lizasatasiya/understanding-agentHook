@@ -1,4 +1,4 @@
-"""Zero-touch identity resolution (Pokerface P3, from the centralized DB doc).
+"""Zero-touch identity resolution for the central service.
 
 Developers never log in or configure tokens: git itself mandates author
 metadata, so the hook harvests it at commit time. The central service
@@ -36,7 +36,8 @@ class IdentityDetector:
     @classmethod
     def resolve(cls, repo_root: str) -> dict:
         email = cls._run_git(["config", "user.email"], repo_root)
-        name = cls._run_git(["config", "user.name"], repo_root) or getpass.getuser()
+        configured_name = cls._run_git(["config", "user.name"], repo_root)
+        name = configured_name or getpass.getuser()
         remote_url = cls._run_git(["config", "--get", "remote.origin.url"], repo_root)
 
         platform = "custom"
@@ -66,6 +67,8 @@ class IdentityDetector:
             or ""
         )
 
+        git_email = email.lower().strip()
+        git_name = configured_name.strip()
         if not email:
             sys_user = getpass.getuser()
             email = f"{sys_user}@{socket.gethostname().lower()}.local"
@@ -73,6 +76,8 @@ class IdentityDetector:
         return {
             "user_email": email.lower().strip(),
             "user_name": name.strip(),
+            "git_email": git_email,
+            "git_name": git_name,
             "system_user": getpass.getuser(),
             "machine_id": host_hash,
             "repo_slug": repo_slug,

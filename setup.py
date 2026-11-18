@@ -30,7 +30,7 @@ setup(
             "pydantic>=2",
         ],
         "service": [
-            # Central ledger service (service/, Pokerface P3 / Judas)
+            # Central ledger service (service/)
             "fastapi",
             "uvicorn",
             "sqlalchemy>=2",

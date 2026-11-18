@@ -1,4 +1,4 @@
-I've gone through the codebase, README, PLAN.md, packaging, tests, and the main modules (cli, security_lens, llm_manager, api_utils, answer_evaluator, session_store, server, interaction), and I ran the suite and the e2e. Here's my read, aspect by aspect.
+I've gone through the codebase, README, PLAN.md, packaging, and the main modules (cli, security_lens, llm_manager, api_utils, answer_evaluator, server, interaction), and I ran the suite and the e2e. Here's my read, aspect by aspect.
 
 VERIFIED STATE RIGHT NOW
 
@@ -18,7 +18,7 @@ Run order in cli.py is: env detect → change detect → gate even on no-files e
 Weak points:
 
 - cli.py main() is ~600 lines with the whole interactive loop, three near-identical session_data dict constructions, and the attempt/state reconciliation inlined. PLAN.md already flags decomposition as deferred. For production I'd split it into gate / standards / question-loop / persistence phases — the duplicated session_data blocks are the biggest bug-farm (the "fix violations" one is already missing the verification field the other two have, so that path always records unverified).
-- Session/attempt reconciliation logic (state file vs sessions file vs matching by head_commit/diff_hash) is spread across cli.py, session_store.py, and commit_context.py and is the hardest code in the repo to reason about. It works (the tests cover it) but every new attempt-tracking feature will have to re-derive it.
+- Session/attempt reconciliation logic is spread across cli.py and commit_context.py and is the hardest code in the repo to reason about. It works (the tests cover it) but every new attempt-tracking feature will have to re-derive it.
 
 3. CREDENTIAL GATE (security_lens.py)
 

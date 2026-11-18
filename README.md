@@ -161,7 +161,7 @@ understanding-agent-hook/
     ├── evaluation_models.py    # Dataclasses for evaluation scoring
     ├── environment_detector.py # Repository, branch, and author detector
     ├── commit_context.py       # Head-commit / attempt-key helpers
-    ├── session_store.py        # Session persistence, reconciliation & pruning
+    ├── session_payload.py      # Versioned session payload builder
     ├── server.py               # FastAPI dashboard API (opt-in)
     ├── server_client.py        # Opt-in telemetry client (self-hosted dashboard)
     └── ui/                     # Vanilla JS/CSS single-page dashboard (index.html, app.js, style.css)
@@ -258,12 +258,10 @@ Client-side hooks are advisory by nature (`--no-verify` skips them). For
 teams, the optional central ledger turns sessions into a proof-of-defense
 record that CI checks — making bypass an audit event, not a hole:
 
-- **Local store**: SQLite at `.git/understanding_sessions.db` (0600; answers
-  are personal data). JSON is an export format only.
-- **Central service** (`service/`, Postgres via docker-compose or SQLite for
-  dev): JIT-provisions developers/repos from zero-touch git identity, keeps
-  the org hierarchy (org → team → members; repo → team), and serves
-  `GET /api/v1/defense` for the proof-of-defense check.
+- **Ledger** (`service/`, Postgres via docker-compose): JIT-provisions
+  developers/repos from zero-touch git identity, keeps the org hierarchy
+  (org → team → members; repo → team), and serves `GET /api/v1/defense`
+  for the proof-of-defense check.
 - **Hook sync** (opt-in): `UNDERSTANDING_AGENT_SYNC_URL` + optional
   `UNDERSTANDING_AGENT_TEAM_KEY` / `UNDERSTANDING_AGENT_TEAM_SECRET` (HMAC).
   Offline sessions queue in `.git/understanding_sync_queue.json` and drain

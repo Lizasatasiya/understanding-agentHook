@@ -5,20 +5,20 @@
 # Installs the Code Understanding Agent globally across all Git repositories
 # on this device with zero repository cloning needed on developer machines.
 #
-# Usage (write the branch once; the same name is installed):
+# Usage (run as root; the model key stays on the defense server):
 #   REF=dev
-#   curl -fsSL "https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/${REF}/install.sh" | REF="$REF" bash -s -- --key "YOUR_API_KEY" --model haiku
+#   curl -fsSL "https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/${REF}/install.sh" | REF="$REF" sudo REF="$REF" bash -s -- --server "https://defense.internal" --team-token "TEAM_TOKEN"
 #
 # Options:
-#   --key <API_KEY>       API key for the selected model
-#   --model <NAME>        sonnet, haiku, nous, or org. Required the first time; later installs keep the saved model.
+#   --server <URL>        Base URL of the defense service. Required.
+#   --team-token <TOKEN>  Shared team token sent as X-Team-Token. Required.
+#   --team-secret <SECRET>  Optional HMAC secret sent as X-Signature.
 #   --ref <BRANCH>        Git branch or tag to install (or set REF). Required for a curl install.
-#   --uninstall           Remove global hooks and restore standard git behavior
+#   --uninstall           Remove the system hooks and restore standard git behavior
 #   --status              Check current installation and hook health
 #
 # Example:
-#   REF=main
-#   curl -fsSL "https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/${REF}/install.sh" | REF="$REF" bash -s -- --key "YOUR_API_KEY" --model sonnet
+#   sudo bash install.sh --server "https://defense.internal" --team-token "TEAM_TOKEN" --ref dev
  
 
 set -e
@@ -38,16 +38,17 @@ warn() { printf "${YELLOW}⚠ %s${RESET}\n" "$1"; }
 err() { printf "${RED}✗ ERROR: %s${RESET}\n" "$1" >&2; exit 1; }
 
 REPO_URL="https://github.com/Lizasatasiya/understanding-agentHook.git"
-INSTALL_DIR="$HOME/.local/share/understanding-agent"
+INSTALL_DIR="/usr/local/share/understanding-agent"
 VENV_DIR="$INSTALL_DIR/venv"
-BIN_DIR="$HOME/.local/bin"
-CONFIG_DIR="$HOME/.config/understanding-agent"
+BIN_DIR="/usr/local/bin"
+CONFIG_DIR="/etc/understanding-agent"
 HOOKS_DIR="$CONFIG_DIR/hooks"
-ENV_FILE="$CONFIG_DIR/.env"
+ENV_FILE="$CONFIG_DIR/config.env"
 
 # Parse CLI flags
-ARG_KEY=""
-ARG_MODEL=""
+ARG_SERVER=""
+ARG_TOKEN=""
+ARG_SECRET=""
 # REF is set on the bash command so the branch in the curl URL is the one installed.
 # A piped script cannot see that URL itself.
 ARG_REF="${REF:-${UNDERSTANDING_AGENT_INSTALL_REF:-}}"
@@ -56,67 +57,77 @@ DO_STATUS=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --key|-k) ARG_KEY="$2"; shift 2 ;;
-        --model|-m) ARG_MODEL="$2"; shift 2 ;;
+        --key|-k|--model|-m)
+            err "The model key stays on the defense server. Pass --server and --team-token."
+            ;;
+        --server) ARG_SERVER="$2"; shift 2 ;;
+        --team-token) ARG_TOKEN="$2"; shift 2 ;;
+        --team-secret) ARG_SECRET="$2"; shift 2 ;;
         --ref|--branch) ARG_REF="$2"; shift 2 ;;
         --uninstall) DO_UNINSTALL=true; shift ;;
         --status) DO_STATUS=true; shift ;;
         -h|--help)
-            echo "Usage: install.sh [--ref <branch>] [--key <API_KEY>] [--model groq|sonnet|haiku|nous|org] [--uninstall] [--status]"
-            echo "Curl install: REF=dev curl -fsSL \"https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/\${REF}/install.sh\" | REF=\"\$REF\" bash -s -- --key KEY --model groq"
+            echo "Usage: sudo install.sh --server <URL> --team-token <TOKEN> [--team-secret <SECRET>] [--ref <branch>]"
+            echo "The model API key is configured on the server, not on this machine."
             exit 0
             ;;
         *) shift ;;
     esac
 done
 
-if [ -n "$ARG_MODEL" ]; then
-    ARG_MODEL="$(printf '%s' "$ARG_MODEL" | tr '[:upper:]' '[:lower:]')"
-    case "$ARG_MODEL" in
-        groq|sonnet|haiku|nous|org) ;;
-        *) err "Unsupported model '$ARG_MODEL'. Choose one of: groq, sonnet, haiku, nous, org." ;;
-    esac
+if [ "$(id -u)" -ne 0 ]; then
+    err "Run this installer as root so developers cannot edit the hook. Example: sudo bash install.sh --server URL --team-token TOKEN"
 fi
 
 # STATUS CHECK
 if [ "$DO_STATUS" = true ]; then
     say "Understanding Agent Status"
-    CURRENT_HOOKS="$(git config --global --get core.hooksPath 2>/dev/null || true)"
+    CURRENT_HOOKS="$(git config --system --get core.hooksPath 2>/dev/null || true)"
     if [ "$CURRENT_HOOKS" = "$HOOKS_DIR" ]; then
-        ok "Global Git hooks configured at: $HOOKS_DIR"
+        ok "System Git hooks configured at: $HOOKS_DIR"
     else
-        warn "Global Git hooks not set to $HOOKS_DIR (current: '${CURRENT_HOOKS:-default .git/hooks}')"
+        warn "System Git hooks not set to $HOOKS_DIR (current: '${CURRENT_HOOKS:-default .git/hooks}')"
     fi
 
     if [ -x "$VENV_DIR/bin/understanding-agent" ]; then
         ok "Package installed in: $VENV_DIR"
-    elif command -v understanding-agent >/dev/null 2>&1; then
-        ok "Package installed in PATH: $(command -v understanding-agent)"
     else
         warn "understanding-agent binary not found"
     fi
 
     if [ -f "$ENV_FILE" ]; then
-        ok "Global config found at $ENV_FILE"
+        ok "Root-owned server config found at $ENV_FILE"
     else
-        warn "No global config file found at $ENV_FILE"
+        warn "No server config file found at $ENV_FILE"
     fi
     exit 0
 fi
 
 # UNINSTALL
 if [ "$DO_UNINSTALL" = true ]; then
-    say "Uninstalling Understanding Agent Global Hooks..."
-    CURRENT_HOOKS="$(git config --global --get core.hooksPath 2>/dev/null || true)"
+    say "Uninstalling Understanding Agent system hooks..."
+    CURRENT_HOOKS="$(git config --system --get core.hooksPath 2>/dev/null || true)"
     if [ "$CURRENT_HOOKS" = "$HOOKS_DIR" ]; then
-        git config --global --unset core.hooksPath
-        ok "Removed global core.hooksPath configuration"
+        git config --system --unset core.hooksPath
+        ok "Removed system core.hooksPath configuration"
     fi
-    rm -rf "$HOOKS_DIR"
-    ok "Removed global hooks directory ($HOOKS_DIR)"
-    rm -rf "$VENV_DIR"
+    # Older installs wrote a per-user global hooks path. Clear it when it
+    # still points at the previous user-level hook directory.
+    LEGACY_HOOKS="${HOME}/.config/understanding-agent/hooks"
+    USER_HOOKS="$(git config --global --get core.hooksPath 2>/dev/null || true)"
+    if [ -n "$SUDO_USER" ]; then
+        USER_HOME="$(dscl . -read "/Users/$SUDO_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+        if [ -n "$USER_HOME" ]; then
+            LEGACY_HOOKS="$USER_HOME/.config/understanding-agent/hooks"
+        fi
+    fi
+    if [ "$USER_HOOKS" = "$LEGACY_HOOKS" ] || [ "$USER_HOOKS" = "${HOME}/.config/understanding-agent/hooks" ]; then
+        git config --global --unset core.hooksPath || true
+        ok "Removed legacy per-user core.hooksPath"
+    fi
+    rm -rf "$CONFIG_DIR" "$INSTALL_DIR"
     rm -f "$BIN_DIR/understanding-agent"
-    ok "Removed installed package ($VENV_DIR)"
+    ok "Removed system hooks, config, and package"
     printf "\n${GREEN}${BOLD}Uninstallation complete.${RESET} Git will now use default per-project hooks.\n"
     exit 0
 fi
@@ -175,7 +186,7 @@ if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/setup.py" ] && [ -d "$SCRIPT_DIR/un
     "$VENV_DIR/bin/pip" install --upgrade --quiet -e "$SCRIPT_DIR"
 else
     if [ -z "$ARG_REF" ]; then
-        err "No branch given. The branch in the curl URL is not visible to a piped script, so pass it through. Example: REF=dev curl -fsSL \"https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/\${REF}/install.sh\" | REF=\"\$REF\" bash -s -- --key \"YOUR_API_KEY\" --model haiku"
+        err "No branch given. The branch in the curl URL is not visible to a piped script, so pass it through. Example: REF=dev curl -fsSL \"https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/\${REF}/install.sh\" | sudo REF=\"\$REF\" bash -s -- --server URL --team-token TOKEN"
     fi
     case "$ARG_REF" in
         *[!A-Za-z0-9._/-]*|-*|*/.*|*..*) err "Unsupported branch name '$ARG_REF'." ;;
@@ -184,57 +195,36 @@ else
     "$VENV_DIR/bin/pip" install --upgrade --force-reinstall --quiet "git+${REPO_URL}@${ARG_REF}"
 fi
 
-# Create symlink in ~/.local/bin if directory exists in PATH
 ln -sf "$VENV_DIR/bin/understanding-agent" "$BIN_DIR/understanding-agent"
 ok "Installed understanding-agent CLI binary"
 
-# 3. Configure global credentials / proxy
-say "3/4 Configuring global credentials..."
-if [ ! -f "$ENV_FILE" ]; then
-    touch "$ENV_FILE"
-    chmod 600 "$ENV_FILE"
+if [ -z "$ARG_SERVER" ] || [ -z "$ARG_TOKEN" ]; then
+    err "Pass --server and --team-token. The model API key is configured on the server, not on this machine."
 fi
 
-upsert_env() {
-    local key="$1" value="$2"
-    if grep -q "^${key}=" "$ENV_FILE"; then
-        # '|' is safe: model names have none, and keys are written with a quoted replacement.
-        local escaped
-        escaped="$(printf '%s' "$value" | sed 's/[|&\\]/\\&/g')"
-        sed -i.bak "s|^${key}=.*|${key}=${escaped}|" "$ENV_FILE" && rm -f "$ENV_FILE.bak"
-    else
-        printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
-    fi
-}
-
-if [ -n "$ARG_KEY" ]; then
-    upsert_env "UNDERSTANDING_AGENT_API_KEY" "$ARG_KEY"
-    ok "Saved API key to $ENV_FILE"
-fi
-
-if [ -n "$ARG_MODEL" ]; then
-    upsert_env "UNDERSTANDING_AGENT_MODEL" "$ARG_MODEL"
-    ok "Selected model: $ARG_MODEL (questions and answer checks)"
-fi
-
-# If file is empty, write a friendly template with notes
-if [ ! -s "$ENV_FILE" ]; then
-    cat > "$ENV_FILE" <<'EOF'
-# Understanding Agent Global Configuration
-# Optional: If your team uses a central relay server or shared key, configure it here:
-# UNDERSTANDING_AGENT_API_KEY=
-# UNDERSTANDING_AGENT_MODEL=
+# 3. Server address only. The model key is not written here.
+say "3/4 Writing the root-owned server config..."
+mkdir -p "$CONFIG_DIR"
+umask 077
+cat > "$ENV_FILE" <<EOF
+# Read by the system hook. Developers cannot change this file.
+UNDERSTANDING_AGENT_SERVER_URL=${ARG_SERVER}
+UNDERSTANDING_AGENT_TEAM_TOKEN=${ARG_TOKEN}
+UNDERSTANDING_AGENT_TEAM_SECRET=${ARG_SECRET}
 EOF
-    chmod 600 "$ENV_FILE"
-fi
+chmod 600 "$ENV_FILE"
+chown root "$ENV_FILE" 2>/dev/null || true
+ok "Saved server URL to $ENV_FILE"
 
-# 4. Create and register Global Git Hooks
-say "4/4 Activating Global Git Hooks..."
+# 4. Create and register system Git hooks. Developers cannot edit these files.
+say "4/4 Activating system Git hooks..."
+mkdir -p "$HOOKS_DIR"
+chmod 755 "$CONFIG_DIR" "$HOOKS_DIR"
 
 # 4a. pre-commit hook
 cat > "$HOOKS_DIR/pre-commit" <<'EOF'
 #!/bin/sh
-# Global Understanding Agent — pre-commit hook
+# System Understanding Agent — pre-commit hook
 
 # 1. Chain project-specific hook if present in the target repo
 if [ -z "$UNDERSTANDING_AGENT_CHAIN_RUNNING" ]; then
@@ -261,26 +251,19 @@ if [ -z "$UNDERSTANDING_AGENT_CHAIN_RUNNING" ]; then
     fi
 fi
 
-# 2. Execute understanding-agent
-AGENT_BIN=""
-if [ -x "$HOME/.local/share/understanding-agent/venv/bin/understanding-agent" ]; then
-    AGENT_BIN="$HOME/.local/share/understanding-agent/venv/bin/understanding-agent"
-elif command -v understanding-agent >/dev/null 2>&1; then
-    AGENT_BIN="$(command -v understanding-agent)"
-elif [ -x "$HOME/.local/bin/understanding-agent" ]; then
-    AGENT_BIN="$HOME/.local/bin/understanding-agent"
-fi
-
-if [ -n "$AGENT_BIN" ]; then
+# 2. Execute understanding-agent. The binary path is fixed so PATH cannot redirect it.
+AGENT_BIN="/usr/local/share/understanding-agent/venv/bin/understanding-agent"
+if [ -x "$AGENT_BIN" ]; then
     exec "$AGENT_BIN" "$@"
 fi
+echo "understanding-agent is not installed at $AGENT_BIN" >&2
+exit 1
 EOF
-chmod +x "$HOOKS_DIR/pre-commit"
 
 # 4b. prepare-commit-msg hook (anti-bypass guard against --no-verify)
 cat > "$HOOKS_DIR/prepare-commit-msg" <<'EOF'
 #!/bin/sh
-# Global Understanding Agent — prepare-commit-msg hook (blocks --no-verify bypass)
+# System Understanding Agent — prepare-commit-msg hook (blocks --no-verify bypass)
 
 # 1. Chain project-specific hook if present in the target repo
 if [ -z "$UNDERSTANDING_AGENT_CHAIN_RUNNING" ]; then
@@ -294,33 +277,39 @@ if [ -z "$UNDERSTANDING_AGENT_CHAIN_RUNNING" ]; then
     fi
 fi
 
-# 2. Execute understanding-agent to detect bypass
-AGENT_BIN=""
-if [ -x "$HOME/.local/share/understanding-agent/venv/bin/understanding-agent" ]; then
-    AGENT_BIN="$HOME/.local/share/understanding-agent/venv/bin/understanding-agent"
-elif command -v understanding-agent >/dev/null 2>&1; then
-    AGENT_BIN="$(command -v understanding-agent)"
-elif [ -x "$HOME/.local/bin/understanding-agent" ]; then
-    AGENT_BIN="$HOME/.local/bin/understanding-agent"
-fi
-
-if [ -n "$AGENT_BIN" ]; then
+# 2. Execute understanding-agent to confirm the interview that just passed
+AGENT_BIN="/usr/local/share/understanding-agent/venv/bin/understanding-agent"
+if [ -x "$AGENT_BIN" ]; then
     exec "$AGENT_BIN" "$@"
 fi
+echo "understanding-agent is not installed at $AGENT_BIN" >&2
+exit 1
 EOF
-chmod +x "$HOOKS_DIR/prepare-commit-msg"
 
-# 4c. Register global hook directory in Git
-git config --global core.hooksPath "$HOOKS_DIR"
-ok "Configured git config --global core.hooksPath '$HOOKS_DIR'"
+# 4c. post-commit deletes the one-commit pass marker
+cat > "$HOOKS_DIR/post-commit" <<'EOF'
+#!/bin/sh
+# Drop the pass marker once the commit exists. The next commit starts a new interview.
+GIT_DIR="$(git rev-parse --git-dir 2>/dev/null)" || exit 0
+rm -f "$GIT_DIR/understanding_agent_verified.json"
+exit 0
+EOF
+
+chmod 755 "$HOOKS_DIR/pre-commit" "$HOOKS_DIR/prepare-commit-msg" "$HOOKS_DIR/post-commit"
+chown root "$HOOKS_DIR/pre-commit" "$HOOKS_DIR/prepare-commit-msg" "$HOOKS_DIR/post-commit" 2>/dev/null || true
+
+# 4d. Register the hook directory for every user on this machine
+git config --system core.hooksPath "$HOOKS_DIR"
+ok "Configured git config --system core.hooksPath '$HOOKS_DIR'"
 
 # ------------------------------------------------------------------------------
 # FINISHED
 # ------------------------------------------------------------------------------
 printf "\n${GREEN}${BOLD}🎉 Understanding Agent is now ACTIVE on this device!${RESET}\n\n"
 printf "  ${BOLD}What happens now:${RESET}\n"
-printf "  • ${GREEN}Every Git repository${RESET} on this machine will automatically require oral defense on commit.\n"
-printf "  • No repository cloning or per-project configuration needed.\n"
-printf "  • Anti-bypass guard against ${CYAN}--no-verify${RESET} is permanently enabled.\n"
-printf "  • Global configuration lives at: ${DIM}%s${RESET}\n" "$ENV_FILE"
-printf "  • To uninstall anytime, run: ${CYAN}install.sh --uninstall${RESET}\n\n"
+printf "  • ${GREEN}Every Git repository${RESET} on this machine will require an oral defense on commit.\n"
+printf "  • The hook calls the defense server. This machine has no model API key.\n"
+printf "  • Hook files are root-owned. Developers cannot edit them.\n"
+printf "  • Anti-bypass guard against ${CYAN}--no-verify${RESET} is enabled.\n"
+printf "  • Server configuration lives at: ${DIM}%s${RESET}\n" "$ENV_FILE"
+printf "  • To uninstall, run: ${CYAN}sudo install.sh --uninstall${RESET}\n\n"

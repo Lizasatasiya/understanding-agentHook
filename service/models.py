@@ -1,9 +1,8 @@
-"""Central ledger schema (Pokerface P3 / Judas).
+"""Central ledger schema.
 
-SQLAlchemy 2.0 models; SQLite for dev/tests (SERVICE_DATABASE_URL=
-sqlite:///...), PostgreSQL in org deployments. JSON columns use the
-portable sa.JSON type (JSONB on Postgres via the dialect where it matters
-for querying is a later optimization; the schema is the contract).
+SQLAlchemy 2.0 models for PostgreSQL. JSON columns use the portable sa.JSON
+type (JSONB on Postgres via the dialect where it matters for querying is a
+later optimization; the schema is the contract).
 
 Org hierarchy — the per-developer / per-team / per-repo answer:
   organizations 1..* teams 1..* team_members *..* users
@@ -59,6 +58,7 @@ class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    github_username: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
     full_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     system_username: Mapped[str] = mapped_column(String(100), default="")
     first_seen_at: Mapped[datetime.datetime] = mapped_column(
@@ -133,3 +133,24 @@ class SessionQuestion(Base):
     llm_verified: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=_now())
+
+
+class DeveloperPersona(Base):
+    """Running aggregate for one git author. Question and answer text are not stored."""
+
+    __tablename__ = "developer_personas"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    github_username: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    pass_count: Mapped[int] = mapped_column(Integer, default=0)
+    fail_count: Mapped[int] = mapped_column(Integer, default=0)
+    score_sum: Mapped[float] = mapped_column(Float, default=0.0)
+    mean_score: Mapped[float] = mapped_column(Float, default=0.0)
+    pass_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    scores_by_category: Mapped[dict] = mapped_column(JSON, default=dict)
+    missing_concepts: Mapped[dict] = mapped_column(JSON, default=dict)
+    summary: Mapped[str] = mapped_column(String(4000), default="")
+    last_attempt_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)

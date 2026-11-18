@@ -1,4 +1,4 @@
-# Workstream Assessment — Bad Romance / Pokerface / Judas
+# Workstream Assessment — Bad Romance / Judas
 
 Assessment + approaches only (per plan-then-implement: assess → discuss → plan doc →
 approval → implement). No code changed. Written against main = e9506e8 with the
@@ -143,7 +143,7 @@ first opinion — the LLM elaborates a known-weak spot rather than fishing).
 Already ranked in synthesis-verified.md, restated as Bad Romance blockers:
 the 4 red evaluator tests (restore the frozen fallback contract — this is
 blocking everything), the session-payload builder (3 duplicated dicts, one
-already drifted — it is also a prerequisite for Pokerface's per-developer data
+already drifted — it is also a prerequisite for the per-developer data
 contracts), cli.py decomposition, CI. Documentation (#1) lands with the
 decomposition, not before it — document the code you'll keep.
 
@@ -156,7 +156,7 @@ shows the regex tier failing on real repos.
 
 ---
 
-## POKERFACE — operations
+## OPERATIONS
 
 ### 1. Voice dictation robustness + multilingual
 
@@ -194,7 +194,7 @@ Recommended approach, in layers:
 
 ### 2. LLM integration for security scan + best-practices
 
-Covered by Bad Romance #4 (policy) — Pokerface is the execution of it. The
+Covered by Bad Romance #4 (policy) — the operations work is the execution of it. The
 engineering shape: a new analysis step after evidence collection that turns
 each deterministic finding + LLM review into judgment-call questions via the
 existing question pipeline; Pydantic finding models; diff_hash caching;
@@ -212,7 +212,7 @@ sound skeleton, adopt with amendments:
 - It silently assumes the session payload is trustworthy. The 3 duplicated
   session_data dicts in cli.py mean the "data contract" today is three
   hand-built dicts — build the single versioned payload builder FIRST
-  (Pokerface depends on Bad Romance's unification; sequence it).
+  (the central record depends on Bad Romance's unification; sequence it).
 - Add schema_version to every payload and API response (synthesis gap #3).
 - The identity harvest (email/name/machine_id) is fine for attribution, but
   answers are developer-performance data — HR-adjacent. Add to the doc:
@@ -224,11 +224,8 @@ sound skeleton, adopt with amendments:
   proves "someone in the team", not "this developer answered honestly".
   HMAC-signed session payloads with a repo-side secret raise the floor
   cheaply; full per-dev attestation is not worth it pre-adoption.
-- Local tier: consider SQLite (single file in .git/) as the local store with
-  JSON retained as export/compat — gives per-developer history queries the
-  dashboard needs without Postgres dependency for solo users. OPEN DECISION:
-  keep JSON-only locally + Postgres centrally (colleague's plan) vs SQLite
-  locally. Recommend JSON for now (YAGNI), Postgres centrally.
+- Local tier: a configured Postgres database holds the ledger.
+  JSON retained as export/compat. The central record is Postgres.
 
 ### 4. Managerial flow (optional, low priority — agreed)
 
@@ -254,7 +251,7 @@ Per actor class:
 - --no-verify humans: cannot prevent; make it visible. The hook should record
   nothing (it never ran) — so detection belongs on the server: a pushed commit
   with no session record in the central DB is by definition an unaudited
-  commit. This is where the centralized DB (Pokerface) becomes an
+  commit. This is where the centralized DB becomes an
   enforcement primitive (Judas): not just analytics, a proof-of-defense
   ledger. Concretely: CI job or pre-receive hook checks each commit hash /
   diff_hash for a session row with status PASSED and the right identity;
@@ -303,9 +300,9 @@ The two aren't actually alternatives for the full product:
   thesis) or (ii) async question emails/Slack (kills the commit-time
   moment).
 - So the hook stays as the question-delivery mechanism. What CAN centralize
-  is: enforcement (above), the ledger (Pokerface's DB), the dashboard, and
+  is: enforcement (above), the ledger, the dashboard, and
   config (team standards served from the central service instead of a local
-  file — worth adding as a later Pokerface item).
+  file — worth adding as a later ledger item).
 
 Recommendation: hybrid evolution of the current setup —
 Phase 1 (now): hook as-is + CI required check running the deterministic
@@ -327,17 +324,17 @@ enforcement story from an unpinned main.
 ## Cross-workstream sequencing (proposal, not decided)
 
 1. Red tests fix (blocks everything; 10 lines).
-2. Payload builder + versioned session schema (Bad Romance 5 = Pokerface 3
+2. Payload builder + versioned session schema (Bad Romance 5 = central record 3
    prerequisite).
 3. CI (Bad Romance 5 = Judas Phase 1).
 4. ARCHITECTURE.md + flow docs (Bad Romance 1).
 5. Context eval harness → token budget → ChangeKind (Bad Romance 2-3).
 6. LLM policy doc + evidence-gated security review (Bad Romance 4 =
-   Pokerface 2).
-7. Voice layers 1-2 (Pokerface 1).
-8. Central ingestion + ledger (Pokerface 3, colleague's doc amended).
+   central record 2).
+7. Voice layers 1-2.
+8. Central ingestion + ledger (colleague's doc amended).
 9. Proof-of-defense + agent mode (Judas).
-10. Managerial dashboards (Pokerface 4) last.
+10. Managerial dashboards last.
 
 Research sources this session: OWASP DevSecOps guideline (pre-commit tiering),
 git-automation.com (pre-receive vs update), gitleaks/gitleaks docs and

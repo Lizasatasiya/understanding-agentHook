@@ -63,7 +63,7 @@ cd ~/demo-repos/axios-demo && python3 ~/understanding-agentHook/scripts/demo_pro
 
 # 2. Start the central ledger (leave running in a side terminal)
 cd ~/understanding-agentHook && mkdir -p /tmp/demo-ledger
-SERVICE_DATABASE_URL=sqlite:////tmp/demo-ledger/ledger.db SERVICE_TEAM_TOKEN=demo-team \
+SERVICE_DATABASE_URL=postgresql+psycopg://USER:PASSWORD@127.0.0.1:5433/understanding_ledger SERVICE_TEAM_TOKEN=demo-team \
   python3 -m uvicorn service.app:app --port 8766
 
 # 3. (Optional but authentic) wire the hook via pre-commit in the demo repo

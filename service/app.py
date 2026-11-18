@@ -1,4 +1,4 @@
-"""Central Understanding Service (Pokerface P3 / Judas ledger).
+"""Central Understanding Service.
 
 FastAPI ingestion for hook session payloads: zero-touch JIT provisioning
 (users/repos created on first sight from the payload's identity block),
@@ -30,9 +30,10 @@ import os
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from .defense import DefenseError, start_defense, submit_answer
 from .models import (
     Base,
     Organization,
@@ -62,15 +63,38 @@ def _canonicalize_request(body: bytes) -> bytes:
     return _canonical(json.loads(body.decode("utf-8")))
 
 
+def _database_url(explicit: str | None) -> str:
+    """Postgres URL for the ledger. Read from the argument, the environment, then .env."""
+    url = (explicit or os.environ.get("SERVICE_DATABASE_URL") or "").strip()
+    if not url:
+        env_path = os.path.join(os.getcwd(), ".env")
+        try:
+            with open(env_path, encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, value = line.split("=", 1)
+                    if key.strip() == "SERVICE_DATABASE_URL":
+                        url = value.strip().strip('"').strip("'")
+                        break
+        except OSError:
+            url = ""
+    if not url.startswith("postgresql"):
+        raise RuntimeError(
+            "Set SERVICE_DATABASE_URL in .env or the server environment to a postgresql+psycopg:// URL."
+        )
+    return url
+
+
 class ServiceState:
     """Holds engine/session factory + auth config; swappable in tests."""
 
     def __init__(self, database_url: str | None = None):
-        url = database_url or os.environ.get(
-            "SERVICE_DATABASE_URL", "sqlite:///./understanding_ledger.db")
-        connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-        self.engine = create_engine(url, connect_args=connect_args)
+        url = _database_url(database_url)
+        self.engine = create_engine(url)
         Base.metadata.create_all(self.engine)
+        self._ensure_github_username()
         self.SessionLocal = sessionmaker(bind=self.engine, expire_on_commit=False)
         self.team_token = os.environ.get("SERVICE_TEAM_TOKEN", "").strip()
         self.team_secret = os.environ.get("SERVICE_TEAM_SECRET", "").strip()
@@ -80,6 +104,21 @@ class ServiceState:
                                                      str(DEFAULT_RETENTION_DAYS)))
         except ValueError:
             self.retention_days = DEFAULT_RETENTION_DAYS
+
+    def _ensure_github_username(self) -> None:
+        """Add users.github_username on databases created before that column."""
+        insp = inspect(self.engine)
+        if "users" not in insp.get_table_names():
+            return
+        columns = {column["name"] for column in insp.get_columns("users")}
+        if "github_username" in columns:
+            return
+        with self.engine.begin() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN github_username VARCHAR(255)"))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_github_username "
+                "ON users (github_username)"
+            ))
 
 
 STATE: ServiceState | None = None
@@ -430,6 +469,61 @@ def create_app(state: ServiceState | None = None) -> FastAPI:
                 pass
             finally:
                 db.close()
+
+    @app.post("/api/v1/defense/start")
+    async def defense_start(
+        request: Request,
+        x_team_token: str | None = Header(None),
+        x_signature: str | None = Header(None),
+    ):
+        st = get_state()
+        _auth(st.team_token, x_team_token)
+        body = await request.body()
+        if st.team_secret:
+            canonical = _canonicalize_request(body)
+            if not _verify_signature(st.team_secret, canonical, x_signature or ""):
+                raise HTTPException(status_code=401, detail="Invalid payload signature")
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except Exception:
+            raise HTTPException(status_code=400, detail="Malformed payload")
+        try:
+            result = start_defense(payload)
+        except DefenseError as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.detail)
+        return JSONResponse(result)
+
+    @app.post("/api/v1/defense/{defense_id}/answer")
+    async def defense_answer(
+        defense_id: str,
+        request: Request,
+        db: Session = Depends(get_db),
+        x_team_token: str | None = Header(None),
+        x_signature: str | None = Header(None),
+    ):
+        st = get_state()
+        _auth(st.team_token, x_team_token)
+        body = await request.body()
+        if st.team_secret:
+            canonical = _canonicalize_request(body)
+            if not _verify_signature(st.team_secret, canonical, x_signature or ""):
+                raise HTTPException(status_code=401, detail="Invalid payload signature")
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except Exception:
+            raise HTTPException(status_code=400, detail="Malformed payload")
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="Malformed payload")
+        try:
+            result = submit_answer(
+                db,
+                defense_id,
+                str(payload.get("question_id") or ""),
+                str(payload.get("answer") or ""),
+            )
+        except DefenseError as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.detail)
+        return JSONResponse(result)
 
     return app
 

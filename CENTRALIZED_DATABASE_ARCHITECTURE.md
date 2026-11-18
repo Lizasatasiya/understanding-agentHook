@@ -411,7 +411,7 @@ Without individual username/password prompts, how do we guarantee data authentic
 
 ---
 
-## 9. AMENDMENTS (implemented — Pokerface P3, PLAN_POKERFACE_JUDAS.md)
+## 9. AMENDMENTS (implemented)
 
 This blueprint was adopted and implemented in `service/` (FastAPI +
 SQLAlchemy). The amendments below are deltas from the original document,
@@ -454,15 +454,10 @@ without an explicit stance. Implemented policy:
 - `machine_id` is a one-way hash of the hostname (12 hex chars) — correlation
   only, never a raw hostname.
 
-### 9.4 Local tier: SQLite, not JSON
+### 9.4 Ledger
 
-The original design kept plaintext JSON locally. Amended per product
-decision: the local store is SQLite (`.git/understanding_sessions.db`,
-0600 perms — developer answers are personal data; plaintext JSON readable
-by anyone was rejected). The legacy JSON file is imported once on first
-open and renamed `.imported` (backup, never deleted). JSON remains an
-export format (`session_store.export_sessions`). Public API
-(save/load/get_sessions_for_commit/get_session_by_id) is unchanged.
+The ledger is the configured Postgres database. Session text is not written
+to a file inside the repository.
 
 ### 9.5 Client transport (server_client.py)
 

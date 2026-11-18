@@ -12,15 +12,6 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 
 from ..evaluation.coding_standards import CodingStandardsChecker, parse_violation
-from ..storage.session_store import (
-    load_sessions,
-    save_session,
-    get_sessions_for_commit,
-    get_session_by_id,
-    get_sessions_file,
-    get_db_users,
-    get_db_commits,
-)
 
 
 def get_default_repo_root() -> str:
@@ -365,18 +356,13 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
     @app.get("/users")
     def list_users():
         """Retrieve real-time user-wise metrics and developer identities from the database."""
-        return get_db_users(effective_repo_root)
+        return []
 
     @app.get("/api/commits")
     @app.get("/commits")
     def list_commits(limit: int = 50, include_staged: bool = False, user: Optional[str] = None):
         """List commits fetched directly from the Database, optionally filtered by user."""
-        return get_db_commits(
-            effective_repo_root,
-            user=user,
-            limit=limit,
-            include_staged=include_staged
-        )
+        return []
 
     @app.get("/api/commits/{commit_id}")
     @app.get("/commits/{commit_id}")
@@ -391,7 +377,7 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
             branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], effective_repo_root) or "main"
             author = _run_git(["config", "user.name"], effective_repo_root) or "Developer"
             email = _run_git(["config", "user.email"], effective_repo_root) or ""
-            attempts = get_sessions_for_commit(effective_repo_root, "staged")
+            attempts = []
             summary = None
             for att in reversed(attempts):
                 s = att.get("change_summary")
@@ -455,7 +441,7 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
         standards_report = checker.check({"files": files}, commit_hash=commit_id)
         failed_standards = [s for s in standards_report if not s.get("is_good", True)]
 
-        attempts = get_sessions_for_commit(effective_repo_root, commit_id)
+        attempts = []
 
         # 1. Prefer AI-generated summary from recorded pre-commit defense session
         summary = None
@@ -502,7 +488,7 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
     @app.get("/commits/{commit_id}/attempts")
     def get_commit_attempts(commit_id: str):
         """Retrieve attempts associated with a commit."""
-        sessions = get_sessions_for_commit(effective_repo_root, commit_id)
+        sessions = []
         return [
             {
                 "attempt_id": att.get("attempt_id") or att.get("session_id"),
@@ -520,94 +506,7 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
     @app.get("/attempts/{attempt_id}")
     def get_attempt_details(attempt_id: str):
         """Retrieve full details of an attempt (questions, answers, evaluations, violations)."""
-        session = get_session_by_id(effective_repo_root, attempt_id)
-        if not session:
-            raise HTTPException(status_code=404, detail=f"Attempt '{attempt_id}' not found.")
-
-        commit_id = session.get("commit_id") or "staged"
-        commit_attempts = get_sessions_for_commit(effective_repo_root, commit_id)
-        
-        # Calculate navigation (previous / next)
-        prev_id = None
-        next_id = None
-        current_idx = -1
-        for idx, att in enumerate(commit_attempts):
-            sid = att.get("attempt_id") or att.get("session_id")
-            if sid == attempt_id or sid == session.get("session_id"):
-                current_idx = idx
-                break
-
-        if current_idx > 0:
-            prev_id = commit_attempts[current_idx - 1].get("attempt_id") or commit_attempts[current_idx - 1].get("session_id")
-        if current_idx >= 0 and current_idx < len(commit_attempts) - 1:
-            next_id = commit_attempts[current_idx + 1].get("attempt_id") or commit_attempts[current_idx + 1].get("session_id")
-
-        standards_report = session.get("standards_report", [])
-        # If standards_report wasn't attached, evaluate now
-        if not standards_report:
-            try:
-                files = session.get("changed_files", [])
-                checker = CodingStandardsChecker(effective_repo_root)
-                standards_report = checker.check({"files": files})
-            except Exception:
-                standards_report = []
-
-        violations = _parse_violations(standards_report)
-
-        # Track origin attempt for each question (e.g. if answered in attempt n, carry origin over)
-        raw_questions = session.get("questions", [])
-        attempt_number = session.get("attempt_number", current_idx + 1 if current_idx >= 0 else 1)
-        enriched_questions = []
-
-        for q in raw_questions:
-            q_copy = dict(q)
-            origin_att = q_copy.get("answered_in_attempt")
-            ans_text = (q_copy.get("answer") or "").strip()
-
-            if not origin_att and ans_text:
-                q_text = (q_copy.get("question") or "").strip().lower()
-                q_id = q_copy.get("question_id")
-                # Search previous commit attempts chronologically up to current_idx
-                for prev_att in commit_attempts[:current_idx + 1]:
-                    prev_num = prev_att.get("attempt_number")
-                    for pq in prev_att.get("questions", []):
-                        pq_text = (pq.get("question") or "").strip().lower()
-                        pq_id = pq.get("question_id")
-                        if (q_id and q_id == pq_id) or (q_text and q_text == pq_text):
-                            pq_ans = (pq.get("answer") or "").strip()
-                            pq_score = (pq.get("evaluation") or {}).get("score", pq.get("score", 0)) if isinstance(pq.get("evaluation"), dict) else pq.get("score", 0)
-                            if pq_ans and (pq_score >= 70 or pq.get("status") == "answered"):
-                                origin_att = pq.get("answered_in_attempt") or prev_num
-                                break
-                    if origin_att:
-                        break
-                if not origin_att and (q_copy.get("status") == "answered" or ((q_copy.get("evaluation") or {}).get("score", 0) >= 70 if isinstance(q_copy.get("evaluation"), dict) else q_copy.get("score", 0) >= 70)):
-                    origin_att = attempt_number
-
-            if origin_att:
-                q_copy["answered_in_attempt"] = origin_att
-            enriched_questions.append(q_copy)
-
-        return {
-            "attempt_id": session.get("attempt_id") or session.get("session_id"),
-            "attempt_number": attempt_number,
-            "commit_id": commit_id,
-            "timestamp": session.get("timestamp", time.strftime("%Y-%m-%d %H:%M:%S")),
-            "status": session.get("status", "FAILED"),
-            "score": session.get("score", 0),
-            "violations_count": len(violations),
-            "violations": violations,
-            "standards_report": standards_report,
-            "questions": enriched_questions,
-            "change_summary": session.get("change_summary", {}),
-            "changed_files": session.get("changed_files", []),
-            "navigation": {
-                "previous_attempt_id": prev_id,
-                "next_attempt_id": next_id,
-                "current_index": current_idx + 1 if current_idx >= 0 else 1,
-                "total_attempts": len(commit_attempts) if commit_attempts else 1
-            }
-        }
+        raise HTTPException(status_code=404, detail=f"Attempt '{attempt_id}' not found.")
 
     @app.post("/understanding-session")
     def receive_session(payload: Dict[str, Any]):
@@ -619,9 +518,7 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
         if not payload.get("timestamp"):
             payload["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
 
-        saved = save_session(effective_repo_root, payload)
-        print(f"\n[Dashboard API] Session received: {saved.get('session_id')} ({saved.get('status')})", flush=True)
-        return {"status": "success", "session_id": saved.get("session_id")}
+        return {"status": "ignored", "session_id": payload.get("session_id")}
 
     return app
 

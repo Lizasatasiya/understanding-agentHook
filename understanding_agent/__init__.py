@@ -52,7 +52,6 @@ from .llm import (
     api_utils,
 )
 from .storage import (
-    session_store,
     session_payload,
     sync_history,
     server_client,
@@ -99,7 +98,6 @@ _aliases = {
     "llm_manager": llm_manager,
     "api_utils": api_utils,
     # Storage
-    "session_store": session_store,
     "session_payload": session_payload,
     "sync_history": sync_history,
     "server_client": server_client,

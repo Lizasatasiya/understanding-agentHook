@@ -1,5 +1,4 @@
 import sys
-import time
 
 # ----------------------------------------------------------------------------
 # Interpreter self-heal (runs BEFORE any version-sensitive import).
@@ -51,7 +50,7 @@ if __name__ == "__main__" and sys.version_info < (3, 10):
         _env = dict(_os.environ)
         _env["PYTHONPATH"] = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))) \
             + (_os.pathsep + _env["PYTHONPATH"] if _env.get("PYTHONPATH") else "")
-        _os.execve(_cand, [_cand, "-m", "understanding_agent.cli"] + sys.argv[1:], _env)
+        _os.execve(_cand, [_cand, "-m", "understanding_agent.core.cli"] + sys.argv[1:], _env)
     sys.exit(
         "understanding-agent needs Python >= 3.10 (this interpreter is "
         f"{sys.version_info[0]}.{sys.version_info[1]}). Install one once:\n"
@@ -60,40 +59,28 @@ if __name__ == "__main__" and sys.version_info < (3, 10):
 
 import json
 import os
-import re
 import hashlib
-import subprocess
 from .identity import IdentityDetector
-from ..storage.server_client import ServerClient
-from ..storage.session_store import save_session
-from ..storage.session_payload import build_session_payload
-from ..llm.api_utils import fail_open_enabled, log_llm_error
+from .defense_client import DefenseClient, DefenseRejected, DefenseUnavailable
 
 from ..context.environment_detector import EnvironmentDetector
 from ..context.change_detector import ChangeDetector
 from ..context.stack_detector import StackDetector
 from ..context.code_graph import CodeGraph
 from ..context.context_builder import ContextBuilder
-from ..context.change_summary import ChangeSummary
 from ..context.evidence_collector import collect_evidence, evidence_question_hint
-from ..context.change_intelligence import master_analysis_enabled, run_master_analysis
 from ..context.change_kind import classify_change
 from ..context.formatting_detector import is_commit_formatting_only
 from ..context.commit_context import (
     get_head_commit,
     get_current_commit_message,
-    compute_attempt_key,
-    get_next_attempt_number
 )
 
-from ..questions.question_generator import QuestionGenerator
-from ..questions.followup_generator import FollowUpGenerator
 from ..questions.practice_packs import practice_pack_hint
 
 from ..answers.interaction import Interaction
 from ..answers.answer_hygiene import classify_answer, hygiene_enabled
 
-from ..evaluation.answer_evaluator import AnswerEvaluator
 from ..evaluation.coding_standards import CodingStandardsChecker
 from ..evaluation.security_lens import SecurityLens, security_question_hint, security_gate_enabled
 
@@ -101,9 +88,7 @@ from ..evaluation.security_lens import SecurityLens, security_question_hint, sec
 # these aliases keep any external patch targets (cli._print_gate_block, ...)
 # working unchanged.
 from .hook_stages import (
-    _is_gitignored,
     _interactive_input_available,
-    _print_advisory_findings,
     _print_gate_block,
     _launch_gui_terminal_defense,
     _detect_agent_execution,
@@ -111,34 +96,26 @@ from .hook_stages import (
     _detect_no_verify,
     _print_no_verify_block,
     _is_prepare_stage,
-    is_already_verified_for_commit,
+    consume_pass_marker,
     mark_verified_for_commit,
-    clear_verified_for_commit,
     GitIndexLock,
 )
 
-# Minimum passing score threshold for answer evaluation
+# The server decides pass or stop. This constant is only the local display threshold.
 PASSING_SCORE_THRESHOLD = int(os.environ.get("UNDERSTANDING_AGENT_PASSING_SCORE", "75"))
 
 
-def _write_state(state_file: str, attempt_key: str, head_commit, commit_msg,
-                 diff_hash: str, attempts: int, valid_questions: list) -> None:
-    """Persist hook state so attempts and answered questions survive retries.
-
-    Best-effort: a state-file failure must never abort the commit flow.
-    """
+def _json_ready(value):
+    """Drop values the defense payload cannot encode."""
     try:
-        with open(state_file, "w") as f:
-            json.dump({
-                "attempt_key": attempt_key,
-                "head_commit": head_commit,
-                "commit_message": commit_msg,
-                "diff_hash": diff_hash,
-                "attempts": attempts,
-                "questions": valid_questions
-            }, f)
+        return json.loads(json.dumps(value, default=str))
     except Exception:
-        pass
+        return {}
+
+
+def _block(message: str) -> None:
+    print(f"\n\033[1m\033[91m{message}\033[0m\n")
+
 
 def main():
     no_verify_early = _detect_no_verify()
@@ -154,115 +131,79 @@ def main():
         sys.stdout.reconfigure(encoding='utf-8')
     except Exception:
         pass
-    
-    # 1. Environment Detection
-    env_detector = EnvironmentDetector()
-    env = env_detector.detect()
-    
-    # 2. Change Detection
-    change_detector = ChangeDetector()
-    changes = change_detector.detect()
-    
+
+    env = EnvironmentDetector().detect()
+    changes = ChangeDetector().detect()
     project_root = env.get("project_root") or os.getcwd()
 
-    # 2b. Credential gate runs even on "no analyzable files" commits: the
-    # gate scans git's staged list directly (key FILES are findings by name
-    # alone), so a lone force-added key/credential file must never slip past
-    # an early exit. Zero LLM cost.
+    # Live credentials never leave the machine, and they never open an interview.
     if security_gate_enabled():
-        lens = SecurityLens()
-        critical = lens.find_critical_findings({"structured_changes": []})
+        critical = SecurityLens().find_critical_findings({"structured_changes": []})
         if critical:
             _print_gate_block(critical, env, project_root)
             sys.exit(1)
 
     if not changes.get("files"):
         sys.exit(0)
+
     head_commit = get_head_commit(project_root)
     commit_msg = get_current_commit_message(project_root)
-    diff_hash = hashlib.sha256(json.dumps(changes, sort_keys=True).encode()).hexdigest()
-    attempt_key = compute_attempt_key(head_commit, diff_hash, commit_msg)
+    diff_hash = hashlib.sha256(json.dumps(changes, sort_keys=True, default=str).encode()).hexdigest()
 
-    # Check if pre-commit already verified and defended this exact staged change
-    if is_already_verified_for_commit(project_root, head_commit, diff_hash):
-        sys.exit(0)
-
-    # If running in prepare-commit-msg stage and NOT verified, this is a --no-verify bypass
+    # prepare-commit-msg only confirms the interview that just passed. It does
+    # not start another one, and the next git commit always starts fresh.
     if _is_prepare_stage():
+        if consume_pass_marker(project_root, head_commit, diff_hash):
+            sys.exit(0)
         _print_no_verify_block(commit_msg)
         sys.exit(1)
-        
-    # 3. Stack Detection (languages, frameworks, domains — keys all downstream hints)
-    stack = StackDetector().detect(project_root)
 
-    # 4. Code Graph
+    stack = StackDetector().detect(project_root)
     graph = CodeGraph()
     graph.build(changes.get("files") or [])
-
-    # 5. Context Builder
-    context_builder = ContextBuilder()
-    context = context_builder.build(changes, graph)
-
-    # Bad Romance item 3 — deterministic ChangeKind tier: always-on,
-    # offline-safe classification attached to the context as a TYPED field;
-    # both question paths consume it (prompts gain a CHANGE CLASSIFICATION
-    # section; the master analysis can refine it with its LLM tier).
+    context = ContextBuilder().build(changes, graph)
     change_kind = classify_change(changes, context)
     context["change_kind"] = change_kind
 
-    # 5b. Security lens + evidence collection (deterministic, no LLM, fast)
     lens = SecurityLens()
     security_profile = lens.profile_change(context)
     security_hint = security_question_hint(security_profile)
     evidence = collect_evidence(changes.get("files", []), project_root)
     evidence_hint = evidence_question_hint(evidence)
     practice_hint = practice_pack_hint(stack, context, security_hint)
-
-    # Pokerface P3: zero-touch identity (git author metadata) attached to
-    # every session so the central service can JIT-provision developer and
-    # repo records without any login flow.
     identity = IdentityDetector.resolve(project_root)
 
-    # 5c. Security gate FIRST: deterministic critical findings (live
-    # credentials) block before any prompt or LLM call. Unlike the oral
-    # defense, no answer can make committing a real credential safe, and git
-    # history is permanent — so a doomed commit must fail fast, before the
-    # developer is asked to sit through the standards report or questions.
     if security_gate_enabled():
         critical = lens.find_critical_findings(context)
         if critical:
             _print_gate_block(critical, env, project_root)
             sys.exit(1)
 
-    # 5d. Coding Standards Audit (deterministic, printed after the gate passes)
     standards_checker = CodingStandardsChecker(project_root)
     standards_report = standards_checker.check(changes, context)
     standards_checker.print_report(standards_report)
 
-    # 5d-2. Tool evidence (deterministic, advisory): semgrep/gitleaks results
-    # are displayed and recorded regardless of what any LLM later says —
-    # the LLM elaborates this evidence into questions; it cannot suppress
-    # or fabricate it (docs/LLM_POLICY.md, "Deterministic evidence").
     evidence_findings = (evidence.get("semgrep") or []) + (evidence.get("gitleaks") or [])
     if evidence_findings:
-        print(f"\n\033[93mTool Evidence (advisory — informs the questions below):\033[0m")
-        for f in evidence_findings[:5]:
-            loc = f"{f.get('path', '?')}:{f.get('line', 0)}" if f.get("path") else "?"
-            print(f"  \033[93m[{f.get('rule', 'finding')}] {loc} "
-                  f"{(f.get('message') or '')[:120]}\033[0m")
+        print("\n\033[93mTool Evidence (advisory — informs the questions below):\033[0m")
+        for finding in evidence_findings[:5]:
+            loc = f"{finding.get('path', '?')}:{finding.get('line', 0)}" if finding.get("path") else "?"
+            print(f"  \033[93m[{finding.get('rule', 'finding')}] {loc} "
+                  f"{(finding.get('message') or '')[:120]}\033[0m")
         print()
 
-    # 5d-3. Deterministic change classification (ChangeKind tier): shown so
-    # the developer sees the lens the questions will use. Signals listed so
-    # the classification is always auditable.
     if change_kind.get("dominant"):
-        w = change_kind.get("weights") or {}
-        strong = ", ".join(f"{d} {w[d]:.0%}" for d in ("ui", "data_model", "control_flow",
-                                                      "infra_config", "tests", "docs")
-                           if w.get(d, 0) >= 0.25 and d != change_kind["dominant"])
-        print(f"\033[96mChange classification: {change_kind['dominant']}"
-              + (f" (mixed: {strong})" if strong else "")
-              + f" — signals: {'; '.join(change_kind['signals'][:4])}\033[0m")
+        weights = change_kind.get("weights") or {}
+        strong = ", ".join(
+            f"{name} {weights[name]:.0%}"
+            for name in ("ui", "data_model", "control_flow", "infra_config", "tests", "docs")
+            if weights.get(name, 0) >= 0.25 and name != change_kind["dominant"]
+        )
+        print(
+            f"\033[96mChange classification: {change_kind['dominant']}"
+            + (f" (mixed: {strong})" if strong else "")
+            + f" — signals: {'; '.join(change_kind['signals'][:4])}\033[0m"
+        )
 
     hints = {
         "stack": stack,
@@ -271,140 +212,18 @@ def main():
         "practices": practice_hint,
         "standards": standards_report,
     }
+    failed_standards = [item for item in standards_report if not item.get("is_good", True)]
 
-    failed_standards = [s for s in standards_report if not s.get("is_good", True)]
-
-    # 5d-4. --no-verify Check: Block bypass attempts
-    # Git skips pre-commit on --no-verify, but prepare-commit-msg intercepts it.
     is_no_verify = _detect_no_verify(project_root, head_commit, diff_hash)
     if is_no_verify:
         _print_no_verify_block(commit_msg)
-        try:
-            from ..storage.session_store import load_sessions
-            _existing = load_sessions(project_root)
-            nv_attempt = get_next_attempt_number(
-                _existing, head_commit, diff_hash, commit_msg, state_attempts=0
-            )
-        except Exception:
-            nv_attempt = 1
-        blocked_session = build_session_payload(
-            attempt_number=nv_attempt,
-            head_commit=head_commit,
-            commit_message=commit_msg,
-            attempt_key=attempt_key,
-            diff_hash=diff_hash,
-            repository=env.get("repository", "unknown"),
-            branch=env.get("branch", "unknown"),
-            status="FAILED",
-            score=0,
-            changed_files=changes.get("files", []),
-            change_summary={"what_changed": "Blocked: Attempted to bypass pre-commit oral defense using --no-verify."},
-            verification="no-verify-blocked",
-            standards_report=standards_report,
-            violations_count=len(failed_standards),
-            questions=[],
-            identity=identity,
-            evidence=evidence,
-        )
-        try:
-            save_session(project_root, blocked_session)
-            ServerClient().send(blocked_session)
-        except Exception:
-            pass
         sys.exit(1)
 
-    # 5d-5. Trivial change exemption (formatting, imports, comments, docs, annotations):
-    # If all staged changes are purely formatting, import organization, comments,
-    # docs, or type annotations and there are no coding standards violations:
-    if is_commit_formatting_only(changes, project_root) and not failed_standards:
-        print(f"\n\033[92m✓ All staged changes are trivial (formatting, imports, comments, docs, type annotations).\033[0m")
-        print(f"\033[92m  No oral defense required — commit allowed.\033[0m\n")
-        try:
-            from ..storage.session_store import load_sessions
-            _existing = load_sessions(project_root)
-            fmt_attempt = get_next_attempt_number(
-                _existing, head_commit, diff_hash, commit_msg, state_attempts=0
-            )
-        except Exception:
-            fmt_attempt = 1
-        fmt_session = build_session_payload(
-            attempt_number=fmt_attempt,
-            head_commit=head_commit,
-            commit_message=commit_msg,
-            attempt_key=attempt_key,
-            diff_hash=diff_hash,
-            repository=env.get("repository", "unknown"),
-            branch=env.get("branch", "unknown"),
-            status="PASSED",
-            score=100,
-            changed_files=changes.get("files", []),
-            change_summary={"what_changed": "Trivial changes (formatting, imports, comments, docs, or type annotations)."},
-            verification="formatting-exempt",
-            standards_report=standards_report,
-            violations_count=0,
-            questions=[],
-            identity=identity,
-            evidence=evidence,
-        )
-        try:
-            save_session(project_root, fmt_session)
-            ServerClient().send(fmt_session)
-        except Exception:
-            pass
-        mark_verified_for_commit(project_root, head_commit, diff_hash)
-        sys.exit(0)
-
-    # 5e. Judas J2 — agent / non-interactive record-only mode.
-    # Agents (Codex/Claude CLI/etc.) commit via git, so the hook fires — but
-    # no human is present: /dev/tty EOF yields empty answers and aborts at
-    # <25%, meaning an agent literally cannot commit. Model agents as a
-    # first-class UNVERIFIED actor instead of failing them:
-    #   - explicit: UNDERSTANDING_AGENT_MODE=agent (preferred, predictable)
-    #   - auto: no interactive stdin reachable (no TTY and no /dev/tty)
-    # The deterministic gate ABOVE still hard-blocks on live credentials, and
-    # 5e. AI Agent Check: Block autonomous AI agents from committing.
-    # When an AI agent (Antigravity, Cursor, Copilot, Claude, Cline, Aider, etc.)
-    # runs git commit, the commit is hard-blocked: pre-commit requires a human
-    # oral defense to verify comprehension and ownership of the staged code.
     is_agent, agent_name = _detect_agent_execution()
     if is_agent:
         _print_agent_block(agent_name, commit_msg)
-        try:
-            from ..storage.session_store import load_sessions
-            _existing = load_sessions(project_root)
-            ro_attempt = get_next_attempt_number(
-                _existing, head_commit, diff_hash, commit_msg, state_attempts=0
-            )
-        except Exception:
-            ro_attempt = 1
-        blocked_session = build_session_payload(
-            attempt_number=ro_attempt,
-            head_commit=head_commit,
-            commit_message=commit_msg,
-            attempt_key=attempt_key,
-            diff_hash=diff_hash,
-            repository=env.get("repository", "unknown"),
-            branch=env.get("branch", "unknown"),
-            status="FAILED",
-            score=0,
-            changed_files=changes.get("files", []),
-            change_summary={"what_changed": f"Blocked: {agent_name} attempted to commit staged code without human oral defense."},
-            verification="agent-blocked",
-            standards_report=standards_report,
-            violations_count=len(failed_standards),
-            questions=[],
-            identity=identity,
-            evidence=evidence,
-        )
-        try:
-            save_session(project_root, blocked_session)
-            ServerClient().send(blocked_session)
-        except Exception:
-            pass
         sys.exit(1)
 
-    # When committing via GUI (e.g. IDE Source Control button), no TTY is attached.
-    # Launch an interactive terminal on macOS to conduct the oral defense.
     if not _interactive_input_available() and not os.environ.get("UNDERSTANDING_AGENT_DELEGATED_TERMINAL"):
         if sys.platform == "darwin":
             launched_ok, exit_code = _launch_gui_terminal_defense(project_root)
@@ -412,516 +231,141 @@ def main():
                 if exit_code == 0:
                     mark_verified_for_commit(project_root, head_commit, diff_hash)
                 sys.exit(exit_code)
-
-        RED = "\033[91m"
-        BOLD = "\033[1m"
-        RESET = "\033[0m"
-        print(f"\n{BOLD}{RED}✗ Interactive oral defense required:{RESET}")
-        print(f"  Cannot conduct code understanding defense from GUI without an interactive terminal.")
-        print(f"  Please run your commit from the integrated terminal:")
-        print(f"    {BOLD}git commit{RESET}\n")
+        print("\n\033[1m\033[91m✗ Interactive oral defense required:\033[0m")
+        print("  Cannot conduct code understanding defense from GUI without an interactive terminal.")
+        print("  Please run your commit from the integrated terminal:")
+        print("    \033[1mgit commit\033[0m\n")
         sys.exit(1)
 
     if failed_standards:
-        YELLOW = "\033[93m"
-        RED = "\033[91m"
-        CYAN = "\033[96m"
-        GREEN = "\033[92m"
-        BOLD = "\033[1m"
-        RESET = "\033[0m"
-
-        print(f"{BOLD}{YELLOW}Coding standards violations detected ({len(failed_standards)} failed).{RESET}")
-        print(f"{BOLD}Do you want to fix these violations or proceed further?{RESET}\n")
-        print(f"  {BOLD}[1]{RESET} {RED}Fix violations{RESET}")
-        print(f"  {BOLD}[2]{RESET} {GREEN}Proceed further{RESET}\n")
-
+        print(f"\033[1m\033[93mCoding standards violations detected ({len(failed_standards)} failed).\033[0m")
+        print("\033[1mDo you want to fix these violations or proceed further?\033[0m\n")
+        print("  \033[1m[1]\033[0m \033[91mFix violations\033[0m")
+        print("  \033[1m[2]\033[0m \033[92mProceed further\033[0m\n")
         choice = ""
         while choice not in ("1", "2", "fix", "proceed", "f", "p"):
             try:
-                sys.stdout.write(f"{BOLD}{CYAN}Select an option [1/2]: {RESET}")
+                sys.stdout.write("\033[1m\033[96mSelect an option [1/2]: \033[0m")
                 sys.stdout.flush()
                 raw_choice = sys.stdin.readline()
                 if not raw_choice:
-                    print(f"\n{RED}Commit aborted.{RESET}")
+                    _block("Commit aborted.")
                     sys.exit(1)
                 choice = raw_choice.strip().lower()
             except (KeyboardInterrupt, EOFError):
-                print(f"\n{RED}Commit aborted.{RESET}")
+                _block("Commit aborted.")
                 sys.exit(1)
-
         if choice in ("1", "fix", "f"):
-            print(f"\n{RED}Please resolve the violations listed above before committing.{RESET}\n")
-            try:
-                from ..storage.session_store import load_sessions
-                _existing = load_sessions(project_root)
-                fix_attempt_num = get_next_attempt_number(
-                    _existing, head_commit, diff_hash, commit_msg, state_attempts=0
-                )
-            except Exception:
-                fix_attempt_num = 1
-            session_data = build_session_payload(
-                attempt_number=fix_attempt_num,
-                head_commit=head_commit,
-                commit_message=commit_msg,
-                attempt_key=attempt_key,
-                diff_hash=diff_hash,
-                repository=env.get("repository", "unknown"),
-                branch=env.get("branch", "unknown"),
-                status="FAILED",
-                score=0,
-                changed_files=changes.get("files", []),
-                change_summary={"what_changed": "Staged changes blocked by coding standards."},
-                # No defense happened on this path — record it honestly.
-                verification="llm-unverified",
-                standards_report=standards_report,
-                violations_count=len(failed_standards),
-                questions=[],
-                identity=identity,
-                evidence=evidence,
-            )
-            try:
-                save_session(project_root, session_data)
-                ServerClient().send(session_data)
-            except Exception:
-                pass
+            print("\n\033[91mPlease resolve the violations listed above before committing.\033[0m\n")
             sys.exit(1)
-        else:
-            print(f"\n{BOLD}{GREEN}✓ Proceeding with questions...{RESET}\n")
+        print("\n\033[1m\033[92m✓ Proceeding with questions...\033[0m\n")
 
-    # 6. Change Summary
-    summary = ChangeSummary().generate(context)
-    
-    # 6. Question Generator & State Management
-    # Attempt count depends solely on attempts made towards the next commit (under head_commit).
-    # Commit message is NOT checked.
-    state_file = ".git/understanding_agent_state.json"
-    
-    state = {}
-    if os.path.exists(state_file):
-        try:
-            with open(state_file, "r") as f:
-                state = json.load(f)
-        except Exception:
-            pass
+    git_name = (identity.get("git_name") or "").strip()
+    git_email = (identity.get("git_email") or "").strip().lower()
+    if not git_name or "@" not in git_email:
+        _block("Commit aborted. This commit has no git author name and email.")
+        print("  Set them with `git config --global user.name` and `git config --global user.email`, then commit again.\n")
+        sys.exit(1)
 
-    existing_sessions = []
+    client = DefenseClient()
     try:
-        from ..storage.session_store import load_sessions
-        existing_sessions = load_sessions(project_root)
-    except Exception:
-        pass
+        started = client.start({
+            "git_name": git_name,
+            "git_email": git_email,
+            "repository": env.get("repository") or identity.get("repo_slug") or "unknown",
+            "branch": env.get("branch") or "unknown",
+            "head_commit": head_commit,
+            "commit_message": commit_msg,
+            "diff_hash": diff_hash,
+            "trivial": bool(is_commit_formatting_only(changes, project_root)),
+            "standards_failed": bool(failed_standards),
+            "context": _json_ready(context),
+            "hints": _json_ready(hints),
+        })
+    except DefenseUnavailable as exc:
+        _block("Commit aborted. The defense service is unavailable.")
+        print(f"  {exc}\n")
+        sys.exit(1)
+    except DefenseRejected as exc:
+        _block("Commit aborted. The defense service rejected this interview.")
+        print(f"  {exc}\n")
+        sys.exit(1)
 
-    norm_head = (head_commit or "").strip()
-    matching_sessions = [
-        s for s in existing_sessions
-        if (s.get("commit_id") == "staged" or s.get("is_staged") or not s.get("commit_id")) and
-        (s.get("head_commit") or "").strip() == norm_head
-    ]
-    recorded_attempts = [s.get("attempt_number", 0) for s in matching_sessions]
-    max_recorded_attempt = max(recorded_attempts + [len(matching_sessions)], default=0)
+    if started.get("action") == "skip":
+        message = started.get("message") or "No oral defense required — commit allowed."
+        print(f"\n\033[92m✓ {message}\033[0m\n")
+        mark_verified_for_commit(project_root, head_commit, diff_hash)
+        sys.exit(0)
 
-    # State belongs to current commit cycle if head matches
-    state_head = (state.get("head_commit") or "").strip()
-    state_matches_head = (state_head == norm_head) if (state_head or norm_head) else True
-    state_attempts = state.get("attempts", 0) if state_matches_head else 0
-
-    # Attempts only depend on how many attempts made to next commit
-    attempts = max(max_recorded_attempt + 1, state_attempts + 1, 1)
-
-    # Cached questions can be reused if the diff hasn't changed
-    # (analysis holds the master-analysis result when that path ran; None
-    # on cached attempts, which reuse recorded questions.)
-    analysis = None
-    state_matches_diff = state_matches_head and (state.get("diff_hash") == diff_hash)
-    cached_questions = state.get("questions", []) if state_matches_diff else []
-
-    # If state has no questions but matching previous session exists for this diff, restore questions & scores
-    if not cached_questions and state_matches_head:
-        candidates = [s for s in matching_sessions if s.get("diff_hash") == diff_hash and s.get("questions")]
-        if candidates:
-            def _rank_sess(s):
-                qs = s.get("questions", [])
-                ans = sum(1 for q in qs if ((q.get("evaluation") or {}).get("score", 0) >= PASSING_SCORE_THRESHOLD or q.get("score", 0) >= PASSING_SCORE_THRESHOLD))
-                return (ans, len(qs), s.get("attempt_number", 0))
-            best_session = max(candidates, key=_rank_sess)
-            cached_questions = []
-            for sq in best_session.get("questions", []):
-                sq_eval = sq.get("evaluation") or {}
-                score = sq_eval.get("score") if isinstance(sq_eval, dict) and "score" in sq_eval else sq.get("score", 0)
-                cq = {
-                    "question_id": sq.get("question_id"),
-                    "question": sq.get("question"),
-                    "type": sq.get("type", "Reasoning"),
-                    "time_limit": sq.get("time_limit_seconds") or sq.get("time_limit", 60),
-                    "expected_concepts": sq.get("expected_concepts", []),
-                    "evaluation_criteria": sq.get("evaluation_criteria", []),
-                    "is_fallback": sq.get("is_fallback", False),
-                    "answer": sq.get("answer", ""),
-                    "status": sq.get("status", ""),
-                    "evaluation": sq_eval,
-                    "response_time_seconds": sq.get("response_time_seconds", 0),
-                    "best_score": score,
-                    "answered_in_attempt": sq.get("answered_in_attempt") or best_session.get("attempt_number"),
-                }
-                if score >= PASSING_SCORE_THRESHOLD:
-                    cq["answered"] = True
-                    cq["passed"] = True
-                else:
-                    cq["answered"] = False
-                    cq["passed"] = False
-                cached_questions.append(cq)
-
-    if state_matches_diff and cached_questions:
-        valid_questions = cached_questions
-        # Reconcile scores and answers with all matching sessions for this diff
-        for q in valid_questions:
-            q_text = (q.get("question") or "").strip().lower()
-            q_id = q.get("question_id")
-            for s in matching_sessions:
-                if s.get("diff_hash") == diff_hash:
-                    for sq in s.get("questions", []):
-                        sq_text = (sq.get("question") or "").strip().lower()
-                        sq_id = sq.get("question_id")
-                        if (q_id and q_id == sq_id) or (q_text and q_text == sq_text):
-                            sq_eval = sq.get("evaluation") or {}
-                            score = sq_eval.get("score") if isinstance(sq_eval, dict) and "score" in sq_eval else sq.get("score", 0)
-                            if score > q.get("best_score", 0):
-                                q["best_score"] = score
-                                q["answer"] = sq.get("answer", q.get("answer", ""))
-                                q["evaluation"] = sq_eval
-                                q["response_time_seconds"] = sq.get("response_time_seconds", q.get("response_time_seconds", 0))
-                                q["answered_in_attempt"] = sq.get("answered_in_attempt") or s.get("attempt_number")
-            if q.get("best_score", 0) >= PASSING_SCORE_THRESHOLD or q.get("answered", False) or q.get("passed", False):
-                q["answered"] = True
-                q["passed"] = True
-            else:
-                q["answered"] = False
-                q["passed"] = False
-    else:
-        # Generate fresh questions for new diff
-        question_generator = QuestionGenerator()
-        analysis = None
-        if master_analysis_enabled():
-            # Master Analysis Pass (opt-in): one LLM call produces change
-            # classification, advisory findings (citation-verified) and the
-            # questions themselves. Degrades to None -> normal path.
-            analysis = run_master_analysis(
-                context, summary, hints=hints, env=env,
-                project_root=project_root, question_generator=question_generator,
-            )
-        if analysis and analysis.get("questions"):
-            valid_questions = question_generator.validate(analysis["questions"])
-            _print_advisory_findings(analysis.get("findings") or [])
-        else:
-            questions = question_generator.generate(context, summary, hints, env=env)
-            valid_questions = question_generator.validate(questions)
-        for q in valid_questions:
-            q["passed"] = False
-            q["answered"] = False
-            q["best_score"] = 0
-
-    hardcoded = [q for q in valid_questions if q.get("is_fallback")]
-    if hardcoded:
-        log_llm_error(
-            f"Skipped {len(hardcoded)} hardcoded question(s). "
-            "Only questions written by the model are asked."
-        )
-    valid_questions = [q for q in valid_questions if not q.get("is_fallback")]
-
-    # An attempt is LLM-verified only when questions were LLM-generated AND
-    # every evaluation came from the LLM (not the offline fallback).
-    questions_llm_generated = bool(valid_questions)
+    questions = started.get("questions") or []
+    defense_id = started.get("defense_id") or ""
+    if not defense_id or not questions:
+        _block("Commit aborted. The defense service did not return an interview.")
+        sys.exit(1)
 
     interaction = Interaction()
-    evaluator = AnswerEvaluator()
-    followup_generator = FollowUpGenerator()
-    
-    # Colors
-    CYAN = "\033[96m"
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    RED = "\033[91m"
-    BOLD = "\033[1m"
-    RESET = "\033[0m"
-
-    if not valid_questions:
-        if fail_open_enabled():
-            print(f"\n{YELLOW}No questions were asked because the model did not return any.{RESET}")
-            print(f"{YELLOW}Commit allowed. This attempt is recorded as not checked by the model.{RESET}\n")
-            attempt_status = "PASSED"
-            exit_code = 0
-        else:
-            print(f"\n{RED}No questions were asked because the model did not return any.{RESET}")
-            print(f"{RED}Commit aborted (UNDERSTANDING_AGENT_FAIL_MODE=closed).{RESET}\n")
-            attempt_status = "FAILED"
-            exit_code = 1
-        try:
-            session_data = build_session_payload(
-                attempt_number=attempts,
-                head_commit=head_commit,
-                commit_message=commit_msg,
-                attempt_key=attempt_key,
-                diff_hash=diff_hash,
-                repository=env.get("repository", "unknown"),
-                branch=env.get("branch", "unknown"),
-                status=attempt_status,
-                verification="llm-unverified",
-                score=0,
-                changed_files=changes.get("files", []),
-                change_summary=summary,
-                standards_report=standards_report,
-                violations_count=len(failed_standards),
-                questions=[],
-                analysis=analysis,
-                identity=identity,
-                evidence=evidence,
-            )
-            save_session(project_root, session_data)
-            ServerClient().send(session_data)
-        except Exception:
-            pass
-        if exit_code == 0:
-            mark_verified_for_commit(project_root, head_commit, diff_hash)
-        sys.exit(exit_code)
-
     index_lock = GitIndexLock(project_root)
     index_lock.acquire()
+    try:
+        print(f"\n\n\033[1m\033[96mQuestions\033[0m\n")
+        for index, question in enumerate(questions, 1):
+            question_id = question.get("question_id") or f"q{index}"
+            question_text = question.get("question") or ""
+            time_limit = int(question.get("time_limit") or 60)
+            print(f"\033[1m\033[96mQuestion {index}/{len(questions)}\033[0m")
+            print(f"\033[93mTime Limit: {time_limit} seconds\033[0m\n")
+            print(f"\033[1m{question_text}\033[0m\n")
 
-    while True:
-        # Persist state so attempt number and questions are tracked even if interrupted
-        _write_state(state_file, attempt_key, head_commit, commit_msg,
-                     diff_hash, attempts, valid_questions)
-
-        print(f"\n\n{BOLD}{CYAN}Questions [Attempt {attempts}]{RESET}\n")
-        final_results = []
-        total_score = 0
-        any_eval_unverified = False
-        
-        for i, q in enumerate(valid_questions, 1):
-            q_id = q.get("question_id", f"q{i}")
-            q_text = q.get("question", "")
-            q_type = q.get("type", "Reasoning")
-            time_limit = q.get("time_limit", 60)
-
-            print(f"{BOLD}{CYAN}Question {i}/{len(valid_questions)}{RESET}")
-      
-            # If answer is already given with passing score, show Already Answered and skip
-            if q.get("best_score", 0) >= PASSING_SCORE_THRESHOLD or q.get("answered", False) or q.get("passed", False):
-                origin_att = q.get("answered_in_attempt")
-                if origin_att:
-                    print(f"{GREEN}✓ Already Answered (Attempt #{origin_att}){RESET}\n")
-                else:
-                    print(f"{GREEN}✓ Already Answered{RESET}\n")
-                q["answered"] = True
-                q["passed"] = True
-                total_score += q.get('best_score', 0)
-                final_results.append({
-                    "question_id": q_id,
-                    "question": q_text,
-                    "type": q_type,
-                    "time_limit_seconds": time_limit,
-                    "answer": q.get("answer", ""),
-                    "response_time_seconds": q.get("response_time_seconds", 0),
-                    "status": "answered",
-                    "answered_in_attempt": origin_att,
-                    "evaluation": q.get("evaluation") or {
-                        "score": q.get("best_score", 0),
-                        "understanding": "good",
-                        "rationale": f"Previously answered in Attempt #{origin_att}" if origin_att else "Previously answered and verified",
-                        "key_points_covered": [],
-                        "missing_concepts": [],
-                        "follow_up_required": False
-                    }
-                })
-                continue
-                
-            print(f"{YELLOW}Time Limit: {time_limit} seconds{RESET}\n")
-
-            # On retry attempts, lightly rephrase questions that were previously
-            # failed so the developer gets a fresh angle on the same concept.
-            if attempts > 1 and not q.get("passed", False) and q.get("best_score", 0) < PASSING_SCORE_THRESHOLD:
-                rephrased = followup_generator.rephrase_failed_question(q)
-                if rephrased and rephrased.strip() != q_text.strip():
-                    q_text = rephrased
-
-            print(f"{BOLD}{q_text}{RESET}\n")
-
-            ans_text = interaction.timed_input(f"{CYAN}❯ {RESET}", time_limit, speak_text=q_text)
-            
-            if ans_text is None:
-                ans_text = ""
-                status = "timeout"
-                response_time = time_limit
-                print(f"\n{RED}✗ Timeout reached{RESET}")
+            answer_text = interaction.timed_input(f"\033[96m❯ \033[0m", time_limit, speak_text=question_text)
+            if answer_text is None:
+                answer_text = ""
+                print("\n\033[91m✗ Timeout reached\033[0m")
             else:
-                status = "answered"
-                resp_val = getattr(interaction, "last_response_time", None)
-                if resp_val is not None and resp_val > 0:
-                    response_time = min(time_limit, resp_val)
-                else:
-                    response_time = min(time_limit, 1)
-                print(f"\n{GREEN}✓ Answer received in {response_time} seconds{RESET}")
-
-                # Pokerface P1: a suspect capture (clipped mic, ASR stutter,
-                # empty submit) gets ONE optional re-ask before it can score.
-                # Enter submits the original as-is — warning, never a veto.
+                print("\n\033[92m✓ Answer received\033[0m")
                 if hygiene_enabled():
-                    suspect, reason = classify_answer(ans_text)
+                    suspect, reason = classify_answer(answer_text)
                     if suspect:
-                        print(f"{YELLOW}⚠ That answer may not have come through cleanly ({reason}).{RESET}")
+                        print(f"\033[93m⚠ That answer may not have come through cleanly ({reason}).\033[0m")
                         retry_text = interaction.timed_input(
-                            f"{CYAN}Say it again or type it (Enter submits the text above as-is) ❯ {RESET}",
+                            "\033[96mSay it again or type it (Enter submits the text above as-is) ❯ \033[0m",
                             min(time_limit, 45),
                         )
                         if retry_text and retry_text.strip():
-                            ans_text = retry_text
-                            resp_val = getattr(interaction, "last_response_time", None)
-                            if resp_val and resp_val > 0:
-                                response_time = min(time_limit, resp_val)
-            ans_obj = {
-                "answer": ans_text,
-                "response_time_seconds": response_time,
-                "status": status
-            }
-            
-            eval_res = evaluator.evaluate(q, ans_obj, context, summary, env=env)
-            final_score = eval_res.score
-            if not eval_res.llm_verified:
-                any_eval_unverified = True
+                            answer_text = retry_text
 
-            # Direct scoring: No follow-up questions
-            result_entry = {
-                "question_id": q_id,
-                "question": q_text,
-                "type": q_type,
-                "time_limit_seconds": time_limit,
-                "answer": ans_text,
-                "response_time_seconds": response_time,
-                "status": status,
-                "answered_in_attempt": attempts,
-                "evaluation": eval_res.to_dict(),
-                "score": final_score,
-            }
-            final_results.append(result_entry)
-
-            q["answer"] = ans_text
-            q["evaluation"] = eval_res.to_dict()
-            q["response_time_seconds"] = response_time
-            q["best_score"] = final_score
-
-            # Persist state immediately
-            _write_state(state_file, attempt_key, head_commit, commit_msg,
-                         diff_hash, attempts, valid_questions)
-
-            # If score of answer evaluation is less than threshold, commit must be aborted immediately
-            if final_score < PASSING_SCORE_THRESHOLD:
-                q["answered"] = True
-                q["passed"] = False
-                print(f"\n{RED}✗ Understanding not demonstrated.{RESET}")
-                print(f"\n{BOLD}{RED}Commit aborted. Please review your code and try again.{RESET}\n")
-
-                try:
-                    session_data = build_session_payload(
-                        attempt_number=attempts,
-                        head_commit=head_commit,
-                        commit_message=commit_msg,
-                        attempt_key=attempt_key,
-                        diff_hash=diff_hash,
-                        repository=env.get("repository", "unknown"),
-                        branch=env.get("branch", "unknown"),
-                        status="FAILED",
-                        verification="llm-verified" if (questions_llm_generated and not any_eval_unverified) else "llm-unverified",
-                        score=round(final_score, 1),
-                        changed_files=changes.get("files", []),
-                        change_summary=summary,
-                        standards_report=standards_report,
-                        violations_count=len(failed_standards),
-                        questions=final_results,
-                        identity=identity,
-                        evidence=evidence,
-                    )
-                    save_session(project_root, session_data)
-                    ServerClient().send(session_data)
-                except Exception:
-                    pass
-                index_lock.release()
+            try:
+                result = client.answer(defense_id, question_id, answer_text)
+            except DefenseUnavailable as exc:
+                _block("Commit aborted. The defense service is unavailable.")
+                print(f"  {exc}\n")
+                sys.exit(1)
+            except DefenseRejected as exc:
+                _block("Commit aborted. The defense service rejected this answer.")
+                print(f"  {exc}\n")
                 sys.exit(1)
 
-            # Score is >= threshold
-            print(f"{GREEN}✓ Good understanding demonstrated.{RESET}\n")
-            q["answered"] = True
-            q["passed"] = True
-            if not q.get("answered_in_attempt"):
-                q["answered_in_attempt"] = attempts
-            total_score += q["best_score"]
-
-        avg_score = total_score / len(valid_questions) if valid_questions else 100
-        # LLM verification: honest even when failing open. A session is only
-        # "llm-verified" when questions were LLM-generated and no evaluation
-        # fell back to the offline scorer.
-        verification = "llm-verified" if (questions_llm_generated and not any_eval_unverified) else "llm-unverified"
-
-        all_individual_passed = (
-            bool(valid_questions)
-            and all(q.get("passed", False) or q.get("best_score", 0) >= PASSING_SCORE_THRESHOLD for q in valid_questions)
-        )
-        is_passed = all_individual_passed and avg_score >= PASSING_SCORE_THRESHOLD
-
-        attempt_status = "PASSED" if is_passed else "FAILED"
-        if is_passed:
-            print(f"\n{BOLD}{GREEN}Overall Understanding: Verified{RESET}")
-        else:
-            print(f"\n{BOLD}{RED}Overall Understanding: Insufficient{RESET}")
-
-        # 9. Server Client & Session Storage
-        session_data = build_session_payload(
-            attempt_number=attempts,
-            head_commit=head_commit,
-            commit_message=commit_msg,
-            attempt_key=attempt_key,
-            diff_hash=diff_hash,
-            repository=env.get("repository", "unknown"),
-            branch=env.get("branch", "unknown"),
-            status=attempt_status,
-            verification=verification,
-            score=round(avg_score, 1),
-            changed_files=changes.get("files", []),
-            change_summary=summary,
-            standards_report=standards_report,
-            violations_count=len(failed_standards),
-            questions=final_results,
-            analysis=analysis,
-            identity=identity,
-            evidence=evidence,
-        )
-        try:
-            save_session(project_root, session_data)
-            ServerClient().send(session_data)
-        except Exception:
-            pass
-        
-        # Save state: keep attempts tracked and preserve questions across attempts
-        _write_state(state_file, attempt_key, head_commit, commit_msg,
-                     diff_hash, attempts, valid_questions)
-        
-        if not is_passed:
-            print(f"\n{RED}Attempt {attempts} failed. Understanding criteria not met.{RESET}")
-            retry = interaction.timed_input(f"{YELLOW}Would you like to try Attempt {attempts + 1}? (y/n) {RESET}", 60)
-            if retry and retry.strip().lower() == 'y':
-                attempts += 1
-                continue
-            else:
-                print(f"\n\033[91mCommit aborted.\033[0m")
-                index_lock.release()
+            action = result.get("action")
+            if action == "stop":
+                print("\n\033[91m✗ Understanding not demonstrated.\033[0m")
+                _block("Commit aborted. Please review your code and try again.")
                 sys.exit(1)
-        else:
-            print(f"\n\033[92mCommit allowed: Understanding demonstrated.\033[0m")
-            # Cleanup state on success
-            if os.path.exists(state_file):
-                os.remove(state_file)
-            index_lock.release()
-            mark_verified_for_commit(project_root, head_commit, diff_hash)
-            sys.exit(0)
+            if action == "pass":
+                print("\033[92m✓ Good understanding demonstrated.\033[0m\n")
+                print("\n\033[92mCommit allowed: Understanding demonstrated.\033[0m")
+                mark_verified_for_commit(project_root, head_commit, diff_hash)
+                sys.exit(0)
+            if action != "continue":
+                _block("Commit aborted. The defense service returned an unknown result.")
+                sys.exit(1)
+            print("\033[92m✓ Good understanding demonstrated.\033[0m\n")
+
+        _block("Commit aborted. The defense service did not finish the interview.")
+        sys.exit(1)
+    finally:
+        index_lock.release()
+
 
 if __name__ == "__main__":
     main()
+
+

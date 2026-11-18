@@ -1,9 +1,11 @@
-"""LLM configuration for the model and key saved by install.sh.
+"""LLM configuration for the model and key used by the defense server.
 
-Both values live in ~/.config/understanding-agent/.env:
 UNDERSTANDING_AGENT_MODEL is groq, sonnet, haiku, nous, or org.
 UNDERSTANDING_AGENT_API_KEY is the key for that model.
 Questions and answer checks use that same pair.
+
+Resolution order for both values: process environment, then
+~/.config/understanding-agent/.env, then .env in the server's working directory.
 """
 
 import os
@@ -105,6 +107,11 @@ def _installed() -> dict:
     return _parse_env_file(_GLOBAL_CONFIG)
 
 
+def _local_env() -> dict:
+    """`.env` in the directory where the server process was started."""
+    return _parse_env_file(os.path.join(os.getcwd(), ".env"))
+
+
 def installed_model_choice() -> str | None:
     """Return groq, sonnet, haiku, nous, or org from the install file or environment."""
     # 1. Auto-detect if key is specifically a Groq key (starts with gsk_)
@@ -113,11 +120,14 @@ def installed_model_choice() -> str | None:
         return "groq"
 
     # 2. Check explicit model configuration
+    local = _local_env()
     raw = (
         _env("UNDERSTANDING_AGENT_MODEL")
         or _env("LLM_MODEL")
         or _installed().get("UNDERSTANDING_AGENT_MODEL")
         or _installed().get("LLM_MODEL")
+        or local.get("UNDERSTANDING_AGENT_MODEL")
+        or local.get("LLM_MODEL")
         or ""
     ).strip().lower()
 
@@ -199,14 +209,12 @@ def resolve_api_key_info() -> tuple[str, str]:
         if val:
             return val, _GLOBAL_CONFIG
 
-    # Check local .env in repo root / current dir
     local_env_path = os.path.join(os.getcwd(), ".env")
-    if os.path.isfile(local_env_path):
-        local_cfg = _parse_env_file(local_env_path)
-        for key_name in ("UNDERSTANDING_AGENT_API_KEY", "GROQ_API_KEY", "LLM_API_KEY"):
-            val = _usable_secret(local_cfg.get(key_name, ""))
-            if val:
-                return val, local_env_path
+    local_cfg = _local_env()
+    for key_name in ("UNDERSTANDING_AGENT_API_KEY", "GROQ_API_KEY", "LLM_API_KEY"):
+        val = _usable_secret(local_cfg.get(key_name, ""))
+        if val:
+            return val, local_env_path
 
     return "", "none"
 

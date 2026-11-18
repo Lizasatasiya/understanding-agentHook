@@ -16,7 +16,7 @@ Three deployable pieces, one pipeline:
 │       understanding-agent    │  queue  │   JIT users/repos        │
 │        (understanding_agent/)│         │   proof-of-defense API   │
 │                              │         └───────────▲──────────────┘
-│  .git/understanding_sessions.db (local SQLite)    │ CI check
+│  pass marker under .git/                          │ CI check
 │  .git/understanding_agent_state.json              │
 │  .git/understanding_sync_queue.json (offline)     │
 └──────────────────────────────┘         scripts/verify_defense.py
@@ -102,7 +102,7 @@ git commit
      13 SCORING & PERSISTENCE
            per-question pass ≥ 70 · overall pass > 75 · abort < 25
            build_session_payload (schema v3, verification REQUIRED)
-           save_session → .git/understanding_sessions.db (SQLite, 0600, prune 500)
+           persona fold → configured Postgres database
            ServerClient.send → central ledger (queue if offline) or legacy telemetry
 ```
 
@@ -138,7 +138,6 @@ numbers are scoped to the current HEAD commit cycle.
 | answer_hygiene.py | 93 | answer text → (suspect, reason) | kill switch env var |
 | interaction.py | 839 | prompts → typed/dictated answers | mac_dictation or whisper (sounddevice/pyaudio); TTS via `say` |
 | session_payload.py | 92 | fields → schema-v3 session dict (single source of schema) | verification is a REQUIRED arg |
-| session_store.py | 547 | session dicts ↔ `.git/understanding_sessions.db` | sqlite unusable → legacy JSON fallback; JSON import once (`.imported` backup) |
 | server_client.py | 149 | session → central ledger / queue | any failure → queue, commit continues |
 | sync_history.py | 120 | local store → backfill batches to the ledger (understanding-agent-sync-history) | legacy rows get git-author resolution; fail-loud (operator command, not a commit path) |
 | push_guard.py | 95 | repo → install health ({healthy, reason}) | pre-push aid: exit 1 + remediation steps when the pre-commit hook is missing |
@@ -175,7 +174,7 @@ scores (descending, including 0). Validated by `checklists.parse_checklist`
 
 | File | Format | Purpose |
 |---|---|---|
-| understanding_sessions.db | SQLite, 0600 | session history (prune: most recent 500 by timestamp, attempt tiebreak) |
+| understanding_agent_verified.json | JSON | pass marker for the commit in progress |
 | understanding_agent_state.json | JSON | attempt/answer state across retries, cached questions per diff_hash |
 | understanding_sync_queue.json | JSON, 0600, ≤500 | sessions queued while the ledger was unreachable |
 | understanding_sessions.json(.imported) | legacy | pre-v0.4 JSON store, imported once, kept as backup |
@@ -191,7 +190,7 @@ questions[], analysis? (master classification+findings), identity?
 
 ## 6. Central ledger (service/)
 
-Schema (SQLAlchemy; SQLite dev, Postgres prod):
+Schema (SQLAlchemy; Postgres):
 
 ```
 organizations 1..* teams 1..* team_members *..* users
@@ -227,7 +226,7 @@ sessions are recorded before the commit hash exists.
 - Malformed master-analysis output → deterministic legacy path (silent).
 - Ledger unreachable → session queued locally, commit proceeds; queue
   drained next run.
-- SQLite unusable → legacy JSON store; commit proceeds.
+- Ledger unreachable → the commit is blocked.
 - Non-interactive context → record-only pass with loud unverified banner.
 - Prune is timestamp-first (attempt_number alone was a bug — new attempt-1
   sessions were pruned over old high-attempt rows).

@@ -90,7 +90,7 @@ graph TD
     QuestionLoop --> DefenseDone
     DefenseDone --> Scoring{"Overall Pass Criteria?<br/>(All >= 70% OR Offline Fallback completed)"}
     
-    Scoring -- "PASSED" --> SaveSuccess["Build session (status: PASSED)<br/>Save to local SQLite db<br/>Sync to Central Ledger<br/>Remove state file<br/>exit(0)"]
+    Scoring -- "PASSED" --> SaveSuccess["Build session (status: PASSED)<br/>Record the persona in Postgres<br/>Remove state file<br/>exit(0)"]
     Scoring -- "FAILED" --> PromptRetry{"Prompt Developer:<br/>'Try Attempt N+1? (y/n)'"}
     
     PromptRetry -- "'y'" --> IncrementAttempt["attempts += 1<br/>Loop back to QuestionLoop"]
@@ -186,7 +186,7 @@ Inspects Git's staged index to identify what files and functions were modified, 
    - `D`: Deleted
 2. **Lockfile & Noise Filtering**: Automatically ignores lockfiles (`package-lock.json`, `poetry.lock`, `Cargo.lock`, `yarn.lock`, etc.).
 3. **Critical Invariant for Non-Code & Unknown Files**:
-   - Files with unknown extensions (e.g. `.pem`, `.env`, `.sqlite`) or non-code extensions (`.yaml`, `.json`, `.md`) are **not discarded**.
+   - Files with unknown extensions (e.g. `.pem`, `.env`) or non-code extensions (`.yaml`, `.json`, `.md`) are **not discarded**.
    - They are tracked with a synthetic function `<module>`.
    - *Why?* If non-code files were omitted, a commit containing only a leaked private key or configuration file would cause `cli.py` to exit 0 without running security gates!
 4. **Function-Level AST / Regex Parsing**:
@@ -265,7 +265,7 @@ If any critical finding is found, it prints actionable unstage commands (`git re
 Builds a multi-faceted profile of the target repository's technology stack:
 - Primary and secondary languages
 - Frontend and backend frameworks
-- Persistence engines (Postgres, Redis, MongoDB, SQLite)
+- Persistence engines (Postgres, Redis, MongoDB)
 - ORM/Data access layers (Prisma, SQLAlchemy, TypeORM, Hibernate)
 - Test runners (pytest, jest, vitest, go test)
 - Cloud & container infrastructure (Docker, Kubernetes, Terraform)
@@ -375,7 +375,7 @@ Instead of failing or bypassing security silently:
 2. Deterministic credential gates and coding standards audits **still execute and block if violated**.
 3. Bypasses the interactive oral defense loop.
 4. Generates a session payload stamped with `verification="agent-unverified"` (or `"unattended-unverified"`).
-5. Persists the session locally to SQLite and pushes it to the central ledger.
+5. Records the persona in the configured Postgres database.
 6. Exits `0`. CI pipelines can then require human sign-off on agent-authored commits.
 
 ---
@@ -417,7 +417,7 @@ Synthesizes a structured summary of the changes:
 - Module: [`change_intelligence.py`](file:///Users/liza/Documents/PRE-COMMIT-DEMO/understanding-agent-hook/understanding_agent/change_intelligence.py)
 
 #### Attempt State Management
-- Reads `.git/understanding_agent_state.json` and loads prior commit sessions from `.git/understanding_sessions.db`.
+- Reads `.git/understanding_agent_state.json`.
 - Scoped to the current Git HEAD commit.
 - Calculates attempt number: `attempts = max(recorded_attempts + 1, state_attempts + 1, 1)`.
 
@@ -497,7 +497,7 @@ If the developer failed a previous attempt and retries without changing the stag
 
 #### Involved Modules
 - Payload Builder: [`build_session_payload()`](file:///Users/liza/Documents/PRE-COMMIT-DEMO/understanding-agent-hook/understanding_agent/session_payload.py)
-- Storage Engine: [`save_session()`](file:///Users/liza/Documents/PRE-COMMIT-DEMO/understanding-agent-hook/understanding_agent/session_store.py)
+- Storage: the configured Postgres database.
 - Network Client: [`ServerClient`](file:///Users/liza/Documents/PRE-COMMIT-DEMO/understanding-agent-hook/understanding_agent/server_client.py)
 
 #### Passing Logic
@@ -509,7 +509,7 @@ If the developer failed a previous attempt and retries without changing the stag
    - **Fail-Open Exemption**: If external LLM APIs are unreachable and offline fallback questions were presented, completing all answers without timeouts marks the session as `PASSED` (preventing developer blockage while recording `llm-unverified`).
 3. **Storage & Sync**:
    - Builds Schema v3 session dictionary via `build_session_payload()`.
-   - Saves record to local SQLite database: `.git/understanding_sessions.db` (permissions `0600`, auto-pruned to 500 records).
+   - Records the persona in the configured Postgres database.
    - Asynchronously sends session to the team's central server via `ServerClient().send()`. If offline, enqueues to `.git/understanding_sync_queue.json`.
 4. **Resolution**:
    - **Passed**: Prints `✓ Commit allowed: Understanding demonstrated.`, removes `.git/understanding_agent_state.json`, and exits with status `0`.
@@ -555,7 +555,7 @@ If the developer failed a previous attempt and retries without changing the stag
 | File Path | Format | Lifetime | Purpose |
 | :--- | :--- | :--- | :--- |
 | `.git/understanding_agent_state.json` | JSON | Transient across retry attempts; deleted on successful commit. | Tracks attempt count, HEAD hash, diff hash, and cached question scores. |
-| `.git/understanding_sessions.db` | SQLite 3 | Persistent local store (0600 permissions, pruned at 500 rows). | Local audit trail of all pass/fail defense sessions. |
+| developer_personas | Postgres | Running aggregate per git email. | Interview result after a finished or stopped defense. |
 | `.git/understanding_sync_queue.json` | JSON | Persistent until network restores. | Offline queue of session payloads waiting to sync to the central server. |
 
 ---

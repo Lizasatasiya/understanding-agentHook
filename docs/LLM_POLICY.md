@@ -77,7 +77,7 @@ Hard rules, each enforced in code:
   self-preference bias.
 - The judge scores concept coverage only — never language, grammar, or
   spelling; mixed-language and transliterated answers are legitimate
-  (Pokerface P1). Multilingual judging clauses live in both evaluator
+  Multilingual judging clauses live in both evaluator
   prompts and are frozen contract.
 - Offline fallback evaluation is deterministic; such sessions are recorded
   `llm-unverified` — a fallback pass is never recorded as verified.
