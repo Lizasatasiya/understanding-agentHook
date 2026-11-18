@@ -4,7 +4,7 @@ Developers never log in or configure tokens: git itself mandates author
 metadata, so the hook harvests it at commit time. The central service
 JIT-provisions users/repos from these fields on first sight.
 
-Privacy posture (docs/LLM_POLICY.md + the amended DB architecture doc):
+Privacy posture:
   - user_email is the identity PRIMARY KEY (it is already public in every
     commit the author pushes).
   - machine_id is a one-way hash of the hostname (12 hex chars) — enough to

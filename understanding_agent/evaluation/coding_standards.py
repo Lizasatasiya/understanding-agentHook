@@ -190,7 +190,7 @@ class CodingStandardsChecker:
         # Security checks (secrets, transport, XSS/eval) are NOT run here —
         # they moved to security_lens.SecurityLens (one module owns security:
         # the credential gate hard-blocks, the rest become severity-weighted
-        # questions via security_question_hint). See PLAN.md A0.1.
+        # questions via security_question_hint).
 
         # 1. State & Prop Immutability (React / Frontend)
         if has_react:
@@ -756,7 +756,7 @@ class CodingStandardsChecker:
 
     # Legacy whole-file checks (_check_component_modularity, whole-file
     # _check_input_validation) were removed — replaced by changed-function
-    # scoped versions above. See PLAN.md A0.2/A3.2.
+    # scoped versions above.
 
     # -------------------------------------------------------------------------
     # Terminal Presentation

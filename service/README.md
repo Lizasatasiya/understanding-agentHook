@@ -1,79 +1,41 @@
-# Central Understanding Service (the Judas ledger)
+# Defense service
 
-FastAPI ingestion service for understanding-agentHook session payloads.
-Receives sessions from the pre-commit hook over the org network, JIT-provisions
-developers and repositories from the payload's zero-touch identity block, and
-serves the proof-of-defense lookup that CI/pre-receive uses to detect
-unaudited commits (see ../docs/ENFORCEMENT.md).
+FastAPI process that summarizes a staged change, generates questions, scores answers, and stores a persona aggregate. The hook talks to it over HTTP. Run it from the repo root so it finds `.env`.
 
-## Quick start
+Full setup, including the Supabase pooler URL: [docs/SETUP.md](../docs/SETUP.md). The commit sequence is [docs/WORKFLOW.md](../docs/WORKFLOW.md).
 
-    pip install -r requirements.txt
-    SERVICE_DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:PORT/DATABASE \
-    SERVICE_TEAM_TOKEN=dev-token uvicorn service.app:app --port 8000
+```bash
+pip install -e ".[service]"
+pip install -r service/requirements.txt
+.venv/bin/uvicorn service.app:app --host 127.0.0.1 --port 8000
+```
 
-Point a hook at it from any repo:
+| Variable | Purpose |
+|---|---|
+| `SERVICE_DATABASE_URL` | Postgres URL. Required. Environment, then `.env` |
+| `UNDERSTANDING_AGENT_MODEL` | `nous`, `groq`, `sonnet`, `haiku`, or `org` |
+| `UNDERSTANDING_AGENT_API_KEY` | Key for that model |
+| `SERVICE_TEAM_TOKEN` | `X-Team-Token`. Empty allows unauthenticated local use |
+| `SERVICE_TEAM_SECRET` | HMAC secret for `X-Signature` |
+| `SERVICE_ADMIN_TOKEN` | `X-Admin-Token` on admin routes |
+| `SERVICE_DEFENSE_STEPS` | Default `summary,trivial_gate,questions` |
+| `SERVICE_BYPASS_TRIVIAL` | Skip questions on a trivial diff. Default on |
+| `SERVICE_INTERVIEW_TTL_SECONDS` | Default 1800 |
+| `UNDERSTANDING_AGENT_PASSING_SCORE` | Default 75 |
+| `SERVICE_RETENTION_DAYS` | Default 90 |
 
-    UNDERSTANDING_AGENT_SYNC_URL=http://127.0.0.1:8000 \
-    UNDERSTANDING_AGENT_TEAM_KEY=dev-token \
-    UNDERSTANDING_AGENT_MODE=agent python -m understanding_agent.cli
-
-## Production (Postgres via Docker)
-
-    cd service
-    SERVICE_TEAM_TOKEN=... SERVICE_TEAM_SECRET=... SERVICE_ADMIN_TOKEN=... \
-      docker compose up -d
-
-The service auto-creates its schema on startup (SQLAlchemy `create_all`).
-
-## Environment
-
-| Variable | Purpose | Default |
-|---|---|---|
-| SERVICE_DATABASE_URL | Postgres URL (`postgresql+psycopg://...`). Read from the environment, then `.env`. Required | (none) |
-| SERVICE_TEAM_TOKEN | Required X-Team-Token on ingestion (empty = open, dev only) | (empty) |
-| SERVICE_TEAM_SECRET | HMAC-SHA256 secret for X-Signature verification | (empty) |
-| SERVICE_ADMIN_TOKEN | Required X-Admin-Token on org-structure endpoints | (empty) |
-| SERVICE_RETENTION_DAYS | Days raw answer text is retained; enforced on every startup | 90 |
-| SERVICE_DEFENSE_STEPS | Comma-separated interview steps. Default runs summary, then the trivial bypass, then question generation | summary,trivial_gate,questions |
-| SERVICE_BYPASS_TRIVIAL | After the summary, skip question generation when the hook reports a trivial diff and standards passed | on |
-| SERVICE_INTERVIEW_TTL_SECONDS | How long an in-memory interview stays answerable | 1800 |
-| UNDERSTANDING_AGENT_PASSING_SCORE | Score below this stops the interview on that answer | 75 |
-
-## Endpoints
+The hook uses `UNDERSTANDING_AGENT_SERVER_URL`, `UNDERSTANDING_AGENT_TEAM_TOKEN`, and `UNDERSTANDING_AGENT_TEAM_SECRET`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET  | /api/v1/health | Liveness + API schema_version |
-| POST | /api/v1/sessions | Ingest one session (JIT user/repo, idempotent by session_id) |
-| POST | /api/v1/sessions/batch | Drain the hook's offline queue (`{"sessions": [...]}`) |
-| GET  | /api/v1/defense?repo_slug=&from=&to= | Proof-of-defense rows for CI/pre-receive |
-| POST | /api/v1/defense/start | Summary, trivial bypass, then question generation. Returns questions or action=skip |
-| POST | /api/v1/defense/{defense_id}/answer | Assess one answer. Returns continue, stop, or pass |
-| POST | /api/v1/admin/repositories | Assign a repo to an org/team |
-| POST | /api/v1/admin/members | Add a user to a team |
-| POST | /api/v1/admin/purge | Enforce raw-answer retention NOW (cron-friendly); returns purged count |
+| GET | `/api/v1/health` | Liveness |
+| POST | `/api/v1/defense/start` | Summary, trivial skip, or questions |
+| POST | `/api/v1/defense/{defense_id}/answer` | Score one answer: `continue`, `stop`, or `pass` |
+| GET | `/api/v1/defense` | Ingested session rows for a `repo_slug` |
+| POST | `/api/v1/sessions` | Ingest one session payload |
+| POST | `/api/v1/sessions/batch` | Ingest a batch |
+| POST | `/api/v1/admin/repositories` | Attach a repo to an org and team |
+| POST | `/api/v1/admin/members` | Add a user to a team |
+| POST | `/api/v1/admin/purge` | Null expired raw answers now |
 
-All responses carry `schema_version`.
-
-## Org hierarchy
-
-organizations → teams → team_members(users); repositories.team_id. Sessions
-resolve per developer (user_id), per repo (repo_id), per team (repo.team_id) —
-no free-text attribution. Admin endpoints wire repos/members into the
-hierarchy; everything else JIT-provisions on first sight.
-
-## Privacy & retention
-
-Raw answer text is personal data: retained SERVICE_RETENTION_DAYS (default
-90), then nulled by `purge_expired_answers` (scores and aggregates are kept
-forever). Per-developer score views are HR-adjacent: the dashboard side
-(deferred) must default them OFF and make individual drill-down
-a team opt-in. See the AMENDMENTS section in
-../CENTRALIZED_DATABASE_ARCHITECTURE.md.
-
-## Anti-spoofing ceiling (be honest in reviews)
-
-The shared team token + HMAC proves "someone holding the team secret wrote
-this payload", not "this developer answered honestly". Full per-developer
-attestation is out of scope pre-adoption (documented, deliberate).
+`docker compose up` in this directory starts a local Postgres on port 5433 and can build the service. Hosted Postgres is configured only through `SERVICE_DATABASE_URL`.
