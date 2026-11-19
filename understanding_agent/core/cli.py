@@ -1,4 +1,5 @@
 import sys
+import time
 
 # ----------------------------------------------------------------------------
 # Interpreter self-heal (runs BEFORE any version-sensitive import).
@@ -253,18 +254,11 @@ def main():
         mark_verified_for_commit(project_root, head_commit, diff_hash)
         sys.exit(0)
 
-    # 5e. Judas J2 — agent / non-interactive record-only mode.
-    # Agents (Codex/Claude CLI/etc.) commit via git, so the hook fires — but
-    # no human is present: /dev/tty EOF yields empty answers and aborts at
-    # <25%, meaning an agent literally cannot commit. Model agents as a
-    # first-class UNVERIFIED actor instead of failing them:
-    #   - explicit: UNDERSTANDING_AGENT_MODE=agent (preferred, predictable)
-    #   - auto: no interactive stdin reachable (no TTY and no /dev/tty)
-    # The deterministic gate ABOVE still hard-blocks on live credentials, and
     # 5e. AI Agent Check: Block autonomous AI agents from committing.
-    # When an AI agent (Antigravity, Cursor, Copilot, Claude, Cline, Aider, etc.)
-    # runs git commit, the commit is hard-blocked: pre-commit requires a human
-    # oral defense to verify comprehension and ownership of the staged code.
+    # Agents (Codex/Claude CLI/Cursor etc.) commit via git, so the hook fires,
+    # but no human is present to defend the change. The commit is hard-blocked
+    # with a concise explanation — there is no record-and-pass path for agents.
+    # The deterministic credential gate ABOVE still hard-blocks on live secrets.
     is_agent, agent_name = _detect_agent_execution()
     if is_agent:
         _print_agent_block(agent_name, commit_msg)
@@ -335,26 +329,45 @@ def main():
     BOLD = "\033[1m"
     RESET = "\033[0m"
 
+    # Server-side failures are OUR system's problem, not the developer's:
+    # retry network/downtime issues (2 retries, short backoff), and on any
+    # final failure mark the commit unverified and let it pass (management
+    # policy: never block a commit because the defense system is down).
+    SERVER_RETRIES = int(os.environ.get("UNDERSTANDING_AGENT_SERVER_RETRIES", "2"))
+
+    def _unverified_pass(reason: str) -> None:
+        print(f"\n{YELLOW}{BOLD}Defense system issue: {reason}{RESET}")
+        print(f"{YELLOW}This commit is marked UNVERIFIED (initial checks passed; the model could not be reached) and is allowed.{RESET}\n")
+        mark_verified_for_commit(project_root, head_commit, diff_hash, verified=False)
+        sys.exit(0)
+
     client = DefenseClient()
-    try:
-        started = client.start({
-            "git_name": git_name,
-            "git_email": git_email,
-            "repository": env.get("repository") or "unknown",
-            "branch": env.get("branch") or "unknown",
-            "trivial": False,
-            "standards_failed": bool(failed_standards),
-            "context": json.loads(json.dumps(context, default=str)),
-            "hints": json.loads(json.dumps(hints, default=str)),
-        })
-    except DefenseUnavailable as exc:
-        print(f"\n{RED}The defense server could not run this interview.{RESET}")
-        print(f"{RED}{exc}{RESET}\n")
-        sys.exit(1)
-    except DefenseRejected as exc:
-        print(f"\n{RED}The defense server rejected this interview.{RESET}")
-        print(f"{RED}{exc.detail}{RESET}\n")
-        sys.exit(1)
+    started = None
+    start_error = None
+    for attempt in range(SERVER_RETRIES + 1):
+        try:
+            started = client.start({
+                "git_name": git_name,
+                "git_email": git_email,
+                "repository": env.get("repository") or "unknown",
+                "branch": env.get("branch") or "unknown",
+                "trivial": False,
+                "standards_failed": bool(failed_standards),
+                "context": json.loads(json.dumps(context, default=str)),
+                "hints": json.loads(json.dumps(hints, default=str)),
+            })
+            break
+        except DefenseUnavailable as exc:
+            start_error = str(exc)
+            if attempt < SERVER_RETRIES:
+                time.sleep(2 * (attempt + 1))
+        except DefenseRejected as exc:
+            start_error = exc.detail
+            break
+    if started is None:
+        _unverified_pass(start_error or "the defense server could not be reached")
+    assert started is not None
+
 
     action = started.get("action")
     if action == "skip":
@@ -413,18 +426,24 @@ def main():
                     if retry_text and retry_text.strip():
                         ans_text = retry_text
 
-        try:
-            result = client.answer(defense_id, q.get("question_id") or f"q{i}", ans_text)
-        except DefenseUnavailable as exc:
-            print(f"\n{RED}The defense server could not score this answer.{RESET}")
-            print(f"{RED}{exc}{RESET}\n")
+        result = None
+        answer_error = None
+        for attempt in range(SERVER_RETRIES + 1):
+            try:
+                result = client.answer(defense_id, q.get("question_id") or f"q{i}", ans_text)
+                break
+            except DefenseUnavailable as exc:
+                answer_error = str(exc)
+                if attempt < SERVER_RETRIES:
+                    time.sleep(2 * (attempt + 1))
+            except DefenseRejected as exc:
+                answer_error = exc.detail
+                break
+        if result is None:
             index_lock.release()
-            sys.exit(1)
-        except DefenseRejected as exc:
-            print(f"\n{RED}The defense server rejected this answer.{RESET}")
-            print(f"{RED}{exc.detail}{RESET}\n")
-            index_lock.release()
-            sys.exit(1)
+            _unverified_pass(answer_error or "the defense server could not score the answer")
+        assert result is not None
+
 
         outcome = result.get("action")
         if outcome == "stop":

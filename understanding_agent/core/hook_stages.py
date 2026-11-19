@@ -573,8 +573,13 @@ def is_already_verified_for_commit(project_root: str, head_commit: str, diff_has
     return False
 
 
-def mark_verified_for_commit(project_root: str, head_commit: str, diff_hash: str) -> None:
-    """Mark the current staged diff as verified in pre-commit."""
+def mark_verified_for_commit(project_root: str, head_commit: str, diff_hash: str, verified: bool = True) -> None:
+    """Mark the current staged diff as defended in pre-commit.
+
+    verified=False records an unverified pass (defense system unavailable);
+    the marker must still exist so the prepare-commit-msg stage does not
+    re-interview, but the file records that the model never scored it.
+    """
     import os
     import json
     import time
@@ -586,6 +591,7 @@ def mark_verified_for_commit(project_root: str, head_commit: str, diff_hash: str
                 "head_commit": head_commit,
                 "diff_hash": diff_hash,
                 "timestamp": time.time(),
+                "verified": bool(verified),
             }, f)
     except Exception:
         pass
