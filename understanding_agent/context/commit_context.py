@@ -1,11 +1,9 @@
 import os
 import sys
 import subprocess
-import hashlib
-import json
 import ctypes
 import shlex
-from typing import Optional, List, Any, Tuple
+from typing import Optional, List, Tuple
 
 
 def get_head_commit(repo_root: Optional[str] = None) -> str:
@@ -194,8 +192,3 @@ def get_current_commit_message(repo_root: Optional[str] = None) -> str:
         return env_msg.strip()
 
     return ""
-
-
-def compute_diff_hash(changes: Any) -> str:
-    """Compute deterministic SHA-256 hash of detected staged changes."""
-    return hashlib.sha256(json.dumps(changes, sort_keys=True).encode("utf-8")).hexdigest()

@@ -1,6 +1,6 @@
-from .evaluation_models import EvaluationResult
-from ..llm.api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, get_judge_model, fail_open_enabled, log_llm_error
-from ..questions.checklists import (
+from service.interview.results import EvaluationResult
+from service.llm.api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, get_judge_model, fail_open_enabled, log_llm_error
+from service.interview.checklists import (
     parse_checklist,
     aggregate_score,
     verify_offline,

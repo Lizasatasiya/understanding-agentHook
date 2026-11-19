@@ -1,6 +1,6 @@
 import os
 import json
-from ..llm.api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, log_llm_error
+from service.llm.api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, log_llm_error
 
 
 class ChangeSummary:

@@ -23,8 +23,6 @@ services:
       SERVICE_DATABASE_URL: postgresql+psycopg://understanding:understanding@db:5432/understanding_ledger
       SERVICE_TEAM_TOKEN: ${SERVICE_TEAM_TOKEN:-}
       SERVICE_TEAM_SECRET: ${SERVICE_TEAM_SECRET:-}
-      SERVICE_ADMIN_TOKEN: ${SERVICE_ADMIN_TOKEN:-}
-      SERVICE_RETENTION_DAYS: ${SERVICE_RETENTION_DAYS:-90}
     ports:
       - "8000:8000"
     depends_on:

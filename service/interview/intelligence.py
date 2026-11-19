@@ -28,9 +28,9 @@ default: the default path is byte-identical to the pre-existing behavior).
 import json
 import os
 
-from ..llm.api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, log_llm_error
-from ..questions.checklists import parse_checklist
-from ..evaluation.coding_standards import load_standards_doc
+from service.llm.api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, log_llm_error
+from service.interview.checklists import parse_checklist
+from service.interview.standards import load_standards_doc
 
 DOMAINS = ("ui", "data_model", "control_flow", "infra_config", "tests", "docs")
 CHANGE_TYPES = ("feature", "fix", "refactor", "config", "docs", "test")
@@ -114,7 +114,7 @@ def _validate_classification(raw) -> dict:
 def _validate_questions(raw_questions, target_count: int, question_generator) -> list:
     if not isinstance(raw_questions, list):
         return []
-    from ..questions.question_generator import QuestionGenerator  # local import: avoid cycle at module load
+    from service.interview.questions import QuestionGenerator
     gen = question_generator or QuestionGenerator()
     valid_types = getattr(gen, "_VALID_TYPES", set())
     out = []
@@ -196,7 +196,7 @@ def build_master_prompt(context: dict, summary: dict, standards_doc: str,
         lines.append("")
     # Deterministic ChangeKind tier (change_kind.py) — always-on even offline;
     # the LLM classification below can refine it, this anchors the focus.
-    from .change_kind import classification_hint_lines
+    from service.interview.change_hints import classification_hint_lines
     ck_lines = classification_hint_lines((context or {}).get("change_kind"))
     if ck_lines:
         lines += ["", *ck_lines]
@@ -236,7 +236,7 @@ def run_master_analysis(context: dict, summary: dict, hints: dict | None = None,
     if not api_key:
         return None
 
-    from ..questions.question_generator import QuestionGenerator  # local import: avoid cycle
+    from service.interview.questions import QuestionGenerator
     gen = question_generator or QuestionGenerator()
     scale, target_count = gen.get_diff_scale(context)
     std = (hints or {}).get("standards") or []

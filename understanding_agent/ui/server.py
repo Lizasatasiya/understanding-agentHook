@@ -157,24 +157,8 @@ def _get_commit_files(commit_hash: str, repo_root: str) -> List[Dict[str, Any]]:
 
 
 def _get_change_summary(commit_id: str, files: List[Dict[str, Any]], repo_root: str) -> Dict[str, str]:
-    """Derive real change summary from git commit information."""
+    """Derive a display summary from git. The model summary is written by the service."""
     if commit_id == "staged":
-        # Attempt to run ChangeSummary if available
-        try:
-            from ..context.change_detector import ChangeDetector
-            from ..context.code_graph import CodeGraph
-            from ..context.context_builder import ContextBuilder
-            from ..context.change_summary import ChangeSummary
-
-            detector = ChangeDetector()
-            changes = detector.detect()
-            if changes.get("files"):
-                graph = CodeGraph()
-                graph.build(changes.get("files") or [])
-                context = ContextBuilder().build(changes, graph)
-                return ChangeSummary().generate(context)
-        except Exception:
-            pass
         return {
             "what_changed": f"Staged modifications across {len(files)} files.",
             "impact": "Code pending commit in current workspace.",

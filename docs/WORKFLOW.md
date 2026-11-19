@@ -1,6 +1,6 @@
 # Workflow
 
-One process. `git commit` runs the hook on the developer machine. The hook reads that staged diff, asks the model about it, and scores the answers. Nothing from a previous commit is reused. When the interview ends, the service stores that developer's questions, answers, and updated persona.
+One process on the developer machine, and one service. `git commit` runs the hook. The hook reads the staged diff and runs the checks that do not need a model. The service writes the summary, the questions, and the scores. Nothing from a previous commit is reused. When the interview ends, the service stores that developer's questions, answers, and updated persona.
 
 The hook entry is `understanding-agent` (`understanding_agent/core/cli.py`). It runs at `pre-commit`. The same command also runs at `prepare-commit-msg`, but that second run only checks a pass marker for this diff. It does not ask again.
 
@@ -16,13 +16,13 @@ The hook entry is `understanding-agent` (`understanding_agent/core/cli.py`). It 
 
 5. **Skip a trivial diff.** Formatting, imports, comments, docs, or type annotations can pass without questions when standards did not fail. The hook writes the pass marker and exits.
 
-6. **Ask the model about this diff only.** Write a new change summary, then generate new questions. A previous attempt, even of the same diff, is not read. Optional master analysis runs only when `UNDERSTANDING_AGENT_MASTER_ANALYSIS` is `on`.
+6. **Ask the server about this diff.** The hook sends the staged context to `POST /api/v1/defense/start`. The server writes the change summary, then generates the questions. Optional master analysis runs on the server only when `UNDERSTANDING_AGENT_MASTER_ANALYSIS` is `on`. The hook does not call the model.
 
-7. **Ask the author, one question at a time.** The hook prints the question and reads a typed or spoken answer, then scores it. Below `UNDERSTANDING_AGENT_PASSING_SCORE` (default 75) the commit stops. Remaining questions are not asked. The next `git commit` starts again at a new first question.
+7. **Ask the author, one question at a time.** The hook prints each question and reads a typed or spoken answer, then `POST`s that answer to `/api/v1/defense/{defense_id}/answer`. The server scores it. Below `UNDERSTANDING_AGENT_PASSING_SCORE` (default 75) the server returns `stop` and the commit ends. Remaining questions are not asked. The next `git commit` starts again at a new first question.
 
-8. **Allow the commit.** When every answer passes, the hook writes a pass marker so `prepare-commit-msg` can see that this diff was defended. The git index stays locked while the questions are on screen. The marker is dropped after that commit stage.
+8. **Allow the commit.** When the server returns `pass`, the hook writes a pass marker so `prepare-commit-msg` can see that this diff was defended. The git index stays locked while the questions are on screen. The marker is dropped after that commit stage.
 
-9. **Update the developer persona.** On a pass or a stop, the hook sends the questions and answers from this interview to `POST /api/v1/persona`. The service appends those rows to that git email and rewrites the persona summary from the running scores. The next commit does not read them. If the service cannot be reached, the allow or block decision still stands.
+9. **Update the developer persona.** The server does this when it returns `pass` or `stop`. It appends the questions and answers from this interview and rewrites the persona summary. The next commit does not read them. If the server cannot be reached, the commit stops.
 
 If the model returns no questions, the commit stops unless `UNDERSTANDING_AGENT_FAIL_MODE` is open.
 
@@ -34,4 +34,4 @@ One `developer_exchanges` row per question asked: the question, the answer, the 
 
 There is no session table. A later commit of the same diff starts from a new summary and a new first question.
 
-The model key is read on the machine that runs the hook: process environment, then `~/.config/understanding-agent/.env`, then a `.env` in the working directory. The persona write uses `UNDERSTANDING_AGENT_SERVER_URL`.
+The model key is read by the service, from the process environment, then `~/.config/understanding-agent/.env`, then a `.env` in the directory where the service was started. The hook only needs `UNDERSTANDING_AGENT_SERVER_URL`.

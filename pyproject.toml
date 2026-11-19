@@ -8,21 +8,20 @@ version = "0.4.0"
 description = "Oral-defense pre-commit hook: credential gate, coding-standards audit, LLM questions with checklist-based evaluation"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["openai>=1.40"]
+dependencies = []
 
 [project.optional-dependencies]
 voice = ["sounddevice", "openai-whisper", "numpy"]
 ui = ["fastapi", "uvicorn", "pydantic>=2"]
-service = ["fastapi", "uvicorn", "sqlalchemy>=2", "pydantic>=2"]
+service = ["fastapi", "uvicorn", "sqlalchemy>=2", "pydantic>=2", "openai>=1.40"]
 
 [project.scripts]
 understanding-agent = "understanding_agent.core.cli:main"
 understanding-agent-ui = "understanding_agent.ui.server:run"
-understanding-agent-push-guard = "understanding_agent.core.push_guard:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["understanding_agent*"]
+include = ["understanding_agent*", "service*"]
 
 [tool.setuptools.package-data]
 understanding_agent = ["ui/*"]

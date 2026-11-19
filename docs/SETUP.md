@@ -1,6 +1,6 @@
 # Setup and test
 
-Do this from a checkout of this repo. You need Python 3.10 or newer, a Postgres database, and a model API key. The hook runs on your machine. It asks you to explain the staged change. The service only stores the result against your git email.
+Do this from a checkout of this repo. You need Python 3.10 or newer, a Postgres database, and a model API key on the service. The hook runs on your machine, does the local checks, and asks the service to run the model.
 
 Use a throwaway git repo for the commit tests. Do not try the first run inside a repo you care about.
 
@@ -13,7 +13,7 @@ pip install -e ".[service]"
 pip install -r service/requirements.txt
 ```
 
-`openai` comes with the package. The service extra adds FastAPI, uvicorn, SQLAlchemy, and pydantic. `service/requirements.txt` adds the Postgres driver.
+The service extra adds FastAPI, uvicorn, SQLAlchemy, pydantic, and the model client. `service/requirements.txt` adds the Postgres driver.
 
 Voice answers are optional. `pip install -e ".[voice]"` enables them. Typed answers work without it.
 
@@ -31,9 +31,9 @@ SERVICE_DATABASE_URL=postgresql+psycopg://postgres.PROJECT_REF:PASSWORD@aws-1-RE
 
 Use the Supabase session pooler string from the project Connect dialog (port 5432). The direct host `db.<project>.supabase.co` is IPv6-only and fails on a network that cannot route IPv6. The pooler username is `postgres.<project-ref>`. Percent-encode reserved characters in the password (`?` is `%3F`, `/` is `%2F`, `#` is `%23`, `@` is `%40`) and keep `sslmode=require`.
 
-Leave `SERVICE_TEAM_TOKEN` unset for this test. An empty token means the local service accepts the persona post without a signature.
+Leave `SERVICE_TEAM_TOKEN` unset for the local test. The service reads that variable from the process environment, not from `.env`. An empty value accepts the interview without `X-Team-Token`.
 
-`UNDERSTANDING_AGENT_PASSING_SCORE` defaults to 75. A lower score stops the commit and does not ask the remaining questions.
+`UNDERSTANDING_AGENT_PASSING_SCORE` defaults to 75. A lower score stops the commit and does not ask the remaining questions. The service reads it. Restart the service after changing it.
 
 ## 3. Start the service
 
@@ -63,24 +63,28 @@ git config user.email "you@example.com"
 
 Use the email you will look up later. The persona row is keyed by this email.
 
-Point both hook stages at the `understanding-agent` binary in this checkout. Replace the path and the API key.
+Point both hook stages at the `understanding-agent` binary in this checkout. Replace the path.
 
 ```bash
 mkdir -p .git/hooks
 cat > .git/hooks/pre-commit << 'EOF'
 #!/bin/sh
-export UNDERSTANDING_AGENT_MODEL=nous
-export UNDERSTANDING_AGENT_API_KEY=your-key
 export UNDERSTANDING_AGENT_SERVER_URL=http://127.0.0.1:8000
 exec /ABSOLUTE/PATH/TO/understanding-agentHook/.venv/bin/understanding-agent
 EOF
 cp .git/hooks/pre-commit .git/hooks/prepare-commit-msg
-chmod +x .git/hooks/pre-commit .git/hooks/prepare-commit-msg
+cat > .git/hooks/post-commit << 'EOF'
+#!/bin/sh
+GIT_DIR="$(git rev-parse --git-dir 2>/dev/null)" || exit 0
+rm -f "$GIT_DIR/understanding_agent_verified.json"
+exit 0
+EOF
+chmod +x .git/hooks/pre-commit .git/hooks/prepare-commit-msg .git/hooks/post-commit
 ```
 
-`pre-commit` asks the questions. `prepare-commit-msg` runs next and only checks that this same diff just passed. It must not ask again. If that second file is missing, a passed interview can still be rejected.
+`pre-commit` runs the local checks and the interview. `prepare-commit-msg` runs next and only checks that this same diff just passed. It must not ask again. `post-commit` deletes that pass marker so the next commit starts clean. If `prepare-commit-msg` is missing, a passed interview can still be rejected.
 
-If `/etc/understanding-agent/config.env` already contains `UNDERSTANDING_AGENT_SERVER_URL`, the hook uses that file and ignores the server variable in this script. The model key in this script is still required, because git does not load the checkout's `.env`.
+Do not put the model key in this script. If `/etc/understanding-agent/config.env` already contains `UNDERSTANDING_AGENT_SERVER_URL`, the hook uses that file and ignores the server variable here.
 
 ## 5. Pass a real change
 
@@ -141,7 +145,7 @@ PY
 
 You should see one persona row for `you@example.com`, with a pass count and a fail count after steps 5 and 6, and one line per question that was actually asked. The failed interview is included. Questions that were never asked are absent.
 
-The service being down does not change the allow or block decision. It only means this check stays empty. Start the service and run the interview again if the row is missing.
+If the service cannot be reached, the commit stops and this check stays empty. Start the service and run the interview again.
 
 ## 9. Skip a trivial edit
 
@@ -153,4 +157,61 @@ git add calc.py
 git commit -m "Comment the adder"
 ```
 
-A comment-only, formatting-only, import-only, or docs-only diff can pass with no questions. A real logic change goes through the questions again, from the start.
+A comment-only, formatting-only, import-only, or docs-only diff can pass with no questions and without calling the service. A real logic change goes through the questions again, from the start.
+
+## 10. Run the same test from another machine
+
+The service stays on the machine from steps 1–3. The other machine gets only the hook. It does not get the model key, and it does not need this repo's `.env`.
+
+On the service machine, stop the process that is bound to `127.0.0.1` and start it on the network interface the other machine can reach:
+
+```bash
+cd /ABSOLUTE/PATH/TO/understanding-agentHook
+.venv/bin/uvicorn service.app:app --host 0.0.0.0 --port 8000
+```
+
+Find this machine's address, for example `192.168.1.20`, and confirm from the other machine:
+
+```bash
+curl -s http://192.168.1.20:8000/api/v1/health
+```
+
+A healthy response is `{"status":"ok","schema_version":1}`. If that fails, the service host or a firewall is still blocking port 8000.
+
+To require a shared token, export it in the same shell that starts uvicorn. A `SERVICE_TEAM_TOKEN` line in `.env` is ignored.
+
+```bash
+export SERVICE_TEAM_TOKEN=dev-token
+.venv/bin/uvicorn service.app:app --host 0.0.0.0 --port 8000
+```
+
+On the other machine, install the hook for every repo. Python 3.10 or newer is required. The installer must be root.
+
+When that machine has a checkout of this repo:
+
+```bash
+cd /ABSOLUTE/PATH/TO/understanding-agentHook
+sudo bash install.sh --server http://192.168.1.20:8000 --team-token dev-token
+```
+
+When it does not have a checkout, the installer downloads the hook from GitHub. The account running the installer needs read access to that private repo. Replace `main` with the branch you want installed.
+
+```bash
+REF=main
+curl -fsSL "https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/${REF}/install.sh" \
+  | sudo REF="$REF" bash -s -- --server http://192.168.1.20:8000 --team-token dev-token
+```
+
+`--team-token` must match `SERVICE_TEAM_TOKEN` on the service. The installer writes the server URL and the token to `/etc/understanding-agent/config.env`. It does not write a model key. Once that file exists, the hook ignores `UNDERSTANDING_AGENT_SERVER_URL` in a shell.
+
+Then repeat steps 5, 6, and 7 in a scratch repo on that machine. Do not copy the hook script from step 4. `git commit` uses the system hook. The questions are printed on that machine. The service terminal on the first machine shows the model calls. Step 8 still runs on the service machine, using the git email from the scratch repo.
+
+Remove the hook from the other machine with `sudo bash install.sh --uninstall` from a checkout, or with the same curl command and `--uninstall` instead of `--server`:
+
+```bash
+REF=main
+curl -fsSL "https://raw.githubusercontent.com/Lizasatasiya/understanding-agentHook/${REF}/install.sh" \
+  | sudo REF="$REF" bash -s -- --uninstall
+```
+
+That clears the system hooks path, `/etc/understanding-agent`, and `/usr/local/share/understanding-agent`. A scratch repo that used step 4 instead is uninstalled by deleting `.git/hooks/pre-commit`, `.git/hooks/prepare-commit-msg`, and `.git/hooks/post-commit`.

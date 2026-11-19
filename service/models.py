@@ -1,4 +1,4 @@
-"""Org records and the per-developer persona.
+"""Per-developer persona and the questions they were asked.
 
 Each developer has one persona row and one row per question they were asked.
 Those rows are never read back when the next diff is assessed.
@@ -13,7 +13,6 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
-    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -27,26 +26,6 @@ def _now():
     return func.now()
 
 
-class Organization(Base):
-    __tablename__ = "organizations"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), server_default=_now())
-
-
-class Team(Base):
-    __tablename__ = "teams"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    org_id: Mapped[int] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"))
-    __table_args__ = (UniqueConstraint("org_id", "name", name="uq_team_per_org"),)
-
-    @property
-    def full_name(self) -> str:
-        return f"{self.name}"
-
-
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -58,26 +37,6 @@ class User(Base):
         DateTime(timezone=True), server_default=_now())
     last_active_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=_now(), onupdate=_now())
-
-
-class TeamMember(Base):
-    __tablename__ = "team_members"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    team_id: Mapped[int] = mapped_column(ForeignKey("teams.id", ondelete="CASCADE"))
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
-    __table_args__ = (UniqueConstraint("team_id", "user_id", name="uq_member_per_team"),)
-
-
-class Repository(Base):
-    __tablename__ = "repositories"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    repo_slug: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    platform: Mapped[str] = mapped_column(String(50), default="custom")
-    remote_url: Mapped[str] = mapped_column(String(1000), default="")
-    team_id: Mapped[int | None] = mapped_column(
-        ForeignKey("teams.id", ondelete="SET NULL"), nullable=True)
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), server_default=_now())
 
 
 class DeveloperPersona(Base):

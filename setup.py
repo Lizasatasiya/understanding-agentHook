@@ -10,13 +10,10 @@ setup(
         "console_scripts": [
             "understanding-agent = understanding_agent.core.cli:main",
             "understanding-agent-ui = understanding_agent.ui.server:run",
-            "understanding-agent-push-guard = understanding_agent.core.push_guard:main",
         ]
     },
     python_requires=">=3.10",
-    install_requires=[
-        "openai>=1.40",
-    ],
+    install_requires=[],
     extras_require={
         "voice": [
             "sounddevice",
@@ -34,6 +31,7 @@ setup(
             "uvicorn",
             "sqlalchemy>=2",
             "pydantic>=2",
+            "openai>=1.40",
         ],
     },
 )

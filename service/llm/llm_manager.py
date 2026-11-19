@@ -232,48 +232,6 @@ def describe_api_key(api_key: str | None = None) -> str:
     return f"key from {source} (length {len(used or '')}, starts with {prefix!r})"
 
 
-class LLMManager:
-    """Single entry point for LLM endpoint configuration.
-
-    api_utils._nous_request_once consumes this for the actual HTTP call, so
-    every caller (summary, questions, evaluation, follow-up) automatically
-    follows whatever provider is configured here.
-    """
-
-    def __init__(self):
-        self._base_url = None
-        self._model = None
-        self._api_key = None
-
-    @property
-    def provider(self) -> str:
-        return get_provider()
-
-    @property
-    def base_url(self) -> str:
-        if self._base_url is None:
-            self._base_url = resolve_base_url()
-        return self._base_url
-
-    @property
-    def model(self) -> str:
-        if self._model is None:
-            self._model = resolve_model()
-        return self._model
-
-    @property
-    def api_key(self) -> str:
-        if self._api_key is None:
-            self._api_key = resolve_api_key()
-        return self._api_key
-
-    def reset(self):
-        """Drop cached resolutions (used by tests that patch env vars)."""
-        self._base_url = None
-        self._model = None
-        self._api_key = None
-
-
 # ---------------------------------------------------------------------------
 # Thinking / reasoning control
 # ---------------------------------------------------------------------------

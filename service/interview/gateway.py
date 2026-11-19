@@ -1,16 +1,16 @@
-"""The only service module that calls a model.
+"""Sequences the model steps for one interview.
 
-Summary, question generation, and answer assessment stay behind this gateway
-so the interview flow can be reordered without the hook knowing about models.
+Summary, then questions, then one score per answer. The defense state
+machine calls this gateway. The hook does not.
 """
 
-from understanding_agent.context.change_intelligence import (
+from service.interview.intelligence import (
     master_analysis_enabled,
     run_master_analysis,
 )
-from understanding_agent.context.change_summary import ChangeSummary
-from understanding_agent.evaluation.answer_evaluator import AnswerEvaluator
-from understanding_agent.questions.question_generator import QuestionGenerator
+from service.interview.questions import QuestionGenerator
+from service.interview.scoring import AnswerEvaluator
+from service.interview.summary import ChangeSummary
 
 
 class ModelGateway:
@@ -22,7 +22,12 @@ class ModelGateway:
         summary = self.summarizer_cls().generate(context or {})
         return summary if isinstance(summary, dict) else {}
 
-    def questions(self, payload: dict, summary: dict) -> list:
+    def questions(self, payload: dict, summary: dict) -> dict:
+        """Summary is already written. Next the model writes the questions.
+
+        Optional master analysis runs first when enabled. Fallback questions
+        are dropped. Findings are advisory and come back with the questions.
+        """
         context = payload.get("context") or {}
         hints = payload.get("hints") or {}
         env = {
@@ -31,12 +36,14 @@ class ModelGateway:
         }
         generator = self.generator_cls()
         analysis = None
+        findings = []
         if master_analysis_enabled():
             analysis = run_master_analysis(
                 context, summary, hints=hints, env=env, question_generator=generator,
             )
         if analysis and analysis.get("questions"):
             raw = generator.validate(analysis["questions"])
+            findings = list(analysis.get("findings") or [])
         else:
             raw = generator.validate(generator.generate(context, summary, hints, env=env))
         fresh = []
@@ -46,7 +53,7 @@ class ModelGateway:
             question = dict(question)
             question["question_id"] = question.get("question_id") or f"q{index}"
             fresh.append(question)
-        return fresh
+        return {"questions": fresh, "findings": findings}
 
     def assess(self, question: dict, answer_text: str, context: dict, summary: dict):
         return self.evaluator_cls().evaluate(
