@@ -1,6 +1,8 @@
-# Setup
+# Setup and test
 
-This is the path to run the defense service and take one commit through the hook. Do it from a checkout of this repo. Python 3.10 or newer.
+Do this from a checkout of this repo. You need Python 3.10 or newer, a Postgres database, and a model API key. The hook runs on your machine. It asks you to explain the staged change. The service only stores the result against your git email.
+
+Use a throwaway git repo for the commit tests. Do not try the first run inside a repo you care about.
 
 ## 1. Install
 
@@ -8,91 +10,147 @@ This is the path to run the defense service and take one commit through the hook
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[service]"
-```
-
-`openai` is installed with the package. The service extra adds FastAPI, uvicorn, SQLAlchemy, and pydantic. The service also needs `psycopg[binary]`:
-
-```bash
 pip install -r service/requirements.txt
 ```
 
-## 2. Configure the service
+`openai` comes with the package. The service extra adds FastAPI, uvicorn, SQLAlchemy, and pydantic. `service/requirements.txt` adds the Postgres driver.
 
-Put this in `.env` at the repo root. The service reads the file from the directory you start it in, so start uvicorn from the repo root.
+Voice answers are optional. `pip install -e ".[voice]"` enables them. Typed answers work without it.
+
+## 2. Configure
+
+Create `.env` in this repo root. Do not commit it.
 
 ```bash
 UNDERSTANDING_AGENT_MODEL=nous
 UNDERSTANDING_AGENT_API_KEY=your-key
 SERVICE_DATABASE_URL=postgresql+psycopg://postgres.PROJECT_REF:PASSWORD@aws-1-REGION.pooler.supabase.com:5432/postgres?sslmode=require
-SERVICE_TEAM_TOKEN=dev-token
 ```
 
-`UNDERSTANDING_AGENT_MODEL` is `nous`, `groq`, `sonnet`, `haiku`, or `org`. The key and model are also read from `~/.config/understanding-agent/.env` if they are not in the process environment. The process environment wins.
+`UNDERSTANDING_AGENT_MODEL` is `nous`, `groq`, `sonnet`, `haiku`, or `org`.
 
-Use the Supabase **session pooler** string from the project Connect dialog (port 5432). The direct host `db.<project>.supabase.co` is IPv6-only and will fail on a network that cannot route IPv6. The pooler username is `postgres.<project-ref>`, not `postgres`. Percent-encode reserved characters in the password (`?` is `%3F`, `/` is `%2F`, `#` is `%23`, `@` is `%40`) and keep `sslmode=require`.
+Use the Supabase session pooler string from the project Connect dialog (port 5432). The direct host `db.<project>.supabase.co` is IPv6-only and fails on a network that cannot route IPv6. The pooler username is `postgres.<project-ref>`. Percent-encode reserved characters in the password (`?` is `%3F`, `/` is `%2F`, `#` is `%23`, `@` is `%40`) and keep `sslmode=require`.
 
-An exported `SERVICE_DATABASE_URL` overrides `.env`.
+Leave `SERVICE_TEAM_TOKEN` unset for this test. An empty token means the local service accepts the persona post without a signature.
 
-Optional service settings:
-
-| Variable | Default | Effect |
-|---|---|---|
-| `SERVICE_TEAM_SECRET` | empty | Require HMAC `X-Signature` on defense and session posts |
-| `SERVICE_ADMIN_TOKEN` | empty | Require `X-Admin-Token` on `/api/v1/admin/*` |
-| `SERVICE_DEFENSE_STEPS` | `summary,trivial_gate,questions` | Interview order |
-| `SERVICE_BYPASS_TRIVIAL` | on | Skip questions for a trivial diff when standards passed |
-| `SERVICE_INTERVIEW_TTL_SECONDS` | 1800 | How long an interview can still be answered |
-| `UNDERSTANDING_AGENT_PASSING_SCORE` | 75 | Score below this stops the interview |
-| `SERVICE_RETENTION_DAYS` | 90 | How long raw answer text on session rows is kept |
+`UNDERSTANDING_AGENT_PASSING_SCORE` defaults to 75. A lower score stops the commit and does not ask the remaining questions.
 
 ## 3. Start the service
+
+From this repo root, so uvicorn can see `.env`:
 
 ```bash
 .venv/bin/uvicorn service.app:app --host 127.0.0.1 --port 8000
 ```
 
-Check it:
+In another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8000/api/v1/health
 ```
 
-A healthy response is `{"status":"ok","schema_version":1}`. Startup fails if Postgres cannot be reached. The schema is created on startup.
+A healthy response is `{"status":"ok","schema_version":1}`. If Postgres cannot be reached, the process fails during startup. Leave this process running while you commit.
 
-Docker Compose in `service/` starts a local Postgres on port 5433 and can build the service image. Use it only when you are not using the hosted database. The image still needs `SERVICE_DATABASE_URL`.
+## 4. Make a scratch repo and install the hook
 
-## 4. Point a test repo at the service
+```bash
+mkdir -p ~/hook-test
+cd ~/hook-test
+git init
+git config user.name "Test Developer"
+git config user.email "you@example.com"
+```
 
-In a separate git repo that has `user.name` and `user.email` set:
+Use the email you will look up later. The persona row is keyed by this email.
+
+Point both hook stages at the `understanding-agent` binary in this checkout. Replace the path and the API key.
 
 ```bash
 mkdir -p .git/hooks
 cat > .git/hooks/pre-commit << 'EOF'
 #!/bin/sh
+export UNDERSTANDING_AGENT_MODEL=nous
+export UNDERSTANDING_AGENT_API_KEY=your-key
 export UNDERSTANDING_AGENT_SERVER_URL=http://127.0.0.1:8000
-export UNDERSTANDING_AGENT_TEAM_TOKEN=dev-token
 exec /ABSOLUTE/PATH/TO/understanding-agentHook/.venv/bin/understanding-agent
 EOF
 cp .git/hooks/pre-commit .git/hooks/prepare-commit-msg
 chmod +x .git/hooks/pre-commit .git/hooks/prepare-commit-msg
 ```
 
-Replace the `exec` path with this checkout's venv. Stage a real code change and run `git commit`. You should see the local standards report, then questions. A passing last answer allows the commit. A low score aborts it. A formatting-only change can skip the questions.
+`pre-commit` asks the questions. `prepare-commit-msg` runs next and only checks that this same diff just passed. It must not ask again. If that second file is missing, a passed interview can still be rejected.
 
-If `/etc/understanding-agent/config.env` already contains `UNDERSTANDING_AGENT_SERVER_URL`, the hook ignores the variables in the script and uses that file.
+If `/etc/understanding-agent/config.env` already contains `UNDERSTANDING_AGENT_SERVER_URL`, the hook uses that file and ignores the server variable in this script. The model key in this script is still required, because git does not load the checkout's `.env`.
 
-## 5. Install for every repo on a machine
-
-`install.sh` is the admin install. It needs root, a server URL, and a team token. The model key stays on the server.
+## 5. Pass a real change
 
 ```bash
-sudo bash install.sh --server "http://127.0.0.1:8000" --team-token "dev-token"
+printf 'def add(a, b):\n    return a + b\n' > calc.py
+git add calc.py
+git commit -m "Add add()"
 ```
 
-That writes `/etc/understanding-agent/config.env` and sets the system `core.hooksPath`. `sudo bash install.sh --status` and `--uninstall` report and remove it.
+You should see a standards report, then one or more questions about this diff. Type an answer that explains the function and press Enter before the timer runs out. Answer every question the same way.
 
-## Voice and the local dashboard
+When every score is at least 75, the hook prints that the commit is allowed. Git then opens the message step and finishes the commit without a second interview. `git log -1 --oneline` shows `Add add()`.
 
-Voice input is optional: `pip install -e ".[voice]"`. The hook still accepts typed answers without it.
+## 6. Fail a change
 
-`./start_ui.sh` serves a local commit dashboard. It is separate from the defense service and defaults to port 8000, so stop one before starting the other, or pass `--port`.
+```bash
+printf 'def multiply(a, b):\n    return a * b\n' >> calc.py
+git add calc.py
+git commit -m "Add multiply()"
+```
+
+When the first question appears, answer `I do not know`. The hook prints that understanding was not demonstrated and aborts the commit. It does not ask the later questions. `git status` still shows `calc.py` staged. `git log -1` is still `Add add()`.
+
+## 7. Retry the same diff
+
+Leave the file staged and run `git commit -m "Add multiply()"` again.
+
+The hook writes a new summary and new questions. It starts at question 1. It does not skip a question from the failed try, and it does not reuse that answer. A good answer to every question allows the commit.
+
+## 8. Confirm the persona was saved
+
+From the checkout that owns `.env`, after at least one finished interview:
+
+```bash
+cd /ABSOLUTE/PATH/TO/understanding-agentHook
+.venv/bin/python - << 'PY'
+from sqlalchemy import select
+from service.app import get_state
+from service.models import DeveloperExchange, DeveloperPersona
+
+email = "you@example.com"
+db = get_state().SessionLocal()
+persona = db.execute(
+    select(DeveloperPersona).where(DeveloperPersona.github_username == email)
+).scalar_one_or_none()
+if persona is None:
+    raise SystemExit(f"no persona for {email}")
+print(persona.attempt_count, persona.pass_count, persona.fail_count)
+print(persona.summary)
+rows = db.execute(
+    select(DeveloperExchange).where(DeveloperExchange.persona_id == persona.id)
+).scalars().all()
+for row in rows:
+    print(row.score, row.question_text[:80], row.answer_text[:80])
+db.close()
+PY
+```
+
+You should see one persona row for `you@example.com`, with a pass count and a fail count after steps 5 and 6, and one line per question that was actually asked. The failed interview is included. Questions that were never asked are absent.
+
+The service being down does not change the allow or block decision. It only means this check stays empty. Start the service and run the interview again if the row is missing.
+
+## 9. Skip a trivial edit
+
+After a successful commit, change only a comment:
+
+```bash
+printf '\n# total of two numbers\n' >> calc.py
+git add calc.py
+git commit -m "Comment the adder"
+```
+
+A comment-only, formatting-only, import-only, or docs-only diff can pass with no questions. A real logic change goes through the questions again, from the start.

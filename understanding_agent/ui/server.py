@@ -510,15 +510,8 @@ def create_app(repo_root: Optional[str] = None) -> FastAPI:
 
     @app.post("/understanding-session")
     def receive_session(payload: Dict[str, Any]):
-        """Receive session audit payloads from pre-commit hook and persist them."""
-        # Ensure session_id and timestamp
-        if not payload.get("session_id"):
-            att_no = payload.get("attempt_number", 1)
-            payload["session_id"] = f"sess_{int(time.time()*1000)}_{att_no}"
-        if not payload.get("timestamp"):
-            payload["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%S")
-
-        return {"status": "ignored", "session_id": payload.get("session_id")}
+        """Interviews are not stored."""
+        return {"status": "ignored"}
 
     return app
 

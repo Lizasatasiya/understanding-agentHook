@@ -10,7 +10,6 @@ setup(
         "console_scripts": [
             "understanding-agent = understanding_agent.core.cli:main",
             "understanding-agent-ui = understanding_agent.ui.server:run",
-            "understanding-agent-sync-history = understanding_agent.storage.sync_history:main",
             "understanding-agent-push-guard = understanding_agent.core.push_guard:main",
         ]
     },

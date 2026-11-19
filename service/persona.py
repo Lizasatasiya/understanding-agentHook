@@ -1,8 +1,8 @@
-"""Developer persona aggregates.
+"""Developer persona aggregates and the questions they were asked.
 
 Each finished or stopped interview folds its scores into one row keyed by
-the git email on the commit, then the caller discards the questions and
-answers. This module never writes session rows.
+the git email, and appends the question and answer text for that developer.
+Nothing here is read when the next diff is assessed.
 """
 
 import datetime
@@ -18,7 +18,7 @@ from understanding_agent.llm.api_utils import (
     load_nous_api_key,
 )
 
-from .models import DeveloperPersona, User
+from .models import DeveloperExchange, DeveloperPersona, User
 
 _MAX_CONCEPTS = 40
 
@@ -107,12 +107,33 @@ def _model_summary(facts: dict) -> str:
     return text[:500]
 
 
-def fold_persona(db: Session, git_email: str, git_name: str, *, passed: bool, scored: list) -> None:
-    """Update the running persona from this attempt's scores, then return.
+def _record_exchanges(db: Session, persona: DeveloperPersona, user: User, scored: list) -> None:
+    for item in scored:
+        question = str(item.get("question") or "")[:2000]
+        answer = str(item.get("answer") or "")[:8000]
+        if not question and not answer:
+            continue
+        concepts = []
+        for concept in item.get("missing_concepts") or []:
+            if isinstance(concept, str) and concept.strip():
+                concepts.append(concept.strip()[:200])
+        db.add(DeveloperExchange(
+            persona_id=persona.id,
+            user_id=user.id,
+            question_text=question,
+            answer_text=answer,
+            score=float(item.get("score") or 0),
+            category=str(item.get("category") or "Reasoning")[:100],
+            missing_concepts=concepts[:8],
+            evaluation_feedback=str(item.get("evaluation") or "")[:4000],
+        ))
+
+
+def fold_persona(db: Session, git_email: str, git_name: str, *, passed: bool, scored: list) -> DeveloperPersona:
+    """Update one developer's persona and store the questions and answers from this interview.
 
     The row is keyed by the git email on the commit. `scored` items are
-    `{category, score, missing_concepts}`. The caller must not include
-    question text or answer text.
+    `{question, answer, category, score, missing_concepts, evaluation}`.
     """
     user = get_or_create_user(db, git_email, git_name)
     persona = db.execute(
@@ -165,7 +186,9 @@ def fold_persona(db: Session, git_email: str, git_name: str, *, passed: bool, sc
     persona.missing_concepts = concepts
     persona.last_attempt_at = datetime.datetime.now(datetime.timezone.utc)
 
-    facts = _facts(persona, git_name)
+    facts = _facts(persona, git_name or user.full_name)
     summary = _model_summary(facts) or _deterministic_summary(facts)
     persona.summary = summary
+    _record_exchanges(db, persona, user, scored)
     db.flush()
+    return persona

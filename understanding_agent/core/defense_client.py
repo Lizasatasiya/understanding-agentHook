@@ -115,6 +115,18 @@ class DefenseClient:
             raise DefenseUnavailable("Defense service returned an unreadable response")
         return data
 
+    def record_persona(self, payload: dict) -> None:
+        """Send this interview's questions and answers to the developer's persona.
+
+        A missing server or a failed request leaves the commit decision unchanged.
+        """
+        if not self._base():
+            return
+        try:
+            self._post("/api/v1/persona", payload, 15)
+        except Exception:
+            return
+
     def start(self, payload: dict) -> dict:
         return self._post("/api/v1/defense/start", payload, _START_TIMEOUT)
 
