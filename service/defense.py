@@ -1,11 +1,10 @@
-"""In-memory oral defense. Nothing here is written to the session tables.
+"""In-memory oral defense.
 
-The hook sends one start call after its own non-model checks. This module
-then runs the configured steps: write the summary, optionally bypass a
-trivial change, then ask the model for questions. Each answer is assessed
-on its own later call. An interview lives only until it passes, a partial
-answer stops it, or the timeout elapses. The persona aggregate is the only
-database write.
+One start call writes a summary and questions for that diff. Each answer is
+scored on its own. The interview lives only until it passes, a partial
+answer stops it, or the timeout elapses. When it ends, the developer's
+persona and the questions and answers from this interview are stored.
+The next diff does not read them.
 """
 
 import re
@@ -136,15 +135,18 @@ def start_defense(payload: dict, pipeline: DefensePipeline | None = None) -> dic
     return (pipeline or DefensePipeline()).begin(payload)
 
 
-def _score_item(question: dict, evaluation) -> dict:
+def _score_item(question: dict, evaluation, answer_text: str) -> dict:
     missing = []
     for concept in evaluation.missing_concepts or []:
         if isinstance(concept, str) and concept.strip():
             missing.append(concept.strip()[:200])
     return {
+        "question": question.get("question") or "",
+        "answer": answer_text,
         "category": question.get("type") or "Reasoning",
         "score": float(evaluation.score),
         "missing_concepts": missing[:8],
+        "evaluation": getattr(evaluation, "evaluation", "") or "",
     }
 
 
@@ -169,7 +171,7 @@ def submit_answer(db: Session, defense_id: str, question_id: str, answer_text: s
     gateway = ModelGateway()
     gateway.evaluator_cls = AnswerEvaluator
     evaluation = gateway.assess(question, answer_text, context, summary)
-    scored = _score_item(question, evaluation)
+    scored = _score_item(question, evaluation, answer_text)
     stopped = evaluation.score < threshold
     finished = stopped or cursor + 1 >= len(questions)
     passed = not stopped and finished

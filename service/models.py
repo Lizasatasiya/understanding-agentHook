@@ -1,14 +1,7 @@
-"""Central ledger schema.
+"""Org records and the per-developer persona.
 
-SQLAlchemy 2.0 models for PostgreSQL. JSON columns use the portable sa.JSON
-type (JSONB on Postgres via the dialect where it matters for querying is a
-later optimization; the schema is the contract).
-
-Org hierarchy — the per-developer / per-team / per-repo answer:
-  organizations 1..* teams 1..* team_members *..* users
-  repositories.team_id  → every session row resolves to
-  user_id (per developer), repo_id (per repo), repo.team_id (per team).
-  No free-text attribution anywhere; every query funnels through these FKs.
+Each developer has one persona row and one row per question they were asked.
+Those rows are never read back when the next diff is assessed.
 """
 
 import datetime
@@ -87,56 +80,8 @@ class Repository(Base):
         DateTime(timezone=True), server_default=_now())
 
 
-class SessionRecord(Base):
-    __tablename__ = "sessions"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    session_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    schema_version: Mapped[int] = mapped_column(Integer, default=2)
-    user_id: Mapped[int | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"))
-    repo_id: Mapped[int | None] = mapped_column(
-        ForeignKey("repositories.id", ondelete="CASCADE"))
-    branch: Mapped[str] = mapped_column(String(255), default="unknown")
-    commit_hash: Mapped[str] = mapped_column(String(64), default="")
-    head_commit: Mapped[str] = mapped_column(String(64), default="")
-    diff_hash: Mapped[str] = mapped_column(String(64), default="")
-    attempt_number: Mapped[int] = mapped_column(Integer, default=1)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="FAILED")
-    verification: Mapped[str] = mapped_column(String(50), default="llm-unverified")
-    score: Mapped[float] = mapped_column(Float, default=0.0)
-    violations_count: Mapped[int] = mapped_column(Integer, default=0)
-    machine_id: Mapped[str] = mapped_column(String(50), default="")
-    # JSONB-shaped fidelity columns (never raw diff content)
-    identity: Mapped[dict] = mapped_column(JSON, default=dict)
-    changed_files: Mapped[list] = mapped_column(JSON, default=list)
-    change_summary: Mapped[dict] = mapped_column(JSON, default=dict)
-    standards_report: Mapped[list] = mapped_column(JSON, default=list)
-    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
-    analysis: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), server_default=_now())
-
-
-class SessionQuestion(Base):
-    __tablename__ = "session_questions"
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    session_row_id: Mapped[int] = mapped_column(
-        ForeignKey("sessions.id", ondelete="CASCADE"))
-    question_id: Mapped[str] = mapped_column(String(100), default="")
-    question_text: Mapped[str] = mapped_column(String(2000), default="")
-    answer_text: Mapped[str] = mapped_column(String(8000), default="")
-    answer_retained: Mapped[bool] = mapped_column(default=True)
-    score: Mapped[float] = mapped_column(Float, default=0.0)
-    category: Mapped[str] = mapped_column(String(100), default="general")
-    evaluation_feedback: Mapped[str] = mapped_column(String(4000), default="")
-    answered_in_attempt: Mapped[int] = mapped_column(Integer, default=1)
-    llm_verified: Mapped[bool] = mapped_column(default=False)
-    created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), server_default=_now())
-
-
 class DeveloperPersona(Base):
-    """Running aggregate for one git author. Question and answer text are not stored."""
+    """One running portrait per git author, plus the exchanges that built it."""
 
     __tablename__ = "developer_personas"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -154,3 +99,22 @@ class DeveloperPersona(Base):
     summary: Mapped[str] = mapped_column(String(4000), default="")
     last_attempt_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+
+
+class DeveloperExchange(Base):
+    """One question and the answer that developer gave. Not reused on the next commit."""
+
+    __tablename__ = "developer_exchanges"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    persona_id: Mapped[int] = mapped_column(
+        ForeignKey("developer_personas.id", ondelete="CASCADE"))
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    question_text: Mapped[str] = mapped_column(String(2000), default="")
+    answer_text: Mapped[str] = mapped_column(String(8000), default="")
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    category: Mapped[str] = mapped_column(String(100), default="Reasoning")
+    missing_concepts: Mapped[list] = mapped_column(JSON, default=list)
+    evaluation_feedback: Mapped[str] = mapped_column(String(4000), default="")
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=_now())

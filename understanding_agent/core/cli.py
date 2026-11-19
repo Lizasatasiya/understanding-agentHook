@@ -63,11 +63,9 @@ import os
 import re
 import hashlib
 import subprocess
+from .defense_client import DefenseClient
 from .identity import IdentityDetector
-from ..storage.server_client import ServerClient
-from ..storage.session_store import save_session
-from ..storage.session_payload import build_session_payload
-from ..llm.api_utils import fail_open_enabled, log_llm_error, get_total_token_usage, print_token_usage_summary
+from ..llm.api_utils import fail_open_enabled, log_llm_error, print_token_usage_summary
 
 from ..context.environment_detector import EnvironmentDetector
 from ..context.change_detector import ChangeDetector
@@ -82,12 +80,9 @@ from ..context.formatting_detector import is_commit_formatting_only
 from ..context.commit_context import (
     get_head_commit,
     get_current_commit_message,
-    compute_attempt_key,
-    get_next_attempt_number
 )
 
 from ..questions.question_generator import QuestionGenerator
-from ..questions.followup_generator import FollowUpGenerator
 from ..questions.practice_packs import practice_pack_hint
 
 from ..answers.interaction import Interaction
@@ -121,29 +116,6 @@ from .hook_stages import (
 # Minimum passing score threshold for answer evaluation
 PASSING_SCORE_THRESHOLD = int(os.environ.get("UNDERSTANDING_AGENT_PASSING_SCORE", "75"))
 
-
-def _write_state(state_file: str, attempt_key: str, head_commit, commit_msg,
-                 diff_hash: str, attempts: int, valid_questions: list,
-                 summary: dict | None = None) -> None:
-    """Persist hook state so attempts, answered questions, and change summary survive retries.
-
-    Best-effort: a state-file failure must never abort the commit flow.
-    """
-    try:
-        data = {
-            "attempt_key": attempt_key,
-            "head_commit": head_commit,
-            "commit_message": commit_msg,
-            "diff_hash": diff_hash,
-            "attempts": attempts,
-            "questions": valid_questions,
-        }
-        if summary:
-            data["summary"] = summary
-        with open(state_file, "w") as f:
-            json.dump(data, f)
-    except Exception:
-        pass
 
 def main():
     no_verify_early = _detect_no_verify()
@@ -186,7 +158,6 @@ def main():
     head_commit = get_head_commit(project_root)
     commit_msg = get_current_commit_message(project_root)
     diff_hash = hashlib.sha256(json.dumps(changes, sort_keys=True).encode()).hexdigest()
-    attempt_key = compute_attempt_key(head_commit, diff_hash, commit_msg)
 
     # Check if pre-commit already verified and defended this exact staged change
     if is_already_verified_for_commit(project_root, head_commit, diff_hash):
@@ -225,11 +196,6 @@ def main():
     evidence = collect_evidence(changes.get("files", []), project_root)
     evidence_hint = evidence_question_hint(evidence)
     practice_hint = practice_pack_hint(stack, context, security_hint)
-
-    # Pokerface P3: zero-touch identity (git author metadata) attached to
-    # every session so the central service can JIT-provision developer and
-    # repo records without any login flow.
-    identity = IdentityDetector.resolve(project_root)
 
     # 5c. Security gate FIRST: deterministic critical findings (live
     # credentials) block before any prompt or LLM call. Unlike the oral
@@ -287,38 +253,6 @@ def main():
     is_no_verify = _detect_no_verify(project_root, head_commit, diff_hash)
     if is_no_verify:
         _print_no_verify_block(commit_msg)
-        try:
-            from ..storage.session_store import load_sessions
-            _existing = load_sessions(project_root)
-            nv_attempt = get_next_attempt_number(
-                _existing, head_commit, diff_hash, commit_msg, state_attempts=0
-            )
-        except Exception:
-            nv_attempt = 1
-        blocked_session = build_session_payload(
-            attempt_number=nv_attempt,
-            head_commit=head_commit,
-            commit_message=commit_msg,
-            attempt_key=attempt_key,
-            diff_hash=diff_hash,
-            repository=env.get("repository", "unknown"),
-            branch=env.get("branch", "unknown"),
-            status="FAILED",
-            score=0,
-            changed_files=changes.get("files", []),
-            change_summary={"what_changed": "Blocked: Attempted to bypass pre-commit oral defense using --no-verify."},
-            verification="no-verify-blocked",
-            standards_report=standards_report,
-            violations_count=len(failed_standards),
-            questions=[],
-            identity=identity,
-            evidence=evidence,
-        )
-        try:
-            save_session(project_root, blocked_session)
-            ServerClient().send(blocked_session)
-        except Exception:
-            pass
         sys.exit(1)
 
     # 5d-5. Trivial change exemption (formatting, imports, comments, docs, annotations):
@@ -327,38 +261,6 @@ def main():
     if is_commit_formatting_only(changes, project_root) and not failed_standards:
         print(f"\n\033[92m✓ All staged changes are trivial (formatting, imports, comments, docs, type annotations).\033[0m")
         print(f"\033[92m  No oral defense required — commit allowed.\033[0m\n")
-        try:
-            from ..storage.session_store import load_sessions
-            _existing = load_sessions(project_root)
-            fmt_attempt = get_next_attempt_number(
-                _existing, head_commit, diff_hash, commit_msg, state_attempts=0
-            )
-        except Exception:
-            fmt_attempt = 1
-        fmt_session = build_session_payload(
-            attempt_number=fmt_attempt,
-            head_commit=head_commit,
-            commit_message=commit_msg,
-            attempt_key=attempt_key,
-            diff_hash=diff_hash,
-            repository=env.get("repository", "unknown"),
-            branch=env.get("branch", "unknown"),
-            status="PASSED",
-            score=100,
-            changed_files=changes.get("files", []),
-            change_summary={"what_changed": "Trivial changes (formatting, imports, comments, docs, or type annotations)."},
-            verification="formatting-exempt",
-            standards_report=standards_report,
-            violations_count=0,
-            questions=[],
-            identity=identity,
-            evidence=evidence,
-        )
-        try:
-            save_session(project_root, fmt_session)
-            ServerClient().send(fmt_session)
-        except Exception:
-            pass
         mark_verified_for_commit(project_root, head_commit, diff_hash)
         sys.exit(0)
 
@@ -377,38 +279,6 @@ def main():
     is_agent, agent_name = _detect_agent_execution()
     if is_agent:
         _print_agent_block(agent_name, commit_msg)
-        try:
-            from ..storage.session_store import load_sessions
-            _existing = load_sessions(project_root)
-            ro_attempt = get_next_attempt_number(
-                _existing, head_commit, diff_hash, commit_msg, state_attempts=0
-            )
-        except Exception:
-            ro_attempt = 1
-        blocked_session = build_session_payload(
-            attempt_number=ro_attempt,
-            head_commit=head_commit,
-            commit_message=commit_msg,
-            attempt_key=attempt_key,
-            diff_hash=diff_hash,
-            repository=env.get("repository", "unknown"),
-            branch=env.get("branch", "unknown"),
-            status="FAILED",
-            score=0,
-            changed_files=changes.get("files", []),
-            change_summary={"what_changed": f"Blocked: {agent_name} attempted to commit staged code without human oral defense."},
-            verification="agent-blocked",
-            standards_report=standards_report,
-            violations_count=len(failed_standards),
-            questions=[],
-            identity=identity,
-            evidence=evidence,
-        )
-        try:
-            save_session(project_root, blocked_session)
-            ServerClient().send(blocked_session)
-        except Exception:
-            pass
         sys.exit(1)
 
     # When committing via GUI (e.g. IDE Source Control button), no TTY is attached.
@@ -459,187 +329,25 @@ def main():
 
         if choice in ("1", "fix", "f"):
             print(f"\n{RED}Please resolve the violations listed above before committing.{RESET}\n")
-            try:
-                from ..storage.session_store import load_sessions
-                _existing = load_sessions(project_root)
-                fix_attempt_num = get_next_attempt_number(
-                    _existing, head_commit, diff_hash, commit_msg, state_attempts=0
-                )
-            except Exception:
-                fix_attempt_num = 1
-            session_data = build_session_payload(
-                attempt_number=fix_attempt_num,
-                head_commit=head_commit,
-                commit_message=commit_msg,
-                attempt_key=attempt_key,
-                diff_hash=diff_hash,
-                repository=env.get("repository", "unknown"),
-                branch=env.get("branch", "unknown"),
-                status="FAILED",
-                score=0,
-                changed_files=changes.get("files", []),
-                change_summary={"what_changed": "Staged changes blocked by coding standards."},
-                # No defense happened on this path — record it honestly.
-                verification="llm-unverified",
-                standards_report=standards_report,
-                violations_count=len(failed_standards),
-                questions=[],
-                identity=identity,
-                evidence=evidence,
-            )
-            try:
-                save_session(project_root, session_data)
-                ServerClient().send(session_data)
-            except Exception:
-                pass
             sys.exit(1)
         else:
             print(f"\n{BOLD}{GREEN}✓ Proceeding with questions...{RESET}\n")
 
-    # 6. Question Generator & State Management
-    # Attempt count depends solely on attempts made towards the next commit (under head_commit).
-    # Commit message is NOT checked.
-    state_file = ".git/understanding_agent_state.json"
-    
-    state = {}
-    if os.path.exists(state_file):
-        try:
-            with open(state_file, "r") as f:
-                state = json.load(f)
-        except Exception:
-            pass
-
-    existing_sessions = []
-    try:
-        from ..storage.session_store import load_sessions
-        existing_sessions = load_sessions(project_root)
-    except Exception:
-        pass
-
-    norm_head = (head_commit or "").strip()
-    matching_sessions = [
-        s for s in existing_sessions
-        if (s.get("commit_id") == "staged" or s.get("is_staged") or not s.get("commit_id")) and
-        (s.get("head_commit") or "").strip() == norm_head
-    ]
-    recorded_attempts = [s.get("attempt_number", 0) for s in matching_sessions]
-    max_recorded_attempt = max(recorded_attempts + [len(matching_sessions)], default=0)
-
-    # State belongs to current commit cycle if head matches
-    state_head = (state.get("head_commit") or "").strip()
-    state_matches_head = (state_head == norm_head) if (state_head or norm_head) else True
-    state_attempts = state.get("attempts", 0) if state_matches_head else 0
-
-    # Attempts only depend on how many attempts made to next commit
-    attempts = max(max_recorded_attempt + 1, state_attempts + 1, 1)
-
-    state_matches_diff = state_matches_head and (state.get("diff_hash") == diff_hash)
-
-    # 6b. Change Summary with Diff Caching (Zero-Token Reuse)
-    # If the staged diff hasn't changed, reuse the cached summary to avoid redundant LLM calls.
-    summary = None
-    if state_matches_diff and state.get("summary"):
-        summary = state["summary"]
-    elif state_matches_head:
-        for s in matching_sessions:
-            if s.get("diff_hash") == diff_hash and s.get("change_summary"):
-                summary = s["change_summary"]
-                break
-
-    if not summary:
-        summary = ChangeSummary().generate(context)
-
-    # Cached questions can be reused if the diff hasn't changed
-    # (analysis holds the master-analysis result when that path ran; None
-    # on cached attempts, which reuse recorded questions.)
+    # Every commit is assessed on its own. Nothing from a previous attempt is reused.
+    summary = ChangeSummary().generate(context)
+    question_generator = QuestionGenerator()
     analysis = None
-    cached_questions = state.get("questions", []) if state_matches_diff else []
-
-    # If state has no questions but matching previous session exists for this diff, restore questions & scores
-    if not cached_questions and state_matches_head:
-        candidates = [s for s in matching_sessions if s.get("diff_hash") == diff_hash and s.get("questions")]
-        if candidates:
-            def _rank_sess(s):
-                qs = s.get("questions", [])
-                ans = sum(1 for q in qs if ((q.get("evaluation") or {}).get("score", 0) >= PASSING_SCORE_THRESHOLD or q.get("score", 0) >= PASSING_SCORE_THRESHOLD))
-                return (ans, len(qs), s.get("attempt_number", 0))
-            best_session = max(candidates, key=_rank_sess)
-            cached_questions = []
-            for sq in best_session.get("questions", []):
-                sq_eval = sq.get("evaluation") or {}
-                score = sq_eval.get("score") if isinstance(sq_eval, dict) and "score" in sq_eval else sq.get("score", 0)
-                cq = {
-                    "question_id": sq.get("question_id"),
-                    "question": sq.get("question"),
-                    "type": sq.get("type", "Reasoning"),
-                    "time_limit": sq.get("time_limit_seconds") or sq.get("time_limit", 60),
-                    "expected_concepts": sq.get("expected_concepts", []),
-                    "evaluation_criteria": sq.get("evaluation_criteria", []),
-                    "is_fallback": sq.get("is_fallback", False),
-                    "answer": sq.get("answer", ""),
-                    "status": sq.get("status", ""),
-                    "evaluation": sq_eval,
-                    "response_time_seconds": sq.get("response_time_seconds", 0),
-                    "best_score": score,
-                    "answered_in_attempt": sq.get("answered_in_attempt") or best_session.get("attempt_number"),
-                    "rephrased_question": sq.get("rephrased_question"),
-                }
-                if score >= PASSING_SCORE_THRESHOLD:
-                    cq["answered"] = True
-                    cq["passed"] = True
-                else:
-                    cq["answered"] = False
-                    cq["passed"] = False
-                cached_questions.append(cq)
-
-    if state_matches_diff and cached_questions:
-        valid_questions = cached_questions
-        # Reconcile scores and answers with all matching sessions for this diff
-        for q in valid_questions:
-            q_text = (q.get("question") or "").strip().lower()
-            q_id = q.get("question_id")
-            for s in matching_sessions:
-                if s.get("diff_hash") == diff_hash:
-                    for sq in s.get("questions", []):
-                        sq_text = (sq.get("question") or "").strip().lower()
-                        sq_id = sq.get("question_id")
-                        if (q_id and q_id == sq_id) or (q_text and q_text == sq_text):
-                            sq_eval = sq.get("evaluation") or {}
-                            score = sq_eval.get("score") if isinstance(sq_eval, dict) and "score" in sq_eval else sq.get("score", 0)
-                            if score > q.get("best_score", 0):
-                                q["best_score"] = score
-                                q["answer"] = sq.get("answer", q.get("answer", ""))
-                                q["evaluation"] = sq_eval
-                                q["response_time_seconds"] = sq.get("response_time_seconds", q.get("response_time_seconds", 0))
-                                q["answered_in_attempt"] = sq.get("answered_in_attempt") or s.get("attempt_number")
-            if q.get("best_score", 0) >= PASSING_SCORE_THRESHOLD or q.get("answered", False) or q.get("passed", False):
-                q["answered"] = True
-                q["passed"] = True
-            else:
-                q["answered"] = False
-                q["passed"] = False
+    if master_analysis_enabled():
+        analysis = run_master_analysis(
+            context, summary, hints=hints, env=env,
+            project_root=project_root, question_generator=question_generator,
+        )
+    if analysis and analysis.get("questions"):
+        valid_questions = question_generator.validate(analysis["questions"])
+        _print_advisory_findings(analysis.get("findings") or [])
     else:
-        # Generate fresh questions for new diff
-        question_generator = QuestionGenerator()
-        analysis = None
-        if master_analysis_enabled():
-            # Master Analysis Pass (opt-in): one LLM call produces change
-            # classification, advisory findings (citation-verified) and the
-            # questions themselves. Degrades to None -> normal path.
-            analysis = run_master_analysis(
-                context, summary, hints=hints, env=env,
-                project_root=project_root, question_generator=question_generator,
-            )
-        if analysis and analysis.get("questions"):
-            valid_questions = question_generator.validate(analysis["questions"])
-            _print_advisory_findings(analysis.get("findings") or [])
-        else:
-            questions = question_generator.generate(context, summary, hints, env=env)
-            valid_questions = question_generator.validate(questions)
-        for q in valid_questions:
-            q["passed"] = False
-            q["answered"] = False
-            q["best_score"] = 0
+        questions = question_generator.generate(context, summary, hints, env=env)
+        valid_questions = question_generator.validate(questions)
 
     hardcoded = [q for q in valid_questions if q.get("is_fallback")]
     if hardcoded:
@@ -649,13 +357,8 @@ def main():
         )
     valid_questions = [q for q in valid_questions if not q.get("is_fallback")]
 
-    # An attempt is LLM-verified only when questions were LLM-generated AND
-    # every evaluation came from the LLM (not the offline fallback).
-    questions_llm_generated = bool(valid_questions)
-
     interaction = Interaction()
     evaluator = AnswerEvaluator()
-    followup_generator = FollowUpGenerator()
     
     # Colors
     CYAN = "\033[96m"
@@ -668,298 +371,103 @@ def main():
     if not valid_questions:
         if fail_open_enabled():
             print(f"\n{YELLOW}No questions were asked because the model did not return any.{RESET}")
-            print(f"{YELLOW}Commit allowed. This attempt is recorded as not checked by the model.{RESET}\n")
-            attempt_status = "PASSED"
-            exit_code = 0
-        else:
-            print(f"\n{RED}No questions were asked because the model did not return any.{RESET}")
-            print(f"{RED}Commit aborted (UNDERSTANDING_AGENT_FAIL_MODE=closed).{RESET}\n")
-            attempt_status = "FAILED"
-            exit_code = 1
-        try:
-            session_data = build_session_payload(
-                attempt_number=attempts,
-                head_commit=head_commit,
-                commit_message=commit_msg,
-                attempt_key=attempt_key,
-                diff_hash=diff_hash,
-                repository=env.get("repository", "unknown"),
-                branch=env.get("branch", "unknown"),
-                status=attempt_status,
-                verification="llm-unverified",
-                score=0,
-                changed_files=changes.get("files", []),
-                change_summary=summary,
-                standards_report=standards_report,
-                violations_count=len(failed_standards),
-                questions=[],
-                analysis=analysis,
-                identity=identity,
-                evidence=evidence,
-            )
-            save_session(project_root, session_data)
-            ServerClient().send(session_data)
-        except Exception:
-            pass
-        if exit_code == 0:
+            print(f"{YELLOW}Commit allowed.{RESET}\n")
             mark_verified_for_commit(project_root, head_commit, diff_hash)
-        sys.exit(exit_code)
+            sys.exit(0)
+        print(f"\n{RED}No questions were asked because the model did not return any.{RESET}")
+        print(f"{RED}Commit aborted (UNDERSTANDING_AGENT_FAIL_MODE=closed).{RESET}\n")
+        sys.exit(1)
 
     index_lock = GitIndexLock(project_root)
     index_lock.acquire()
 
-    while True:
-        # Persist state so attempt number and questions are tracked even if interrupted
-        _write_state(state_file, attempt_key, head_commit, commit_msg,
-                     diff_hash, attempts, valid_questions, summary=summary)
+    print(f"\n\n{BOLD}{CYAN}Questions{RESET}\n")
+    exchanges = []
+    identity = IdentityDetector.resolve(project_root)
 
-        print(f"\n\n{BOLD}{CYAN}Questions [Attempt {attempts}]{RESET}\n")
-        final_results = []
-        total_score = 0
-        any_eval_unverified = False
-        
-        for i, q in enumerate(valid_questions, 1):
-            q_id = q.get("question_id", f"q{i}")
-            q_text = q.get("question", "")
-            q_type = q.get("type", "Reasoning")
-            time_limit = q.get("time_limit", 60)
+    def _store_persona(passed: bool) -> None:
+        email = (identity.get("git_email") or identity.get("user_email") or "").strip()
+        name = (identity.get("git_name") or identity.get("user_name") or "").strip()
+        if not email or not exchanges:
+            return
+        DefenseClient().record_persona({
+            "git_email": email,
+            "git_name": name or email,
+            "passed": passed,
+            "scored": exchanges,
+        })
 
-            print(f"{BOLD}{CYAN}Question {i}/{len(valid_questions)}{RESET}")
-      
-            # If answer is already given with passing score, show Already Answered and skip
-            if q.get("best_score", 0) >= PASSING_SCORE_THRESHOLD or q.get("answered", False) or q.get("passed", False):
-                origin_att = q.get("answered_in_attempt")
-                if origin_att:
-                    print(f"{GREEN}✓ Already Answered (Attempt #{origin_att}){RESET}\n")
-                else:
-                    print(f"{GREEN}✓ Already Answered{RESET}\n")
-                q["answered"] = True
-                q["passed"] = True
-                total_score += q.get('best_score', 0)
-                final_results.append({
-                    "question_id": q_id,
-                    "question": q_text,
-                    "type": q_type,
-                    "time_limit_seconds": time_limit,
-                    "answer": q.get("answer", ""),
-                    "response_time_seconds": q.get("response_time_seconds", 0),
-                    "status": "answered",
-                    "answered_in_attempt": origin_att,
-                    "evaluation": q.get("evaluation") or {
-                        "score": q.get("best_score", 0),
-                        "understanding": "good",
-                        "rationale": f"Previously answered in Attempt #{origin_att}" if origin_att else "Previously answered and verified",
-                        "key_points_covered": [],
-                        "missing_concepts": [],
-                        "follow_up_required": False
-                    }
-                })
-                continue
-                
-            print(f"{YELLOW}Time Limit: {time_limit} seconds{RESET}\n")
+    for i, q in enumerate(valid_questions, 1):
+        q_text = q.get("question", "")
+        time_limit = q.get("time_limit", 60)
 
-            # On retry attempts, lightly rephrase questions that were previously
-            # answered wrong so the developer gets a fresh angle on the same concept.
-            # Rephrase ONLY ONCE: if already rephrased, reuse the cached rephrase (0 tokens).
-            was_answered_wrong_previously = (
-                bool(q.get("answer") or q.get("evaluation") or q.get("answered_in_attempt"))
-                and not q.get("passed", False)
-                and q.get("best_score", 0) < PASSING_SCORE_THRESHOLD
-            )
-            if attempts > 1 and was_answered_wrong_previously:
-                if q.get("rephrased_question"):
-                    # Already rephrased once — reuse cached rephrased text with 0 LLM tokens
-                    q_text = q["rephrased_question"]
-                else:
-                    qid = q.get("question_id") or "q"
-                    rephrased = followup_generator.rephrase_failed_question(q, event=f"Question Rephrase ({qid})")
-                    if rephrased and rephrased.strip() != q_text.strip():
-                        q_text = rephrased
-                        q["rephrased_question"] = rephrased
+        print(f"{BOLD}{CYAN}Question {i}/{len(valid_questions)}{RESET}")
+        print(f"{YELLOW}Time Limit: {time_limit} seconds{RESET}\n")
+        print(f"{BOLD}{q_text}{RESET}\n")
 
-            print(f"{BOLD}{q_text}{RESET}\n")
+        ans_text = interaction.timed_input(f"{CYAN}❯ {RESET}", time_limit, speak_text=q_text)
 
-            ans_text = interaction.timed_input(f"{CYAN}❯ {RESET}", time_limit, speak_text=q_text)
-            
-            if ans_text is None:
-                ans_text = ""
-                status = "timeout"
-                response_time = time_limit
-                print(f"\n{RED}✗ Timeout reached{RESET}")
+        if ans_text is None:
+            ans_text = ""
+            status = "timeout"
+            response_time = time_limit
+            print(f"\n{RED}✗ Timeout reached{RESET}")
+        else:
+            status = "answered"
+            resp_val = getattr(interaction, "last_response_time", None)
+            if resp_val is not None and resp_val > 0:
+                response_time = min(time_limit, resp_val)
             else:
-                status = "answered"
-                resp_val = getattr(interaction, "last_response_time", None)
-                if resp_val is not None and resp_val > 0:
-                    response_time = min(time_limit, resp_val)
-                else:
-                    response_time = min(time_limit, 1)
-                print(f"\n{GREEN}✓ Answer received in {response_time} seconds{RESET}")
+                response_time = min(time_limit, 1)
+            print(f"\n{GREEN}✓ Answer received in {response_time} seconds{RESET}")
 
-                # Pokerface P1: a suspect capture (clipped mic, ASR stutter,
-                # empty submit) gets ONE optional re-ask before it can score.
-                # Enter submits the original as-is — warning, never a veto.
-                if hygiene_enabled():
-                    suspect, reason = classify_answer(ans_text)
-                    if suspect:
-                        print(f"{YELLOW}⚠ That answer may not have come through cleanly ({reason}).{RESET}")
-                        retry_text = interaction.timed_input(
-                            f"{CYAN}Say it again or type it (Enter submits the text above as-is) ❯ {RESET}",
-                            min(time_limit, 45),
-                        )
-                        if retry_text and retry_text.strip():
-                            ans_text = retry_text
-                            resp_val = getattr(interaction, "last_response_time", None)
-                            if resp_val and resp_val > 0:
-                                response_time = min(time_limit, resp_val)
-            ans_obj = {
-                "answer": ans_text,
-                "response_time_seconds": response_time,
-                "status": status
-            }
-            
-            eval_res = evaluator.evaluate(q, ans_obj, context, summary, env=env)
-            final_score = eval_res.score
-            if not eval_res.llm_verified:
-                any_eval_unverified = True
-
-            # Direct scoring: No follow-up questions
-            result_entry = {
-                "question_id": q_id,
-                "question": q_text,
-                "type": q_type,
-                "time_limit_seconds": time_limit,
-                "answer": ans_text,
-                "response_time_seconds": response_time,
-                "status": status,
-                "answered_in_attempt": attempts,
-                "evaluation": eval_res.to_dict(),
-                "score": final_score,
-            }
-            final_results.append(result_entry)
-
-            q["answer"] = ans_text
-            q["evaluation"] = eval_res.to_dict()
-            q["response_time_seconds"] = response_time
-            q["best_score"] = final_score
-
-            # Persist state immediately
-            _write_state(state_file, attempt_key, head_commit, commit_msg,
-                         diff_hash, attempts, valid_questions, summary=summary)
-
-            # If score of answer evaluation is less than threshold, commit must be aborted immediately
-            if final_score < PASSING_SCORE_THRESHOLD:
-                q["answered"] = True
-                q["passed"] = False
-                print(f"\n{RED}✗ Understanding not demonstrated.{RESET}")
-                print(f"\n{BOLD}{RED}Commit aborted. Please review your code and try again.{RESET}\n")
-
-                try:
-                    session_data = build_session_payload(
-                        attempt_number=attempts,
-                        head_commit=head_commit,
-                        commit_message=commit_msg,
-                        attempt_key=attempt_key,
-                        diff_hash=diff_hash,
-                        repository=env.get("repository", "unknown"),
-                        branch=env.get("branch", "unknown"),
-                        status="FAILED",
-                        verification="llm-verified" if (questions_llm_generated and not any_eval_unverified) else "llm-unverified",
-                        score=round(final_score, 1),
-                        changed_files=changes.get("files", []),
-                        change_summary=summary,
-                        standards_report=standards_report,
-                        violations_count=len(failed_standards),
-                        questions=final_results,
-                        identity=identity,
-                        evidence=evidence,
-                        token_usage=get_total_token_usage(),
+            # A clipped or empty capture gets one optional re-ask before it is scored.
+            if hygiene_enabled():
+                suspect, reason = classify_answer(ans_text)
+                if suspect:
+                    print(f"{YELLOW}⚠ That answer may not have come through cleanly ({reason}).{RESET}")
+                    retry_text = interaction.timed_input(
+                        f"{CYAN}Say it again or type it (Enter submits the text above as-is) ❯ {RESET}",
+                        min(time_limit, 45),
                     )
-                    save_session(project_root, session_data)
-                    ServerClient().send(session_data)
-                except Exception:
-                    pass
-                print_token_usage_summary()
-                index_lock.release()
-                sys.exit(1)
+                    if retry_text and retry_text.strip():
+                        ans_text = retry_text
+                        resp_val = getattr(interaction, "last_response_time", None)
+                        if resp_val and resp_val > 0:
+                            response_time = min(time_limit, resp_val)
+        ans_obj = {
+            "answer": ans_text,
+            "response_time_seconds": response_time,
+            "status": status
+        }
 
-            # Score is >= threshold
-            print(f"{GREEN}✓ Good understanding demonstrated.{RESET}\n")
-            q["answered"] = True
-            q["passed"] = True
-            if not q.get("answered_in_attempt"):
-                q["answered_in_attempt"] = attempts
-            total_score += q["best_score"]
+        eval_res = evaluator.evaluate(q, ans_obj, context, summary, env=env)
+        exchanges.append({
+            "question": q_text,
+            "answer": ans_text,
+            "category": q.get("type") or "Reasoning",
+            "score": eval_res.score,
+            "missing_concepts": list(eval_res.missing_concepts or []),
+            "evaluation": eval_res.evaluation or "",
+        })
 
-        avg_score = total_score / len(valid_questions) if valid_questions else 100
-        # LLM verification: honest even when failing open. A session is only
-        # "llm-verified" when questions were LLM-generated and no evaluation
-        # fell back to the offline scorer.
-        verification = "llm-verified" if (questions_llm_generated and not any_eval_unverified) else "llm-unverified"
-
-        all_individual_passed = (
-            bool(valid_questions)
-            and all(q.get("passed", False) or q.get("best_score", 0) >= PASSING_SCORE_THRESHOLD for q in valid_questions)
-        )
-        is_passed = all_individual_passed and avg_score >= PASSING_SCORE_THRESHOLD
-
-        attempt_status = "PASSED" if is_passed else "FAILED"
-        if is_passed:
-            print(f"\n{BOLD}{GREEN}Overall Understanding: Verified{RESET}")
-        else:
-            print(f"\n{BOLD}{RED}Overall Understanding: Insufficient{RESET}")
-
-        # 9. Server Client & Session Storage
-        session_data = build_session_payload(
-            attempt_number=attempts,
-            head_commit=head_commit,
-            commit_message=commit_msg,
-            attempt_key=attempt_key,
-            diff_hash=diff_hash,
-            repository=env.get("repository", "unknown"),
-            branch=env.get("branch", "unknown"),
-            status=attempt_status,
-            verification=verification,
-            score=round(avg_score, 1),
-            changed_files=changes.get("files", []),
-            change_summary=summary,
-            standards_report=standards_report,
-            violations_count=len(failed_standards),
-            questions=final_results,
-            analysis=analysis,
-            identity=identity,
-            evidence=evidence,
-            token_usage=get_total_token_usage(),
-        )
-        try:
-            save_session(project_root, session_data)
-            ServerClient().send(session_data)
-        except Exception:
-            pass
-        
-        # Save state: keep attempts tracked and preserve questions across attempts
-        _write_state(state_file, attempt_key, head_commit, commit_msg,
-                     diff_hash, attempts, valid_questions, summary=summary)
-        
-        if not is_passed:
-            print(f"\n{RED}Attempt {attempts} failed. Understanding criteria not met.{RESET}")
-            retry = interaction.timed_input(f"{YELLOW}Would you like to try Attempt {attempts + 1}? (y/n) {RESET}", 60)
-            if retry and retry.strip().lower() == 'y':
-                attempts += 1
-                continue
-            else:
-                print(f"\n\033[91mCommit aborted.\033[0m")
-                print_token_usage_summary()
-                index_lock.release()
-                sys.exit(1)
-        else:
-            print(f"\n\033[92mCommit allowed: Understanding demonstrated.\033[0m")
+        if eval_res.score < PASSING_SCORE_THRESHOLD:
+            _store_persona(False)
+            print(f"\n{RED}✗ Understanding not demonstrated.{RESET}")
+            print(f"\n{BOLD}{RED}Commit aborted. Please review your code and try again.{RESET}\n")
             print_token_usage_summary()
-            # Cleanup state on success
-            if os.path.exists(state_file):
-                os.remove(state_file)
             index_lock.release()
-            mark_verified_for_commit(project_root, head_commit, diff_hash)
-            sys.exit(0)
+            sys.exit(1)
+
+        print(f"{GREEN}✓ Good understanding demonstrated.{RESET}\n")
+
+    print(f"\n{BOLD}{GREEN}Overall Understanding: Verified{RESET}")
+    _store_persona(True)
+    print(f"\n\033[92mCommit allowed: Understanding demonstrated.\033[0m")
+    print_token_usage_summary()
+    index_lock.release()
+    mark_verified_for_commit(project_root, head_commit, diff_hash)
+    sys.exit(0)
 
 if __name__ == "__main__":
     main()

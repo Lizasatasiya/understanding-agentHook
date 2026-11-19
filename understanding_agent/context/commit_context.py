@@ -5,7 +5,7 @@ import hashlib
 import json
 import ctypes
 import shlex
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Any, Tuple
 
 
 def get_head_commit(repo_root: Optional[str] = None) -> str:
@@ -199,39 +199,3 @@ def get_current_commit_message(repo_root: Optional[str] = None) -> str:
 def compute_diff_hash(changes: Any) -> str:
     """Compute deterministic SHA-256 hash of detected staged changes."""
     return hashlib.sha256(json.dumps(changes, sort_keys=True).encode("utf-8")).hexdigest()
-
-
-def compute_attempt_key(head_commit: str, diff_hash: str = "", commit_message: str = "") -> str:
-    """
-    Compute an attempt key based solely on the current git HEAD (commit in progress).
-    Does NOT depend on commit message.
-    Resets to a new key only after a commit succeeds and git HEAD changes.
-    """
-    norm_head = (head_commit or "INITIAL").strip()
-    return hashlib.sha256(f"commit_head:{norm_head}".encode("utf-8")).hexdigest()
-
-
-def get_next_attempt_number(
-    existing_sessions: List[Dict[str, Any]],
-    head_commit: str,
-    diff_hash: Optional[str] = None,
-    commit_message: Optional[str] = None,
-    state_attempts: int = 0
-) -> int:
-    """
-    Determine the next sequential attempt number for the next commit.
-    Scoped strictly to the current git HEAD (head_commit).
-    Does NOT check commit message. Attempts increase for each try towards the next commit.
-    After a commit is done and git HEAD advances, the next changes start from Attempt 1.
-    """
-    norm_head = (head_commit or "").strip()
-
-    matching_sessions = [
-        s for s in existing_sessions
-        if (s.get("commit_id") == "staged" or s.get("is_staged") or not s.get("commit_id"))
-        and (s.get("head_commit") or "").strip() == norm_head
-    ]
-
-    recorded_attempts = [s.get("attempt_number", 0) for s in matching_sessions]
-    max_attempt = max(recorded_attempts + [len(matching_sessions)], default=0)
-    return max(max_attempt + 1, state_attempts + 1, 1)
