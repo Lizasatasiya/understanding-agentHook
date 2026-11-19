@@ -5,9 +5,9 @@ import sys
 # The package needs Python >= 3.10, but stale shells and clean-PATH contexts
 # still resolve `python3` to Apple's 3.9. Rather than crashing with a cryptic
 # PEP-604 TypeError, when this module is invoked DIRECTLY (python -m
-# understanding_agent.cli) and the interpreter is too old, re-exec the same
+# understanding_agent.core.cli) and the interpreter is too old, re-exec the same
 # command under a modern interpreter found in known locations. Library-style
-# imports (import understanding_agent.cli) are NOT hijacked — they keep the
+# imports (import understanding_agent.core.cli) are NOT hijacked — they keep the
 # honest import error.
 # ----------------------------------------------------------------------------
 if __name__ == "__main__" and sys.version_info < (3, 10):
@@ -50,7 +50,7 @@ if __name__ == "__main__" and sys.version_info < (3, 10):
         _env = dict(_os.environ)
         _env["PYTHONPATH"] = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))) \
             + (_os.pathsep + _env["PYTHONPATH"] if _env.get("PYTHONPATH") else "")
-        _os.execve(_cand, [_cand, "-m", "understanding_agent.cli"] + sys.argv[1:], _env)
+        _os.execve(_cand, [_cand, "-m", "understanding_agent.core.cli"] + sys.argv[1:], _env)
     sys.exit(
         "understanding-agent needs Python >= 3.10 (this interpreter is "
         f"{sys.version_info[0]}.{sys.version_info[1]}). Install one once:\n"
