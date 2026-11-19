@@ -305,6 +305,52 @@ class AnswerEvaluator:
             "checklist_rationales": rationales,
         })
 
+    def _question_code_context(self, question: dict, context: dict, max_total_lines: int = 120,
+                               max_per_change: int = 40) -> str:
+        """Staged-diff excerpts relevant to this question, bounded.
+
+        Matches structured changes whose file or function name appears in the
+        question text; falls back to the first changes in context order. The
+        judge must see the code it is judging against (diff-aware judge).
+        """
+        structured = context.get("structured_changes") or []
+        if not structured:
+            return ""
+        text = (question.get("question") or "") + " " + " ".join(
+            question.get("expected_concepts") or []
+        )
+        lowered = text.lower()
+
+        def _matches(entry: dict) -> bool:
+            file_name = str(entry.get("file") or "").lower()
+            function_name = str(entry.get("function") or entry.get("name") or "").lower()
+            return bool(
+                (function_name and function_name in lowered)
+                or (file_name and file_name in lowered)
+                or (file_name.rsplit("/", 1)[-1] and file_name.rsplit("/", 1)[-1] in lowered)
+            )
+
+        matched = [entry for entry in structured if _matches(entry)]
+        ordered = matched + [entry for entry in structured if entry not in matched]
+        blocks, used = [], 0
+        for entry in ordered:
+            diff = str(entry.get("diff") or "").strip()
+            if not diff:
+                continue
+            lines = diff.splitlines()[:max_per_change]
+            if used + len(lines) > max_total_lines:
+                lines = lines[: max(0, max_total_lines - used)]
+            if not lines:
+                break
+            label = entry.get("file") or "unknown"
+            func = entry.get("function") or entry.get("name") or ""
+            header = f"--- {label}" + (f" :: {func}" if func else "")
+            blocks.append(header + "\n" + "\n".join(lines))
+            used += len(lines)
+            if used >= max_total_lines:
+                break
+        return "\n\n".join(blocks)
+
     def _build_checklist_prompt(self, question: dict, answer: dict, checklist,
                                 context: dict, summary: dict, env: dict | None = None) -> str:
         lines = [
@@ -317,11 +363,20 @@ class AnswerEvaluator:
             "- Judge concept coverage only. Do NOT penalise grammar, spelling, English proficiency, or terminology.",
             "- The answer may mix languages or use transliterated technical terms; judge whether the concept is present, never the language.",
             "- CLARITY item: score 1 if the answer is coherent and not hallucinated, 0 if it is severely incoherent or fabricated.",
+            "- Ground every judgement in the CODE CONTEXT below: a fluent answer that describes behaviour contradicting the code is WRONG.",
+            "- If the answer asserts something the code context contradicts, put that claim in incorrect_claims and score the affected key points accordingly.",
             "",
             f"Question: {question.get('question')}",
             "",
             "CHECKLIST:",
         ]
+        code_context = self._question_code_context(question, context)
+        if code_context:
+            lines += [
+                "",
+                "CODE CONTEXT (staged diff excerpts for this change):",
+                code_context,
+            ]
         for idx, item in enumerate(checklist.items):
             lines.append(f"{idx + 1}. key_point: {item.key_point}")
             lines.append(f"   valid scores: {list(item.tiers)} (weight {item.weight})")
