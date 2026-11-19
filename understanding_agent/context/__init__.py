@@ -1,8 +1,7 @@
-# Context package: change detection, stack analysis, language AST, and context building
+# Context package: change detection, stack analysis, language AST, and context building.
+# Summary and master analysis live in the service. The hook only builds the diff context.
 from .change_detector import ChangeDetector
-from .change_kind import classify_change, classification_hint_lines
-from .change_summary import ChangeSummary
-from .change_intelligence import master_analysis_enabled, run_master_analysis
+from .change_kind import classify_change
 from .context_builder import ContextBuilder
 from .code_graph import CodeGraph
 from .commit_context import find_git_commit_ancestor
@@ -15,10 +14,6 @@ from .stack_detector import StackDetector
 __all__ = [
     "ChangeDetector",
     "classify_change",
-    "classification_hint_lines",
-    "ChangeSummary",
-    "master_analysis_enabled",
-    "run_master_analysis",
     "ContextBuilder",
     "CodeGraph",
     "find_git_commit_ancestor",

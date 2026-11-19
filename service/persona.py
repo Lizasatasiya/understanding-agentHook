@@ -11,7 +11,7 @@ import json
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from understanding_agent.llm.api_utils import (
+from service.llm.api_utils import (
     call_llm_api,
     extract_json,
     get_model,

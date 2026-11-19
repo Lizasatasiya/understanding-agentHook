@@ -1,5 +1,4 @@
 import sys
-import time
 
 # ----------------------------------------------------------------------------
 # Interpreter self-heal (runs BEFORE any version-sensitive import).
@@ -60,21 +59,17 @@ if __name__ == "__main__" and sys.version_info < (3, 10):
 
 import json
 import os
-import re
 import hashlib
-import subprocess
-from .defense_client import DefenseClient
+from .defense_client import DefenseClient, DefenseRejected, DefenseUnavailable
 from .identity import IdentityDetector
-from ..llm.api_utils import fail_open_enabled, log_llm_error, print_token_usage_summary
+from .fail_mode import fail_open_enabled
 
 from ..context.environment_detector import EnvironmentDetector
 from ..context.change_detector import ChangeDetector
 from ..context.stack_detector import StackDetector
 from ..context.code_graph import CodeGraph
 from ..context.context_builder import ContextBuilder
-from ..context.change_summary import ChangeSummary
 from ..context.evidence_collector import collect_evidence, evidence_question_hint
-from ..context.change_intelligence import master_analysis_enabled, run_master_analysis
 from ..context.change_kind import classify_change
 from ..context.formatting_detector import is_commit_formatting_only
 from ..context.commit_context import (
@@ -82,13 +77,11 @@ from ..context.commit_context import (
     get_current_commit_message,
 )
 
-from ..questions.question_generator import QuestionGenerator
 from ..questions.practice_packs import practice_pack_hint
 
 from ..answers.interaction import Interaction
 from ..answers.answer_hygiene import classify_answer, hygiene_enabled
 
-from ..evaluation.answer_evaluator import AnswerEvaluator
 from ..evaluation.coding_standards import CodingStandardsChecker
 from ..evaluation.security_lens import SecurityLens, security_question_hint, security_gate_enabled
 
@@ -109,12 +102,8 @@ from .hook_stages import (
     _is_revert_or_merge_operation,
     is_already_verified_for_commit,
     mark_verified_for_commit,
-    clear_verified_for_commit,
     GitIndexLock,
 )
-
-# Minimum passing score threshold for answer evaluation
-PASSING_SCORE_THRESHOLD = int(os.environ.get("UNDERSTANDING_AGENT_PASSING_SCORE", "75"))
 
 
 def main():
@@ -333,34 +322,12 @@ def main():
         else:
             print(f"\n{BOLD}{GREEN}✓ Proceeding with questions...{RESET}\n")
 
-    # Every commit is assessed on its own. Nothing from a previous attempt is reused.
-    summary = ChangeSummary().generate(context)
-    question_generator = QuestionGenerator()
-    analysis = None
-    if master_analysis_enabled():
-        analysis = run_master_analysis(
-            context, summary, hints=hints, env=env,
-            project_root=project_root, question_generator=question_generator,
-        )
-    if analysis and analysis.get("questions"):
-        valid_questions = question_generator.validate(analysis["questions"])
-        _print_advisory_findings(analysis.get("findings") or [])
-    else:
-        questions = question_generator.generate(context, summary, hints, env=env)
-        valid_questions = question_generator.validate(questions)
+    # Local checks are finished. The server writes the summary, the questions,
+    # and each score. This machine does not call the model.
+    identity = IdentityDetector.resolve(project_root)
+    git_email = (identity.get("git_email") or identity.get("user_email") or "").strip()
+    git_name = (identity.get("git_name") or identity.get("user_name") or "").strip()
 
-    hardcoded = [q for q in valid_questions if q.get("is_fallback")]
-    if hardcoded:
-        log_llm_error(
-            f"Skipped {len(hardcoded)} hardcoded question(s). "
-            "Only questions written by the model are asked."
-        )
-    valid_questions = [q for q in valid_questions if not q.get("is_fallback")]
-
-    interaction = Interaction()
-    evaluator = AnswerEvaluator()
-    
-    # Colors
     CYAN = "\033[96m"
     GREEN = "\033[92m"
     YELLOW = "\033[93m"
@@ -368,7 +335,33 @@ def main():
     BOLD = "\033[1m"
     RESET = "\033[0m"
 
-    if not valid_questions:
+    client = DefenseClient()
+    try:
+        started = client.start({
+            "git_name": git_name,
+            "git_email": git_email,
+            "repository": env.get("repository") or "unknown",
+            "branch": env.get("branch") or "unknown",
+            "trivial": False,
+            "standards_failed": bool(failed_standards),
+            "context": json.loads(json.dumps(context, default=str)),
+            "hints": json.loads(json.dumps(hints, default=str)),
+        })
+    except DefenseUnavailable as exc:
+        print(f"\n{RED}The defense server could not run this interview.{RESET}")
+        print(f"{RED}{exc}{RESET}\n")
+        sys.exit(1)
+    except DefenseRejected as exc:
+        print(f"\n{RED}The defense server rejected this interview.{RESET}")
+        print(f"{RED}{exc.detail}{RESET}\n")
+        sys.exit(1)
+
+    action = started.get("action")
+    if action == "skip":
+        print(f"\n{GREEN}{started.get('message') or 'No oral defense required — commit allowed.'}{RESET}\n")
+        mark_verified_for_commit(project_root, head_commit, diff_hash)
+        sys.exit(0)
+    if action == "no_questions":
         if fail_open_enabled():
             print(f"\n{YELLOW}No questions were asked because the model did not return any.{RESET}")
             print(f"{YELLOW}Commit allowed.{RESET}\n")
@@ -378,50 +371,37 @@ def main():
         print(f"{RED}Commit aborted (UNDERSTANDING_AGENT_FAIL_MODE=closed).{RESET}\n")
         sys.exit(1)
 
+    questions = started.get("questions") or []
+    defense_id = started.get("defense_id") or ""
+    if action != "ask" or not defense_id or not questions:
+        print(f"\n{RED}The defense server returned an unexpected response.{RESET}\n")
+        sys.exit(1)
+
+    _print_advisory_findings(started.get("findings") or [])
+
+    interaction = Interaction()
     index_lock = GitIndexLock(project_root)
     index_lock.acquire()
-
     print(f"\n\n{BOLD}{CYAN}Questions{RESET}\n")
-    exchanges = []
-    identity = IdentityDetector.resolve(project_root)
 
-    def _store_persona(passed: bool) -> None:
-        email = (identity.get("git_email") or identity.get("user_email") or "").strip()
-        name = (identity.get("git_name") or identity.get("user_name") or "").strip()
-        if not email or not exchanges:
-            return
-        DefenseClient().record_persona({
-            "git_email": email,
-            "git_name": name or email,
-            "passed": passed,
-            "scored": exchanges,
-        })
-
-    for i, q in enumerate(valid_questions, 1):
+    for i, q in enumerate(questions, 1):
         q_text = q.get("question", "")
         time_limit = q.get("time_limit", 60)
-
-        print(f"{BOLD}{CYAN}Question {i}/{len(valid_questions)}{RESET}")
+        print(f"{BOLD}{CYAN}Question {i}/{len(questions)}{RESET}")
         print(f"{YELLOW}Time Limit: {time_limit} seconds{RESET}\n")
         print(f"{BOLD}{q_text}{RESET}\n")
 
         ans_text = interaction.timed_input(f"{CYAN}❯ {RESET}", time_limit, speak_text=q_text)
-
         if ans_text is None:
             ans_text = ""
-            status = "timeout"
-            response_time = time_limit
             print(f"\n{RED}✗ Timeout reached{RESET}")
         else:
-            status = "answered"
             resp_val = getattr(interaction, "last_response_time", None)
             if resp_val is not None and resp_val > 0:
                 response_time = min(time_limit, resp_val)
             else:
                 response_time = min(time_limit, 1)
             print(f"\n{GREEN}✓ Answer received in {response_time} seconds{RESET}")
-
-            # A clipped or empty capture gets one optional re-ask before it is scored.
             if hygiene_enabled():
                 suspect, reason = classify_answer(ans_text)
                 if suspect:
@@ -432,42 +412,42 @@ def main():
                     )
                     if retry_text and retry_text.strip():
                         ans_text = retry_text
-                        resp_val = getattr(interaction, "last_response_time", None)
-                        if resp_val and resp_val > 0:
-                            response_time = min(time_limit, resp_val)
-        ans_obj = {
-            "answer": ans_text,
-            "response_time_seconds": response_time,
-            "status": status
-        }
 
-        eval_res = evaluator.evaluate(q, ans_obj, context, summary, env=env)
-        exchanges.append({
-            "question": q_text,
-            "answer": ans_text,
-            "category": q.get("type") or "Reasoning",
-            "score": eval_res.score,
-            "missing_concepts": list(eval_res.missing_concepts or []),
-            "evaluation": eval_res.evaluation or "",
-        })
-
-        if eval_res.score < PASSING_SCORE_THRESHOLD:
-            _store_persona(False)
-            print(f"\n{RED}✗ Understanding not demonstrated.{RESET}")
-            print(f"\n{BOLD}{RED}Commit aborted. Please review your code and try again.{RESET}\n")
-            print_token_usage_summary()
+        try:
+            result = client.answer(defense_id, q.get("question_id") or f"q{i}", ans_text)
+        except DefenseUnavailable as exc:
+            print(f"\n{RED}The defense server could not score this answer.{RESET}")
+            print(f"{RED}{exc}{RESET}\n")
+            index_lock.release()
+            sys.exit(1)
+        except DefenseRejected as exc:
+            print(f"\n{RED}The defense server rejected this answer.{RESET}")
+            print(f"{RED}{exc.detail}{RESET}\n")
             index_lock.release()
             sys.exit(1)
 
+        outcome = result.get("action")
+        if outcome == "stop":
+            print(f"\n{RED}✗ Understanding not demonstrated.{RESET}")
+            print(f"\n{BOLD}{RED}Commit aborted. Please review your code and try again.{RESET}\n")
+            index_lock.release()
+            sys.exit(1)
+        if outcome == "pass":
+            print(f"{GREEN}✓ Good understanding demonstrated.{RESET}\n")
+            print(f"\n{BOLD}{GREEN}Overall Understanding: Verified{RESET}")
+            print(f"\n\033[92mCommit allowed: Understanding demonstrated.\033[0m")
+            index_lock.release()
+            mark_verified_for_commit(project_root, head_commit, diff_hash)
+            sys.exit(0)
+        if outcome != "continue":
+            print(f"\n{RED}The defense server returned an unexpected response.{RESET}\n")
+            index_lock.release()
+            sys.exit(1)
         print(f"{GREEN}✓ Good understanding demonstrated.{RESET}\n")
 
-    print(f"\n{BOLD}{GREEN}Overall Understanding: Verified{RESET}")
-    _store_persona(True)
-    print(f"\n\033[92mCommit allowed: Understanding demonstrated.\033[0m")
-    print_token_usage_summary()
+    print(f"\n{RED}The defense server ended the interview without a result.{RESET}\n")
     index_lock.release()
-    mark_verified_for_commit(project_root, head_commit, diff_hash)
-    sys.exit(0)
+    sys.exit(1)
 
 if __name__ == "__main__":
     main()

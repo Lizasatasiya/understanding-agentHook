@@ -14,7 +14,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from .llm_gateway import ModelGateway
+from .interview.gateway import ModelGateway
 from .persona import fold_persona
 from .settings import ServiceSettings
 
@@ -22,19 +22,12 @@ _LOCK = threading.Lock()
 _INTERVIEWS: dict[str, dict] = {}
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
-# Kept as a name so a test can replace the evaluator without touching the gateway.
-AnswerEvaluator = ModelGateway.evaluator_cls
-
 
 class DefenseError(Exception):
     def __init__(self, status: int, detail: str):
         super().__init__(detail)
         self.status = status
         self.detail = detail
-
-
-def passing_score() -> int:
-    return ServiceSettings.from_env().passing_score
 
 
 def _purge_locked(now: float, ttl: int) -> None:
@@ -70,7 +63,7 @@ class DefensePipeline:
         if not isinstance(context, dict):
             raise DefenseError(400, "Staged change context is required")
 
-        state = {"summary": {}, "questions": [], "action": "ask", "message": ""}
+        state = {"summary": {}, "questions": [], "findings": [], "action": "ask", "message": ""}
         for step in self.settings.start_steps:
             handler = getattr(self, f"_step_{step}", None)
             if handler is None:
@@ -83,6 +76,15 @@ class DefensePipeline:
                 "action": "skip",
                 "defense_id": "",
                 "questions": [],
+                "message": state["message"],
+            }
+
+        if state["action"] == "no_questions":
+            return {
+                "action": "no_questions",
+                "defense_id": "",
+                "questions": [],
+                "findings": [],
                 "message": state["message"],
             }
 
@@ -104,6 +106,7 @@ class DefensePipeline:
         return {
             "action": "ask",
             "defense_id": defense_id,
+            "findings": state.get("findings") or [],
             "questions": [_public_question(question, index) for index, question in enumerate(questions, 1)],
         }
 
@@ -123,9 +126,13 @@ class DefensePipeline:
         return False
 
     def _step_questions(self, payload: dict, state: dict) -> bool:
-        questions = self.gateway.questions(payload, state["summary"])
+        result = self.gateway.questions(payload, state["summary"])
+        questions = result.get("questions") or []
+        state["findings"] = result.get("findings") or []
         if not questions:
-            raise DefenseError(503, "The model did not return any questions")
+            state["action"] = "no_questions"
+            state["message"] = "The model did not return any questions."
+            return True
         state["questions"] = questions
         state["action"] = "ask"
         return False
@@ -169,7 +176,6 @@ def submit_answer(db: Session, defense_id: str, question_id: str, answer_text: s
         summary = interview["summary"]
 
     gateway = ModelGateway()
-    gateway.evaluator_cls = AnswerEvaluator
     evaluation = gateway.assess(question, answer_text, context, summary)
     scored = _score_item(question, evaluation, answer_text)
     stopped = evaluation.score < threshold

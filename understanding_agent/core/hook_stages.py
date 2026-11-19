@@ -591,45 +591,6 @@ def mark_verified_for_commit(project_root: str, head_commit: str, diff_hash: str
         pass
 
 
-def consume_pass_marker(project_root: str, head_commit: str, diff_hash: str) -> bool:
-    """Return True and delete the pass marker when it matches this diff.
-
-    Used by prepare-commit-msg so the same git commit is not interviewed twice.
-    A later commit does not consult this marker.
-    """
-    import os
-    import json
-    import time
-
-    state_file = os.path.join(project_root, ".git", "understanding_agent_verified.json")
-    if not os.path.exists(state_file):
-        return False
-    try:
-        with open(state_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        return False
-    matched = (
-        data.get("head_commit") == head_commit
-        and data.get("diff_hash") == diff_hash
-        and time.time() - data.get("timestamp", 0) < 300
-    )
-    if matched:
-        clear_verified_for_commit(project_root)
-    return matched
-
-
-def clear_verified_for_commit(project_root: str) -> None:
-    """Clean up verified diff state after a commit is finalized."""
-    import os
-    state_file = os.path.join(project_root, ".git", "understanding_agent_verified.json")
-    try:
-        if os.path.exists(state_file):
-            os.remove(state_file)
-    except Exception:
-        pass
-
-
 class GitIndexLock:
     """Acquires .git/index.lock during the oral defense to prevent mid-session staging tampering."""
 

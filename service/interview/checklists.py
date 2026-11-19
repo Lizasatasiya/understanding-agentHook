@@ -71,9 +71,6 @@ class Checklist:
     def total_points(self) -> int:
         return sum(i.weight for i in self.items) + self.clarity_weight
 
-    def key_points(self) -> list:
-        return [i.key_point for i in self.items]
-
 
 def parse_checklist(raw: object) -> Optional[Checklist]:
     """Validate an LLM-produced (or hand-authored) checklist dict.

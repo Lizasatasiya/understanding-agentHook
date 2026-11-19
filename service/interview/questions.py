@@ -1,7 +1,7 @@
 import json
-from ..llm.api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, log_llm_error
-from .checklists import parse_checklist
-from ..context.change_kind import classification_hint_lines
+from service.llm.api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, log_llm_error
+from service.interview.checklists import parse_checklist
+from service.interview.change_hints import classification_hint_lines
 
 import re
 

@@ -1,12 +1,8 @@
 """Deterministic ChangeKind classifier (Bad Romance item 3 — tier one).
 
-Always-on, offline-safe, zero-LLM classification of WHAT KIND of change a
-commit is. The LLM classification (master analysis, change_intelligence.py)
-remains the second tier — this deterministic tier runs on EVERY commit (even
-offline) and feeds both question paths so questions target the right
-dimension: UI changes get data-flow/re-render questions, schema changes get
-migration/consistency questions, control-flow changes get failure-mode
-questions.
+Always-on, offline-safe classification of what kind of change a commit is.
+The hook attaches this result to the diff context. The service turns it
+into question-prompt hints.
 
 Signals, all deterministic and auditable:
   - paths: component/stylesheet extensions, migrations/schema files, test
@@ -127,36 +123,3 @@ def classify_change(changes: dict, context: dict | None = None) -> dict:
         "dominant": dominant,
         "signals": signals[:12],
     }
-
-
-def classification_hint_lines(change_kind: dict | None) -> list:
-    """Prompt lines describing the classification for the question generator.
-    Empty list when there is nothing to say (offline no-change edge)."""
-    if not change_kind or not change_kind.get("dominant"):
-        return []
-    w = change_kind.get("weights") or {}
-    strong = [d for d in DOMAINS if w.get(d, 0) >= 0.25]
-    lines = ["CHANGE CLASSIFICATION (deterministic tier):"]
-    lines.append(f"- dominant: {change_kind['dominant']}"
-                 + (f" (mixed with {', '.join(d for d in strong if d != change_kind['dominant'])})"
-                    if len(strong) > 1 else ""))
-    if change_kind.get("signals"):
-        lines.append("- signals: " + "; ".join(change_kind["signals"][:6]))
-    guidance = {
-        "ui": ("target data flow through the component, re-render consequences, "
-               "and state ownership — not styling trivia"),
-        "data_model": ("target migration/consistency consequences, constraint "
-                       "correctness, and rollback — not column trivia"),
-        "control_flow": ("target failure modes, edge cases, and ordering "
-                         "dependencies in the new flow"),
-        "infra_config": ("target environment coupling, defaults, and rollback/"
-                         "blast radius of the configuration change"),
-        "tests": ("target what behavior the new tests pin down and what they "
-                  "still leave uncovered"),
-        "docs": ("target accuracy of the documentation against the code it "
-                 "describes"),
-    }
-    g = guidance.get(change_kind["dominant"])
-    if g:
-        lines.append(f"- question focus: {g}")
-    return lines

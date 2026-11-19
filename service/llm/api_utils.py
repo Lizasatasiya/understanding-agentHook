@@ -294,19 +294,11 @@ def _normalize_response_body(body: str, model_id: str = "") -> str:
     return body
 
 
-# ---------------------------------------------------------------------------
-# Per-event token usage tracking
-# ---------------------------------------------------------------------------
-
-_RECORDED_TOKEN_EVENTS: list[dict] = []
-
-
 def extract_token_usage(body: str, payload_dict: dict | None = None) -> dict:
-    """Extract prompt, completion, and total tokens from an LLM response body."""
+    """Read token counts from a model response, or estimate them."""
     prompt_tokens = 0
     completion_tokens = 0
     total_tokens = 0
-
     try:
         data = json.loads(body)
         if isinstance(data, dict):
@@ -317,95 +309,21 @@ def extract_token_usage(body: str, payload_dict: dict | None = None) -> dict:
                 total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
     except Exception:
         pass
-
-    # Fallback estimate if API provider omitted usage
     if total_tokens == 0 and payload_dict:
         messages = payload_dict.get("messages", [])
         prompt_chars = 0
         if isinstance(messages, list):
-            for m in messages:
-                if isinstance(m, dict):
-                    prompt_chars += len(str(m.get("content", "")))
+            for message in messages:
+                if isinstance(message, dict):
+                    prompt_chars += len(str(message.get("content", "")))
         prompt_tokens = max(1, prompt_chars // 4)
-        completion_chars = len(body) if body else 0
-        completion_tokens = max(1, completion_chars // 4)
+        completion_tokens = max(1, len(body or "") // 4)
         total_tokens = prompt_tokens + completion_tokens
-
     return {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "total_tokens": total_tokens,
     }
-
-
-def record_token_usage_event(
-    event: str,
-    prompt_tokens: int,
-    completion_tokens: int,
-    model: str = "",
-) -> dict:
-    """Record an individual event token usage record."""
-    total_tokens = prompt_tokens + completion_tokens
-    record = {
-        "event": event,
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": total_tokens,
-        "model": model,
-        "timestamp": time.time(),
-    }
-    _RECORDED_TOKEN_EVENTS.append(record)
-    return record
-
-
-def get_token_usage_events() -> list[dict]:
-    """Return all recorded token usage events for the current session."""
-    return list(_RECORDED_TOKEN_EVENTS)
-
-
-def clear_token_usage_events() -> None:
-    """Reset the recorded token usage events."""
-    _RECORDED_TOKEN_EVENTS.clear()
-
-
-def get_total_token_usage() -> dict:
-    """Calculate aggregated token usage across all recorded events."""
-    events = _RECORDED_TOKEN_EVENTS
-    total_prompt = sum(e.get("prompt_tokens", 0) for e in events)
-    total_completion = sum(e.get("completion_tokens", 0) for e in events)
-    return {
-        "prompt_tokens": total_prompt,
-        "completion_tokens": total_completion,
-        "total_tokens": total_prompt + total_completion,
-        "call_count": len(events),
-        "events": list(events),
-    }
-
-
-def print_token_usage_summary() -> None:
-    """Print an ASCII breakdown table of token usage per event."""
-    events = _RECORDED_TOKEN_EVENTS
-    if not events:
-        return
-    print("\n\033[1;36m" + "=" * 65)
-    print(f"{'LLM TOKEN USAGE REPORT':^65}")
-    print("=" * 65 + "\033[0m")
-    print(f"\033[1m{'Event':<35} {'Prompt':>9} {'Comp':>8} {'Total':>9}\033[0m")
-    print("-" * 65)
-    for e in events:
-        name = e.get("event", "LLM Call")
-        if len(name) > 34:
-            name = name[:31] + "..."
-        p = e.get("prompt_tokens", 0)
-        c = e.get("completion_tokens", 0)
-        t = e.get("total_tokens", 0)
-        print(f"{name:<35} {p:>9,d} {c:>8,d} {t:>9,d}")
-    print("-" * 65)
-    tot = get_total_token_usage()
-    print(
-        f"\033[1;32m{'TOTAL':<35} {tot['prompt_tokens']:>9,d} {tot['completion_tokens']:>8,d} {tot['total_tokens']:>9,d}\033[0m"
-    )
-    print("\033[1;36m" + "=" * 65 + "\033[0m\n", flush=True)
 
 
 def call_llm_api(
@@ -447,12 +365,6 @@ def call_llm_api(
 
             # Record and log token usage per event
             usage = extract_token_usage(body, payload_dict)
-            record_token_usage_event(
-                event=event_name,
-                prompt_tokens=usage["prompt_tokens"],
-                completion_tokens=usage["completion_tokens"],
-                model=model_id,
-            )
             print(
                 f"  \033[94m[LLM Usage] {event_name}: {usage['prompt_tokens']:,} input + "
                 f"{usage['completion_tokens']:,} output = {usage['total_tokens']:,} tokens\033[0m",
