@@ -8,14 +8,17 @@ developer's persona and stores the questions and answers from this interview.
 import hmac as hmac_mod
 import json
 import os
+import time
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from .defense import DefenseError, start_defense, submit_answer
-from .models import Base
+from .models import create_tables
+from .trace import enable as enable_trace
+from .trace import trace
 
 API_SCHEMA_VERSION = 1
 
@@ -64,26 +67,10 @@ class ServiceState:
     def __init__(self, database_url: str | None = None):
         url = _database_url(database_url)
         self.engine = create_engine(url)
-        Base.metadata.create_all(self.engine)
-        self._ensure_github_username()
+        create_tables(self.engine)
         self.SessionLocal = sessionmaker(bind=self.engine, expire_on_commit=False)
         self.team_token = os.environ.get("SERVICE_TEAM_TOKEN", "").strip()
         self.team_secret = os.environ.get("SERVICE_TEAM_SECRET", "").strip()
-
-    def _ensure_github_username(self) -> None:
-        """Add users.github_username on databases created before that column."""
-        insp = inspect(self.engine)
-        if "users" not in insp.get_table_names():
-            return
-        columns = {column["name"] for column in insp.get_columns("users")}
-        if "github_username" in columns:
-            return
-        with self.engine.begin() as conn:
-            conn.execute(text("ALTER TABLE users ADD COLUMN github_username VARCHAR(255)"))
-            conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_github_username "
-                "ON users (github_username)"
-            ))
 
 
 STATE: ServiceState | None = None
@@ -115,6 +102,33 @@ def create_app(state: ServiceState | None = None) -> FastAPI:
         STATE = state
 
     app = FastAPI(title="Understanding Central Ledger", version="0.4.0")
+    enable_trace()
+
+    @app.middleware("http")
+    async def trace_http(request: Request, call_next):
+        if request.url.path == "/api/v1/health":
+            return await call_next(request)
+        started = time.perf_counter()
+        trace("http.request", method=request.method, path=request.url.path)
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            trace(
+                "http.error",
+                method=request.method,
+                path=request.url.path,
+                error=type(exc).__name__,
+                ms=round((time.perf_counter() - started) * 1000),
+            )
+            raise
+        trace(
+            "http.response",
+            method=request.method,
+            path=request.url.path,
+            status=response.status_code,
+            ms=round((time.perf_counter() - started) * 1000),
+        )
+        return response
 
     @app.get("/api/v1/health")
     def health():
@@ -127,6 +141,7 @@ def create_app(state: ServiceState | None = None) -> FastAPI:
     @app.post("/api/v1/defense/start")
     async def defense_start(
         request: Request,
+        db: Session = Depends(get_db),
         x_team_token: str | None = Header(None),
         x_signature: str | None = Header(None),
     ):
@@ -141,10 +156,42 @@ def create_app(state: ServiceState | None = None) -> FastAPI:
             payload = json.loads(body.decode("utf-8"))
         except Exception:
             raise HTTPException(status_code=400, detail="Malformed payload")
+        trace(
+            "http.defense_start",
+            input={
+                "git_email": (payload.get("git_email") or "").strip().lower(),
+                "git_name": (payload.get("git_name") or "").strip(),
+                "repository": payload.get("repository") or "",
+                "branch": payload.get("branch") or "",
+                "trivial": bool(payload.get("trivial")),
+                "standards_failed": bool(payload.get("standards_failed")),
+                "files": len((payload.get("context") or {}).get("structured_changes") or []),
+            },
+        )
         try:
-            result = start_defense(payload)
+            result = start_defense(payload, db=db)
+            db.commit()
         except DefenseError as exc:
+            db.rollback()
+            trace("http.defense_start.rejected", status=exc.status, detail=exc.detail)
             raise HTTPException(status_code=exc.status, detail=exc.detail)
+        except Exception:
+            db.rollback()
+            trace("http.defense_start.failed", error="unhandled")
+            raise
+        trace(
+            "http.defense_start.done",
+            output={
+                "action": result.get("action"),
+                "defense_id": result.get("defense_id") or "",
+                "message": result.get("message") or "",
+                "questions": [
+                    {"id": item.get("question_id"), "question": item.get("question") or ""}
+                    for item in (result.get("questions") or [])
+                    if isinstance(item, dict)
+                ],
+            },
+        )
         return JSONResponse(result)
 
     @app.post("/api/v1/defense/{defense_id}/answer")
@@ -168,15 +215,33 @@ def create_app(state: ServiceState | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail="Malformed payload")
         if not isinstance(payload, dict):
             raise HTTPException(status_code=400, detail="Malformed payload")
+        question_id = str(payload.get("question_id") or "")
+        answer = str(payload.get("answer") or "")
+        trace(
+            "http.defense_answer",
+            input={"defense_id": defense_id, "question_id": question_id, "answer": answer},
+        )
         try:
-            result = submit_answer(
-                db,
-                defense_id,
-                str(payload.get("question_id") or ""),
-                str(payload.get("answer") or ""),
-            )
+            result = submit_answer(db, defense_id, question_id, answer)
+            db.commit()
         except DefenseError as exc:
+            db.rollback()
+            trace("http.defense_answer.rejected", defense_id=defense_id, status=exc.status, detail=exc.detail)
             raise HTTPException(status_code=exc.status, detail=exc.detail)
+        except Exception:
+            db.rollback()
+            trace("http.defense_answer.failed", defense_id=defense_id, error="unhandled")
+            raise
+        trace(
+            "http.defense_answer.done",
+            output={
+                "defense_id": defense_id,
+                "question_id": question_id,
+                "action": result.get("action"),
+                "score": result.get("score"),
+                "message": result.get("message") or "",
+            },
+        )
         return JSONResponse(result)
 
     return app

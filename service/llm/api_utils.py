@@ -26,11 +26,10 @@ def get_judge_model() -> str:
 
 
 def log_llm_error(message: str) -> None:
-    """Print an LLM failure for the developer. Never includes the API key."""
+    """Record an LLM failure in the same trace log. Never includes the API key."""
+    from service.trace import trace
     text = (message or "").strip() or "unknown LLM error"
-    if len(text) > 2000:
-        text = text[:2000] + "...(truncated)"
-    print(f"\n  \033[91m[LLM] ERROR: {text}\033[0m\n", flush=True)
+    trace("llm.error", source="log_llm_error", output=text)
 
 
 def llm_request_target() -> tuple[str, str, str, str]:
@@ -346,14 +345,20 @@ def call_llm_api(
     model_id = payload_dict.get("model") or get_model()
     if not model_id:
         return 0, "No model configured. Pass --model groq, sonnet, haiku, nous, or org when installing."
-    print(f"  [LLM] model={model_id} -> {llm_request_target()[3]}", flush=True)
 
-    # Suppress model thinking for providers that support it (bench-measured:
-    # deepseek-v4-flash 51s -> 10s per call). Kill switch:
-    # UNDERSTANDING_AGENT_DISABLE_THINKING=off
+    from service.trace import trace
     payload_dict = dict(payload_dict)
     event_name = event or payload_dict.pop("_event", None) or "LLM Call"
     payload_dict.update(thinking_control_params())
+    prompt = _prompt_text(payload_dict)
+    trace(
+        "llm.request",
+        source="call_llm_api",
+        model=model_id,
+        event=event_name,
+        url=llm_request_target()[3],
+        input=prompt,
+    )
 
     last_status, last_body = 0, ""
     for attempt in range(retries + 1):
@@ -362,13 +367,17 @@ def call_llm_api(
             detail = _llm_failure_detail(status, body, model_id)
             if detail:
                 log_llm_error(detail)
-
-            # Record and log token usage per event
             usage = extract_token_usage(body, payload_dict)
-            print(
-                f"  \033[94m[LLM Usage] {event_name}: {usage['prompt_tokens']:,} input + "
-                f"{usage['completion_tokens']:,} output = {usage['total_tokens']:,} tokens\033[0m",
-                flush=True,
+            trace(
+                "llm.response",
+                source="call_llm_api",
+                model=model_id,
+                event=event_name,
+                status=status,
+                output=_response_text(body),
+                prompt_tokens=usage["prompt_tokens"],
+                completion_tokens=usage["completion_tokens"],
+                total_tokens=usage["total_tokens"],
             )
             return status, body
         last_status, last_body = status, body
@@ -377,7 +386,34 @@ def call_llm_api(
     detail = _llm_failure_detail(last_status, last_body, model_id)
     if detail:
         log_llm_error(detail)
+    trace(
+        "llm.response",
+        source="call_llm_api",
+        model=model_id,
+        event=event_name,
+        status=last_status,
+        output=_response_text(last_body),
+    )
     return last_status, last_body
+
+
+def _prompt_text(payload_dict: dict) -> str:
+    messages = payload_dict.get("messages") or []
+    parts = []
+    if isinstance(messages, list):
+        for message in messages:
+            if isinstance(message, dict):
+                parts.append(str(message.get("content") or ""))
+    return "\n".join(parts)
+
+
+def _response_text(body: str) -> str:
+    try:
+        data = json.loads(body)
+    except Exception:
+        return body or ""
+    text = _extract_message_text(data)
+    return text or body or ""
 
 
 def _is_meaningful_response(status: int, body: str) -> bool:

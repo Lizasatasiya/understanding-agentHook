@@ -1,6 +1,5 @@
 import json
 from service.llm.api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, log_llm_error
-from service.interview.checklists import parse_checklist
 from service.interview.change_hints import classification_hint_lines
 
 import re
@@ -93,54 +92,7 @@ class QuestionGenerator:
         questions = self._call_groq(api_key, prompt, target_count=target_count, is_large=is_large)
         if not questions:
             return []
-        return self._finalize_checklists(questions[:target_count])
-
-    def _derive_checklist(self, question: dict) -> dict | None:
-        """Deterministic checklist for questions without an LLM-authored one.
-
-        Built from the question's own expected_concepts / evaluation_criteria
-        so the offline fallback verifier has atomic key points to check
-        instead of generic root-word matching. Returns the RAW dict form
-        (validated through parse_checklist) or None.
-        """
-        concepts = [c for c in (question.get("expected_concepts") or [])
-                    if isinstance(c, str) and c.strip()][:3]
-        criteria = [c for c in (question.get("evaluation_criteria") or [])
-                    if isinstance(c, str) and c.strip()][:2]
-        items = []
-        for c in concepts:
-            items.append({"key_point": f"addresses {c}", "weight": 2, "tiers": [2, 0]})
-        for c in criteria:
-            if len(items) >= 4:
-                break
-            items.append({"key_point": c, "weight": 1, "tiers": [1, 0]})
-        if len(items) < 2:
-            items = [
-                {"key_point": "explains what the change does", "weight": 2, "tiers": [2, 0]},
-                {"key_point": "gives a technically substantive answer", "weight": 1, "tiers": [1, 0]},
-            ]
-        raw = {"items": items[:4]}
-        return raw if parse_checklist(raw) is not None else None
-
-    def _finalize_checklists(self, questions: list) -> list:
-        """Ensure every generated question carries a valid checklist.
-
-        LLM-authored checklists are kept only when schema-valid; otherwise a
-        deterministic checklist is derived from the question's own concepts.
-        Cached/legacy questions without checklists are untouched by this pass
-        (the evaluator keeps its legacy scalar path for them).
-        """
-        for q in questions:
-            if not isinstance(q, dict):
-                continue
-            if q.get("checklist") and parse_checklist(q.get("checklist")) is not None:
-                continue
-            derived = self._derive_checklist(q)
-            if derived is not None:
-                q["checklist"] = derived
-            elif q.get("checklist"):
-                del q["checklist"]  # invalid LLM checklist: drop, use scalar path
-        return questions
+        return questions[:target_count]
 
     def _build_prompt(self, context: dict, summary: dict, hints: dict | None = None, env: dict | None = None) -> str:
         scale, _ = self.get_diff_scale(context)
@@ -224,16 +176,9 @@ class QuestionGenerator:
             '  "question": <the question string>,',
             f'  "type": one of {valid_types},',
             '  "expected_concepts": [<list of concept strings>],',
-            '  "evaluation_criteria": [<list of criteria strings>],',
-            '  "checklist": {',
-            '    "items": [ 2 to 4 atomic key points a correct answer must cover, each with:',
-            '               {"key_point": "<one verifiable fact or concept>",',
-            '                "weight": <1-3 integer points>,',
-            '                "tiers": <descending valid scores incl. 0, e.g. [3, 2, 0] or [2, 0]>}',
-            '    ]',
-            '  }',
+            '  "evaluation_criteria": [<list of criteria strings>]',
             "",
-            'Example: [{"question_id": "q1", "question": "Why is X called before Y?", "type": "Code Logic", "expected_concepts": ["X must be validated before Y executes"], "evaluation_criteria": ["understands the validation order"], "checklist": {"items": [{"key_point": "explains X validates input before Y runs", "weight": 2, "tiers": [2, 0]}, {"key_point": "identifies the consequence of skipping validation", "weight": 2, "tiers": [2, 0]}]}}]',
+            'Example: [{"question_id": "q1", "question": "Why is X called before Y?", "type": "Code Logic", "expected_concepts": ["X must be validated before Y executes"], "evaluation_criteria": ["understands the validation order"]}]',
         ]
         return "\n".join(lines)
 
@@ -314,10 +259,9 @@ class QuestionGenerator:
             '  "question": <very short, punchy question under 25 words>,',
             f'  "type": one of {valid_types},',
             '  "expected_concepts": [<list of key technical concept strings>],',
-            '  "evaluation_criteria": [<list of evaluation criteria strings>],',
-            '  "checklist": {"items": [2-4 atomic key points, each {"key_point": "<one verifiable fact>", "weight": <1-3>, "tiers": [descending valid scores incl. 0]}]}',
+            '  "evaluation_criteria": [<list of evaluation criteria strings>]',
             "",
-            'Example: [{"question_id": "q1", "question": "Why is stock reserved before payment rather than after?", "type": "System Architecture", "expected_concepts": ["prevents overselling", "ensures availability"], "evaluation_criteria": ["understands reservation order"], "checklist": {"items": [{"key_point": "explains reservation prevents overselling", "weight": 2, "tiers": [2, 0]}, {"key_point": "identifies the failure if payment precedes reservation", "weight": 2, "tiers": [2, 0]}]}}]'
+            'Example: [{"question_id": "q1", "question": "Why is stock reserved before payment rather than after?", "type": "System Architecture", "expected_concepts": ["prevents overselling", "ensures availability"], "evaluation_criteria": ["understands reservation order"]}]'
         ]
         return "\n".join(lines)
 
@@ -449,6 +393,7 @@ class QuestionGenerator:
                     item["expected_concepts"] = []
                 if "evaluation_criteria" not in item or not isinstance(item["evaluation_criteria"], list):
                     item["evaluation_criteria"] = []
+                item.pop("checklist", None)
                 item["is_fallback"] = False
                     
                 result_list.append(item)
@@ -470,5 +415,6 @@ class QuestionGenerator:
         valid = []
         for q in questions:
             if isinstance(q, dict) and isinstance(q.get("question"), str) and len(q["question"]) > 10:
+                q.pop("checklist", None)
                 valid.append(q)
         return valid

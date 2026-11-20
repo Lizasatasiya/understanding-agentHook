@@ -7,10 +7,6 @@ class EvaluationResult:
             self.score = int(float(raw_score))
         except (ValueError, TypeError):
             self.score = 0
-        self.technical_correctness = data.get("technical_correctness", 0)
-        self.code_understanding = data.get("code_understanding", 0)
-        self.reasoning = data.get("reasoning", 0)
-        self.specificity = data.get("specificity", 0)
         self.covered_concepts = data.get("covered_concepts", [])
         self.missing_concepts = data.get("missing_concepts", [])
         self.incorrect_claims = data.get("incorrect_claims", [])

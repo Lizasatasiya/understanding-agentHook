@@ -1,12 +1,5 @@
 from service.interview.results import EvaluationResult
-from service.llm.api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, get_judge_model, fail_open_enabled, log_llm_error
-from service.interview.checklists import (
-    parse_checklist,
-    aggregate_score,
-    verify_offline,
-    clarity_offline,
-    fallback_banding,
-)
+from service.llm.api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, fail_open_enabled, log_llm_error
 import json
 
 # Backward compatibility alias for tests and external callers
@@ -43,19 +36,6 @@ class AnswerEvaluator:
                 "missing_concepts": [],
                 "llm_verified": False,
             })
-
-        # Checklist-Based Verification (RepoProbe protocol): when the question
-        # carries a validated checklist, judge per-item with a
-        # rationale-first, rubric-adherent prompt and aggregate
-        # deterministically. Degrades to the fallback on any failure.
-        checklist = parse_checklist(question.get("checklist"))
-        if checklist is not None:
-            result = self._evaluate_checklist(api_key, question, answer, checklist, context, summary, env=env)
-            if result is not None:
-                return result
-            if fail_open_enabled():
-                return self._evaluate_fallback(question, answer, is_offline=False)
-            return EvaluationResult({"score": 50, "evaluation": "Failed to evaluate answer", "follow_up_required": False, "llm_verified": False})
 
         prompt = self._build_prompt(question, answer, context, summary, env=env)
         result_dict = self._call_groq(api_key, prompt)
@@ -99,49 +79,12 @@ class AnswerEvaluator:
         if is_dismissive:
             return EvaluationResult({
                 "score": 10,
-                "technical_correctness": 2,
-                "code_understanding": 2,
-                "reasoning": 2,
-                "specificity": 2,
                 "covered_concepts": [],
                 "missing_concepts": question.get("expected_concepts") or [],
                 "incorrect_claims": [],
                 "evaluation": f"{status_prefix} Answer is dismissive or lacks technical substance.",
                 "confidence": 0.8,
                 "follow_up_required": True,
-                "llm_verified": False,
-            })
-
-        # Checklist questions: verify key points deterministically (no LLM).
-        checklist = parse_checklist(question.get("checklist"))
-        if checklist is not None:
-            awarded = verify_offline(checklist, text)
-            knowledge_total = sum(i.weight for i in checklist.items)
-            earned = sum(awarded)
-            coverage = (earned / knowledge_total) if knowledge_total else 0.5
-            score, follow_up = fallback_banding(coverage)
-            covered = [i.key_point for i, a in zip(checklist.items, awarded) if a > 0]
-            missing = [i.key_point for i, a in zip(checklist.items, awarded) if a == 0]
-            eval_text = (
-                f"{status_prefix} Semantic fallback: addressed {len(covered)}/"
-                f"{len(checklist.items)} checklist key points."
-            )
-            if covered:
-                eval_text += f" Recognized: {'; '.join(covered)}."
-            if missing:
-                eval_text += f" Missing: {'; '.join(missing)}."
-            return EvaluationResult({
-                "score": score,
-                "technical_correctness": int(score * 0.4),
-                "code_understanding": int(score * 0.3),
-                "reasoning": int(score * 0.2),
-                "specificity": int(score * 0.1),
-                "covered_concepts": covered,
-                "missing_concepts": missing,
-                "incorrect_claims": [],
-                "evaluation": eval_text,
-                "confidence": 0.7,
-                "follow_up_required": follow_up,
                 "llm_verified": False,
             })
 
@@ -184,10 +127,6 @@ class AnswerEvaluator:
 
         return EvaluationResult({
             "score": score,
-            "technical_correctness": int(score * 0.4),
-            "code_understanding": int(score * 0.3),
-            "reasoning": int(score * 0.2),
-            "specificity": int(score * 0.1),
             "covered_concepts": covered,
             "missing_concepts": missing,
             "incorrect_claims": [],
@@ -196,152 +135,6 @@ class AnswerEvaluator:
             "follow_up_required": follow_up,
             "llm_verified": False,
         })
-
-    def _evaluate_checklist(self, api_key: str, question: dict, answer: dict,
-                            checklist, context: dict, summary: dict, env: dict | None = None):
-        """Checklist-Based Verification (RepoProbe protocol, arXiv 2608.04783).
-
-        Rationale-first, rubric-adherent judging: the LLM must quote evidence
-        per item before choosing a score, may only pick from the item's valid
-        tier values, and the reported score is a deterministic aggregation.
-        Returns None on ANY irregularity (missing ids, out-of-rubric scores,
-        malformed JSON) so the caller degrades to the offline fallback.
-        """
-        prompt = self._build_checklist_prompt(question, answer, checklist, context, summary, env=env)
-        qid = question.get("question_id") or "Q"
-        payload = {
-            "model": get_judge_model(),
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.2,
-            "max_tokens": 900,
-            "_event": f"Answer Evaluation ({qid})",
-        }
-        status, body = call_nous_api(api_key, payload, timeout=45)
-        if status != 200:
-            return None
-        try:
-            result = json.loads(body)
-            choices = result.get("choices") or []
-            if not choices:
-                return None
-            msg = choices[0].get("message") or {}
-            text = (msg.get("content") or "").strip()
-            if not text and msg.get("reasoning_content"):
-                text = (msg.get("reasoning_content") or "").strip()
-            if not text and choices[0].get("text"):
-                text = (choices[0].get("text") or "").strip()
-            parsed = extract_json(text)
-            if not isinstance(parsed, dict):
-                if text:
-                    log_llm_error("Answer check failed: the model reply was not a checklist judgment.")
-                return None
-            raw_items = parsed.get("items")
-            if not isinstance(raw_items, list) or len(raw_items) != len(checklist.items):
-                log_llm_error("Answer check failed: the model checklist did not match the question.")
-                return None
-            awarded = []
-            rationales = []
-            for idx, item in enumerate(checklist.items):
-                ri = raw_items[idx]
-                if not isinstance(ri, dict):
-                    log_llm_error("Answer check failed: a checklist item in the model reply was not an object.")
-                    return None
-                score = ri.get("score")
-                try:
-                    score = int(score)
-                except (TypeError, ValueError):
-                    log_llm_error("Answer check failed: a checklist score in the model reply was not an integer.")
-                    return None
-                if score not in [int(t) for t in item.tiers]:
-                    log_llm_error(
-                        f"Answer check failed: checklist score {score} is outside the allowed tiers."
-                    )
-                    return None
-                awarded.append(score)
-                rationales.append(str(ri.get("rationale", "")))
-            clarity = parsed.get("clarity", {})
-            if not isinstance(clarity, dict):
-                log_llm_error("Answer check failed: the model reply had no clarity score.")
-                return None
-            try:
-                clarity_score = int(clarity.get("score"))
-            except (TypeError, ValueError):
-                log_llm_error("Answer check failed: the model clarity score was not an integer.")
-                return None
-            if clarity_score not in (0, 1):
-                log_llm_error(
-                    f"Answer check failed: clarity score {clarity_score} is outside 0 or 1."
-                )
-                return None
-            score = aggregate_score(checklist, awarded, clarity_score)
-        except (ValueError, KeyError) as exc:
-            log_llm_error(f"Answer check failed: could not read the model reply ({exc}).")
-            return None
-        except Exception as exc:
-            log_llm_error(f"Answer check failed: {exc}")
-            return None
-
-        covered = [i.key_point for i, a in zip(checklist.items, awarded) if a > 0]
-        missing = [i.key_point for i, a in zip(checklist.items, awarded) if a == 0]
-        # Frozen follow-up band (25-70): mid scores get a targeted follow-up.
-        follow_up = 25 <= score < 70
-        summary_text = str(parsed.get("evaluation", "")).strip() or (
-            f"Covered {len(covered)}/{len(checklist.items)} checklist key points."
-        )
-        return EvaluationResult({
-            "score": score,
-            "technical_correctness": int(score * 0.4),
-            "code_understanding": int(score * 0.3),
-            "reasoning": int(score * 0.2),
-            "specificity": int(score * 0.1),
-            "covered_concepts": covered,
-            "missing_concepts": missing,
-            "incorrect_claims": parsed.get("incorrect_claims", []),
-            "evaluation": summary_text,
-            "confidence": 0.9,
-            "follow_up_required": follow_up,
-            "llm_verified": True,
-            "checklist_awarded": awarded,
-            "checklist_rationales": rationales,
-        })
-
-    def _build_checklist_prompt(self, question: dict, answer: dict, checklist,
-                                context: dict, summary: dict, env: dict | None = None) -> str:
-        lines = [
-            "You are evaluating whether a developer understands their own code change.",
-            "",
-            "EVALUATION PROTOCOL (follow exactly):",
-            "- The question carries a CHECKLIST of atomic key points, each with a rubric of VALID scores.",
-            "- For each item: FIRST write the evidence you found in the developer's answer (quote or paraphrase it), THEN choose the score.",
-            "- The score MUST be one of that item's valid values. Never invent a score.",
-            "- Judge concept coverage only. Do NOT penalise grammar, spelling, English proficiency, or terminology.",
-            "- The answer may mix languages or use transliterated technical terms; judge whether the concept is present, never the language.",
-            "- CLARITY item: score 1 if the answer is coherent and not hallucinated, 0 if it is severely incoherent or fabricated.",
-            "",
-            f"Question: {question.get('question')}",
-            "",
-            "CHECKLIST:",
-        ]
-        for idx, item in enumerate(checklist.items):
-            lines.append(f"{idx + 1}. key_point: {item.key_point}")
-            lines.append(f"   valid scores: {list(item.tiers)} (weight {item.weight})")
-        lines += [
-            "",
-            "DEVELOPER ANSWER:",
-            str(answer.get("answer", "")),
-            "",
-            "Output ONLY a valid JSON object, no markdown fences:",
-            "{",
-            '  "items": [',
-            '    {"id": 1, "rationale": "<evidence from the answer>", "score": <one of the valid scores>},',
-            "    ...one entry per checklist item, in order...",
-            "  ],",
-            '  "clarity": {"rationale": "<one sentence>", "score": 0},',
-            '  "incorrect_claims": [<any false statements, else empty>],',
-            '  "evaluation": "<1-2 sentence assessment naming what was demonstrated and what was missed>"',
-            "}",
-        ]
-        return "\n".join(lines)
 
     def _build_prompt(self, question: dict, answer: dict, context: dict, summary: dict, env: dict | None = None) -> str:
         is_large = context.get("is_large_change", False)
@@ -413,10 +206,6 @@ class AnswerEvaluator:
             "Output ONLY a valid JSON object. Keep 'evaluation' concise (1-2 sentences). Do NOT output markdown code fences or conversational text outside JSON.",
             "{",
             '  "score": <0-100 integer>,',
-            '  "technical_correctness": <0-40 integer>,',
-            '  "code_understanding": <0-30 integer>,',
-            '  "reasoning": <0-20 integer>,',
-            '  "specificity": <0-10 integer>,',
             '  "covered_concepts": [<matched expected concepts>],',
             '  "missing_concepts": [<unmatched expected concepts>],',
             '  "incorrect_claims": [<any false statements>],',

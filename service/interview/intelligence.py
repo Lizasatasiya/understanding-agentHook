@@ -5,7 +5,7 @@ One LLM call per commit produces a ChangeIntelligence object:
   - findings[] — security and best-practice observations, each REQUIRED to cite
     file/line from the actual diff; citations are verified deterministically
     and unverifiable findings are dropped (LLM proposes, code disposes)
-  - questions[] — born with RepoProbe-style weighted checklists
+  - questions[] — short oral-defense questions with expected concepts
   - difficulty signal
 
 Governing rules (frozen design decisions):
@@ -29,7 +29,6 @@ import json
 import os
 
 from service.llm.api_utils import load_nous_api_key, extract_json, call_nous_api, get_model, log_llm_error
-from service.interview.checklists import parse_checklist
 from service.interview.standards import load_standards_doc
 
 DOMAINS = ("ui", "data_model", "control_flow", "infra_config", "tests", "docs")
@@ -135,13 +134,7 @@ def _validate_questions(raw_questions, target_count: int, question_generator) ->
             q["expected_concepts"] = []
         if not isinstance(q.get("evaluation_criteria"), list):
             q["evaluation_criteria"] = []
-        # Checklist: keep valid LLM-authored ones, derive otherwise.
-        if not q.get("checklist") or parse_checklist(q.get("checklist")) is None:
-            derived = gen._derive_checklist(q)
-            if derived is not None:
-                q["checklist"] = derived
-            else:
-                q.pop("checklist", None)
+        q.pop("checklist", None)
         q["is_fallback"] = False
         out.append(q)
         if len(out) >= target_count:
@@ -178,8 +171,7 @@ def build_master_prompt(context: dict, summary: dict, standards_doc: str,
         "  \"questions\": [",
         f"    EXACTLY {target_count} questions ({diff_count} from the diff's logic/data flow, {standards_count} from standards findings), each:",
         '    {"question_id": "q1", "question": "<under 25 words, answerable in 30-45s>", "type": <valid question type>,',
-        '     "expected_concepts": [...], "evaluation_criteria": [...],',
-        '     "checklist": {"items": [2-4 {"key_point": "<atomic verifiable fact>", "weight": <1-3>, "tiers": [descending valid scores incl. 0]}]}}',
+        '     "expected_concepts": [...], "evaluation_criteria": [...]}',
         "  ],",
         '  "difficulty": <1-5 integer>',
         "}",
